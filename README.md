@@ -2,8 +2,7 @@ Fast programming language where indexes are valid but ergonomic (vagualy inspire
 
 ```slug
 fn greet(name str text buf(Text char)) span(Text)
-    text
-    .buf-add-str-chars("Hello, " str)
+    buf-add-str-chars(text "Hello, " str)
     .span-add-str-chars(name)
     .span-add("!" char)
 ```
@@ -160,9 +159,9 @@ For other editors, there's usually a way to specify `slug` as the language serve
 (TODO rewrite to be more approachable)
 
 ```slug
-ty expression(Expressions, Patterns, Types)
+ty expression(Expressions Patterns Types)
     [ let
-        { pattern pattern(Patterns)
+        { pattern pattern(Patterns Types)
           value slot(Expressions)
           result slot(Expressions)
         }
@@ -224,6 +223,7 @@ What weaknesses does this design address?
 - shadowing is allowed and encouraged
 
 ## implementation details
+- if a type uses `^origin` but there exists !=1 actual origin buf for it, report an error suggesting to use type variables instead
 - bufs themselves are dropped once we know no more Slot/Span referencing its origin exists.
   This should be at the end of its scope
 - If the input and output types never mention an origin created inside, we can allocate the buf with this origin with an arena
@@ -231,7 +231,6 @@ What weaknesses does this design address?
 ## TODO
 - implement compiler & tooling
 - website with online repl
-    
 
 ## potential improvements in the future
 - automatically figure out optimizations for "consume-only" parameters not needing to be cloned
