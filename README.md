@@ -1,14 +1,12 @@
-Fast, ergonomic programming language which secretly uses indexes instead of pointers. inspired by
-- [`Arrrlang`](https://verdagon.dev/blog/myth-zero-overhead-memory-safety)
-- my earlier attempt at enabling this pattern using linear types: [sloe](http://codeberg.org/lue-bird/sloe)
+Fast programming language where indexes are valid but ergonomic (vagualy inspired by [`Arrrlang`](https://verdagon.dev/blog/myth-zero-overhead-memory-safety)). An earlier attempt at enabling this pattern using linear types is [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet(name str) _char
-    str-chars("Hello, " str)
+fn greet(name str text buf(Text char)) span(Text)
+    text
+    .buf-add-str-chars("Hello, " str)
     .span-add-str-chars(name)
     .span-add("!" char)
 ```
-`_char` is a span into a heap array of characters.
 
 Important: The compiler and tooling is not implemented, yet! Once available,
 install with (requires having [rust installed](https://rust-lang.org/tools/install/))
@@ -48,8 +46,7 @@ some-function<type arguments>(argument)
 # The last field value can end in a record without needing to be parenthesized
 { first-field first-value second-field second-value }
 
-# local function of type fn.
-# the pattern must add a type to all variables
+# local function. The pattern must add a type to all variables
 # can **not** use variables from the outer scope.
 fn(first-parameter-pattern second) result
 
@@ -67,7 +64,12 @@ _ some-type
 resulting-expression
 
 # pattern match, checked for exhaustiveness
-if value { first-case-pattern first-result second-case-pattern second-result }
+if value {
+first-case-pattern
+    first-result
+second-case-pattern
+    second-result
+}
 
 # project function declaration.
 # For type variables in the result that aren't used in the input,
@@ -88,11 +90,11 @@ point(meters f32)
 # type variable/parameter
 Type-variable-name
 
-# slot type (index in a heap array)
-*item-type
+# function type
+fn(first-parameter-type second) result-type
 
-# span type (range in a heap array)
-_item-type
+# identifier of a known origin (a buf which hands out slots and spans)
+^concrete-origin-type
 
 # declare a shorthand for an existing type
 ty point { x i32 y i32 }
@@ -115,8 +117,6 @@ ty pair(First Second-parameter) type-using-the-type-variables
 # variant pattern
 [some-variant its-value]
 ```
-Goal: coherent, practical and compact, avoiding parens and indentation especially for trailing syntax.
-Sloe is a wordy and explicit language, so any extra verbosity is not tolerable.
 
 ## editor setups
 
@@ -129,7 +129,7 @@ Optionally for a file icon in the project panel, open the editor command panel, 
 
 ### vscode-like
 #### pre-built
-1. download https://codeberg.org/lue-bird/sloe/src/branch/main/vscode/sloe-0.1.0.vsix
+1. download https://codeberg.org/lue-bird/slug-lang/src/branch/main/vscode/slug-0.1.0.vsix
 2. open the command bar at the top and select: `>Extensions: Install from VSIX`
 #### build from source
 1. clone this repo
@@ -152,53 +152,96 @@ language-servers = [ "slug" ]
 auto-format = true
 ```
 
-For other editors, there's usually a way to specify `slug` as the language server and or point to the directory `tree-sitter/` in this repository. 
+For other editors, there's usually a way to specify `slug` as the language server and or point to the directory `tree-sitter/` in this repository.
+
+
+
+## 🧩 each slot/span has one associated collection
+(TODO rewrite to be more approachable)
+
+```slug
+ty expression(Expressions, Patterns, Types)
+    [ let
+        { pattern pattern(Patterns)
+          value slot(Expressions)
+          result slot(Expressions)
+        }
+      ...
+    ]
+
+ty state
+    { projects-buf buf(^projects project-state)
+      projects opt(span(^projects))
+    }
+
+ty project-state
+    { expressions buf(^expressions expression)
+      patterns buf(^patterns pattern)
+      types buf(^types pattern)
+      base-expression expression(^expressions ^patterns ^types)
+    }
+
+fn initial-state({}) state
+    { projects-buf projects-buf buf-empty<^projects project-state>()
+      projects [yes<opt(span(^projects))> {}]
+    }
+```
+slots and spans themselves deliberately do _not_ store their type.
+Functions instead explicitly list the bufs as parameters (which can get autofilled because origin is unique in callsite?). Other rules:
+  - a value must not outlive any ^origin it references
+  - a buf must not be able to be defined with an origin that is already in use
+  - a value cannot reference an ^origin that is not yet defined
+
+This seems like a wonderful (and still relatively simple) system to me.
+Potential open questions / issues:
+  - syntax for creating a new buf + origin? Something like `buf-empty<^new-origin-name element-type>()` which automagically introduces `^new-origin-name` into the scope
+  - creating a safe rust core API seems close to impossible (not much of an issue)
+
+What weaknesses does this design address?
+  - how to operate on the underlying buf in a non-brittle and clear way, e.g. pre-allocating, altering, reusing memory, stepping
+  - it's not uncommon to want `buf<{ some: buf, other: buf, tree: ... }>` where slots and spans in `tree` refer only to within the same buf item. This enables quick and easy bulk deletion / bulk access / bulk modification without needing to reach into _all_ items of the same kind.
+    A possible runtime solution would be to introduce separate slot/span types which additionally track e.g. a runtime index u32 given on construction.
+    Issues:
+      - slots and spans become thicker (bad)
+      - this does not mesh well with existing APIs. Combining spans for example would not be possible
+    
+    I would judge it reasonable to somehow enable "slots and spans that point into a specific span"
+    but this seems similarly impossible to allow nicely.
+  - it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
+    This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
+    
+    The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
 
 > As a user of slug you can stop reading here. The rest is for developers and those interested in language design
 
 
 ## ergonomic improvements over sloe
-
 - eliminating the need for any type variables and `Origin-erased`
-- every function is analyzed for the set of accessed slot/span origins. The bufs for those origins are passed in implicitly
-- new API (which still e.g. only requires one u32 per Slot because the compile-time origin uniquely identifies the Buf to access):
-  `*Item` (slot), `_Item` (span),
-  `fn slot(Item)`
-  `fn slot-item(*Item) Item`,
-  `fn slot-set(slot(Item) Item) Item`,
-  similar for span.
-  (most likely also `slot-set` for `Buf-counted`-like behavior)
-  These APIs replace existing Buf functions.
-- drop is implicit and happens after the last use. This is possible leak-free because a `Slot` knows how to mark itself as unset
-- clone is implicit. This is possible leak-free because a `Slot` knows how to modify its associated `Buf` accordingly
+- bufs can be passed implicitly because the origin already uniquely identifies them
+- drop and clone is implicit and happens after the last use. This is possible leak-free because a `slot` knows how to modify the associated `buf` in the scope it's in
 - positional arguments and otherwise familiar syntax
 - `.` syntax for piping the first argument
 - shadowing is allowed and encouraged
-- some crazy things this allows: `slot-to-index`, `fn slot-at-index(u32) opt(slot(Item))`, `fn span-starting-at-with-length`, (maybe `fn all-items-step(fn({... Item} {... Item}))`, `fn all-items-alter`), `fn span-map`, anything that modifies the underlying buf without moving existing indexes around
 
 ## implementation details
-- if `slot` has a non-concrete type, the name the buf parameter should match the variable name
-- recursive types that don't eventually go through a slot or span must be reported
-- Bufs themselves are dropped once we know no more Slot/Span with a certain item type exists.
-  This is exactly once `buf.items.len == 0`.
-  (In theory I think this could also be traced by the compiler top down from the call stack.)
-- (local) function types do not list which item bufs actually get accessed.
-  This means the _function input and output types_ gets consulted to find out item types.
-- when a function call asks for a buf which does not exist yet, allocate it.
-  If the whole function does not return a value referencing this buf, we can allocate it with an arena.
-
+- bufs themselves are dropped once we know no more Slot/Span referencing its origin exists.
+  This should be at the end of its scope
+- If the input and output types never mention an origin created inside, we can allocate the buf with this origin with an arena
 
 ## TODO
 - implement compiler & tooling
 - website with online repl
+    
 
 ## potential improvements in the future
+- automatically figure out optimizations for "consume-only" parameters not needing to be cloned
+- should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.
+  Exclusive slots would need to be deeply (I think) cloned while shared slots (`slot-counted`?) are shallow-copied + count increased.
+  They should live in separate bufs to save space and be faster.
+  
+  Also similarly, there could be a distinction for shared mutable and shared immutable slots. I wonder if there is a point?
 - I would **LOVE** if there was a way to allow for "unspecialized function types". If we decide to never compile to rust or rust gains support for this, we should instantly add this (and backport it to sloe)
 - could this approach be used to compile existing, high-level languages (e.g. elm/gren)?
-- (leaning no) should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.
-  Exclusive slots would need to be deeply (I think) cloned while shared slots (`slot-counted`?) are shallow-copied + count increased.
-  Question: Should they live in separate bufs to save space?
-  Also similarly, there could be a distinction for shared mutable and shared immutable slots. I wonder if there is a point?
 - should FFI be more ergonomic? Maybe by providing `extern-fn` signatures that must get populated by the platform
 
 ## rejected
