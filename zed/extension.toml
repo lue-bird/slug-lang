@@ -1,0 +1,16 @@
+id = "slug"
+name = "slug"
+version = "0.0.1"
+schema_version = 1
+authors = ["lue-bird"]
+description = "slug programming language support"
+repository = "https://codeberg.org/lue-bird/slug-lang"
+
+[language_servers.slug-language-server]
+name = "slug LSP"
+languages = ["slug"]
+
+[grammars.slug]
+repository = "https://codeberg.org/lue-bird/slug-lang"
+rev = "main"
+path = "tree-sitter"

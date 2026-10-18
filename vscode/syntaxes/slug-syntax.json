@@ -1,0 +1,182 @@
+{
+  "fileTypes": ["slug"],
+  "name": "slug",
+  "scopeName": "source.slug",
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#type-argument"
+    },
+    {
+      "include": "#string-quote"
+    },
+    {
+      "include": "#char"
+    },
+    {
+      "match": "\\b([0-9]+\\.[0-9]+)\\b",
+      "name": "constant.numeric.float.slug"
+    },
+    {
+      "match": "\\b([0-9]+)\\b",
+      "name": "constant.numeric.slug"
+    },
+    {
+      "include": "#type"
+    },
+    {
+      "include": "#variable"
+    },
+    {
+      "include": "#variant-name"
+    },
+    {
+      "include": "#field-name"
+    },
+    {
+      "match": "(\\}|\\{)",
+      "name": "punctuation.bracket.slug"
+    },
+    {
+      "include": "#comma"
+    },
+    {
+      "include": "#parens"
+    },
+    {
+      "include": "#record-empty"
+    },
+    {
+      "include": "#choice-empty"
+    },
+    {
+      "match": "(if)",
+      "name": "keyword.if.slug"
+    },
+    {
+      "match": "(=)",
+      "name": "keyword.operator.equals.slug"
+    },
+    {
+      "match": "(*)",
+      "name": "keyword.operator.slot.slug"
+    },
+    {
+      "match": "(_)",
+      "name": "keyword.operator.span.slug"
+    },
+    {
+      "match": "\\b(ty|fn|if)\\s+",
+      "name": "keyword.other.slug"
+    }
+  ],
+  "repository": {
+    "comma": {
+      "match": "(,)",
+      "name": "punctuation.separator.comma.slug"
+    },
+    "parens": {
+      "match": "(\\(|\\))",
+      "name": "punctuation.parens.slug"
+    },
+    "comments": {
+      "patterns": [
+        {
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.comment.slug"
+            }
+          },
+          "begin": "#",
+          "end": "$",
+          "name": "comment.line.slug"
+        }
+      ]
+    },
+    "string-quote": {
+      "name": "string.quoted.double.slug",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.slug"
+        }
+      },
+      "end": "\"",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.slug"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(NUL|SOH|STX|ETX|EOT|ENQ|ACK|BEL|BS|HT|LF|VT|FF|CR|SO|SI|DLE|DC1|DC2|DC3|DC4|NAK|SYN|ETB|CAN|EM|SUB|ESC|FS|GS|RS|US|SP|DEL|[abfnrtv\\\\\\\"'\\&]|x[0-9a-fA-F]{1,5})",
+          "name": "constant.character.escape.slug"
+        },
+        {
+          "match": "\\^[A-Z@\\[\\]\\\\\\^_]",
+          "name": "constant.character.escape.control.slug"
+        }
+      ]
+    },
+    "char": {
+      "name": "string.quoted.single.slug",
+      "begin": "'",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.char.begin.slug"
+        }
+      },
+      "end": "'",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.char.end.slug"
+        }
+      },
+      "patterns": [
+        {
+          "match": "\\\\(NUL|SOH|STX|ETX|EOT|ENQ|ACK|BEL|BS|HT|LF|VT|FF|CR|SO|SI|DLE|DC1|DC2|DC3|DC4|NAK|SYN|ETB|CAN|EM|SUB|ESC|FS|GS|RS|US|SP|DEL|[abfnrtv\\\\\\\"'\\&]|x[0-9a-fA-F]{1,5})",
+          "name": "constant.character.escape.slug"
+        },
+        {
+          "match": "\\^[A-Z@\\[\\]\\\\\\^_]",
+          "name": "constant.character.escape.control.slug"
+        }
+      ]
+    },
+    "square_brackets": {
+      "match": "[\\[\\]]",
+      "name": "punctuation.definition.list.slug"
+    },
+    "variable": {
+      "match": "\\b[a-z][a-zA-Z0-9-]*\\b",
+      "name": "meta.variable.slug"
+    },
+    "type": {
+      "patterns": [
+        {
+          "match": "\\s+",
+          "name": "punctuation.spaces.slug"
+        },
+        {
+          "match": "\\b[A-Z][a-zA-Z0-9-]*\\b",
+          "name": "variable.type.slug"
+        },
+        {
+          "match": "\\b[a-z][a-zA-Z0-9-]*\\b",
+          "name": "storage.type.slug"
+        },
+        {
+          "include": "#parens"
+        },
+        {
+          "include": "#comments"
+        },
+        {
+          "include": "#type-record"
+        }
+      ]
+    }
+  }
+}

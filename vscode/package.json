@@ -1,0 +1,77 @@
+{
+  "name": "slug",
+  "displayName": "slug",
+  "description": "language server for slug",
+  "author": "lue-bird",
+  "icon": "images/icon.png",
+  "license": "Unlicense",
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://codeberg.org/lue-bird/slug-lang"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "slug"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "activationEvents": [],
+  "main": "./out/extension",
+  "contributes": {
+    "languages": [
+      {
+        "id": "slug",
+        "extensions": [
+          ".slug"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/file-icon-light.svg",
+          "dark": "./images/file-icon-dark.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "scopeName": "markdown.slug.codeblock",
+        "path": "./syntaxes/codeblock.json",
+        "injectTo": [
+          "text.html.markdown"
+        ],
+        "embeddedLanguages": {
+          "meta.embedded.block.slug": "slug"
+        }
+      },
+      {
+        "language": "slug",
+        "scopeName": "source.slug",
+        "path": "./syntaxes/slug-syntax.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "slug.commands.restart",
+        "title": "restart slug",
+        "category": "slug"
+      }
+    ]
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.27.0",
+    "typescript": "5.3.3"
+  },
+  "scripts": {
+    "compile": "tsc -p . --noEmit && esbuild --platform=node --bundle extension.js --external:vscode --minify --outfile=out/extension.js",
+    "package": "npm install && npm run compile && vsce package"
+  }
+}

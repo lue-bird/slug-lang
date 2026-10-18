@@ -1,0 +1,27 @@
+{
+  "$schema": "https://zed.dev/schema/icon_themes/v0.3.0.json",
+  "name": "slug icon",
+  "author": "lue-bird",
+  "themes": [
+    {
+      "name": "slug icon dark",
+      "appearance": "dark",
+      "file_suffixes": {
+        "slug": "slug"
+      },
+      "file_icons": {
+        "slug": { "path": "./icons/file-icon-dark.svg" }
+      }
+    },
+    {
+      "name": "slug icon light",
+      "appearance": "light",
+      "file_suffixes": {
+        "slug": "slug"
+      },
+      "file_icons": {
+        "slug": { "path": "./icons/file-icon-light.svg" }
+      }
+    }
+  ]
+}
