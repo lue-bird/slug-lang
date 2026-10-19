@@ -1,0 +1,13 @@
+{
+  "compilerOptions": {
+    "lib": ["es2020", "dom"],
+    "checkJs": true,
+    "allowJs": true,
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "alwaysStrict": true,
+    "noImplicitReturns": true,
+  },
+}

@@ -1,0 +1,6 @@
+# experiments
+*.cpp
+cpp-run.sh
+*.cs
+*.csproj
+*.swift
