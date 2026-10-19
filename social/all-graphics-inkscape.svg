@@ -25,8 +25,8 @@
      inkscape:document-units="mm"
      showborder="false"
      inkscape:zoom="1.4142135"
-     inkscape:cx="4151.4241"
-     inkscape:cy="1769.8883"
+     inkscape:cx="4207.9926"
+     inkscape:cy="1875.9544"
      inkscape:window-width="1920"
      inkscape:window-height="1011"
      inkscape:window-x="0"
@@ -12902,7 +12902,7 @@
        rotate="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0"><tspan
          x="959.27313"
          y="441.32135"
-         id="tspan5">indexes are valid</tspan></text><text
+         id="tspan1">indexes are valid</tspan></text><text
        xml:space="preserve"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.80118px;line-height:1.6;font-family:'URW Gothic';-inkscape-font-specification:'URW Gothic';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;white-space:pre;inline-size:31.5853;display:inline;fill:#ecc2f0;fill-opacity:0.952205;stroke:none;stroke-width:0.0768396;stroke-linecap:square;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
        x="959.27313"
@@ -12912,7 +12912,7 @@
        rotate="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"><tspan
          x="959.27313"
          y="441.32135"
-         id="tspan6">language where</tspan></text><text
+         id="tspan2">language where</tspan></text><text
        xml:space="preserve"
        style="font-size:2.80118px;line-height:1.6;font-family:'Liga NovaMono';-inkscape-font-specification:'Liga NovaMono';text-align:center;letter-spacing:0.084487px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;white-space:pre;inline-size:31.5853;display:inline;fill:#ecc2f0;fill-opacity:1;stroke:#ecc2f0;stroke-width:0.524168;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
        x="959.27313"
@@ -12922,7 +12922,7 @@
        rotate="0 0 0 0 0"><tspan
          x="959.27313"
          y="441.32135"
-         id="tspan7">slug</tspan></text><text
+         id="tspan3">slug</tspan></text><text
        xml:space="preserve"
        style="font-size:2.80118px;line-height:1.6;font-family:'Liga NovaMono';-inkscape-font-specification:'Liga NovaMono';text-align:center;letter-spacing:0px;word-spacing:-2.00407px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;fill:#ffffff;fill-opacity:1;stroke:none;stroke-width:0.0768396;stroke-linecap:square;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
        x="962.41895"
@@ -13218,7 +13218,7 @@
        height="23.265226"
        x="-1071.0693"
        y="-490.87646"
-       inkscape:export-filename="../../social/preview.png"
+       inkscape:export-filename="icon.png"
        inkscape:export-xdpi="543.35468"
        inkscape:export-ydpi="543.35468"
        transform="scale(-1)" /><path
@@ -13288,7 +13288,7 @@
        rotate="1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0"><tspan
          x="959.27313"
          y="441.32135"
-         id="tspan8">indexes are valid</tspan></text><text
+         id="tspan4">indexes are valid</tspan></text><text
        xml:space="preserve"
        style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:2.80118px;line-height:1.6;font-family:'URW Gothic';-inkscape-font-specification:'URW Gothic';text-align:center;letter-spacing:0px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;white-space:pre;inline-size:31.5853;display:inline;fill:#ecc2f0;fill-opacity:0.952205;stroke:none;stroke-width:0.0768396;stroke-linecap:square;stroke-linejoin:miter;stroke-dasharray:none;stroke-opacity:1"
        x="959.27313"
@@ -13298,7 +13298,7 @@
        rotate="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0"><tspan
          x="959.27313"
          y="441.32135"
-         id="tspan9">language where</tspan></text><text
+         id="tspan5">language where</tspan></text><text
        xml:space="preserve"
        style="font-size:2.80118px;line-height:1.6;font-family:'Liga NovaMono';-inkscape-font-specification:'Liga NovaMono';text-align:center;letter-spacing:0.084487px;word-spacing:0px;writing-mode:lr-tb;direction:ltr;text-anchor:middle;white-space:pre;inline-size:31.5853;display:inline;fill:#ecc2f0;fill-opacity:1;stroke:#ecc2f0;stroke-width:0.524168;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
        x="959.27313"
@@ -13308,7 +13308,7 @@
        rotate="0 0 0 0 0"><tspan
          x="959.27313"
          y="441.32135"
-         id="tspan10">slug</tspan></text><path
+         id="tspan6">slug</tspan></text><path
        id="rect8-3-0-9-7-5-6-8"
        style="fill:#fd98ff;fill-opacity:0.820584;stroke:none;stroke-width:0.12864;stroke-linecap:square;stroke-linejoin:round;stroke-dasharray:none;stroke-opacity:1"
        d="m 943.7981,424.24805 c -1.44171,-1.64637 -2.13843,0.90275 -2.88316,2.41454 -0.29946,0.60798 -0.427,1.65922 -0.427,2.38281 h 8.87156 c 0,-1.07459 -0.11322,-1.73555 -0.70667,-2.53679 -0.18183,-0.2455 -1.3119,-3.30941 -2.39314,-2.32648 -0.90716,0.82467 -1.9586,0.61166 -2.46159,0.066 z"
@@ -13338,7 +13338,7 @@
        height="23.265226"
        x="-1101.8148"
        y="-491.09845"
-       inkscape:export-filename="../../social/icon-light.svg"
+       inkscape:export-filename="file-icon-light.svg"
        inkscape:export-xdpi="543.35468"
        inkscape:export-ydpi="543.35468"
        transform="scale(-1)" /><path
@@ -13372,7 +13372,7 @@
        height="23.265226"
        x="-1132.5603"
        y="-491.32043"
-       inkscape:export-filename="../../social/icon-dark.svg"
+       inkscape:export-filename="file-icon-dark.svg"
        inkscape:export-xdpi="543.35468"
        inkscape:export-ydpi="543.35468"
        transform="scale(-1)" /><path
