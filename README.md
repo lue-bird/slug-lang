@@ -1,16 +1,57 @@
-Fast programming language where indexes are valid but ergonomic (vagualy inspired by [`Arrrlang`](https://verdagon.dev/blog/myth-zero-overhead-memory-safety)). An earlier attempt at enabling this pattern using linear types is [sloe](http://codeberg.org/lue-bird/sloe).
+fast programming language where indexes know their origin array. An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet(name str text buf(Text char)) span(Text)
-    buf-add-str-chars(text "Hello, " str)
-    .span-add-str-chars(name)
-    .span-add("!" char)
+fn greet(name str chars buf(Text char)) span(Text)
+    buf-add-str-chars(chars "Hello, " str)
+    .span-add-str-chars(name chars)
+    .span-add("!" char chars)
 ```
 
 Important: The compiler and tooling is not implemented, yet! Once available,
 install with (requires having [rust installed](https://rust-lang.org/tools/install/))
 ```bash
 cargo install --git https://codeberg.org/lue-bird/slug-lang slug
+```
+
+[skip to syntax overview](#syntax)
+
+## 🧩 each slot/span has one associated collection
+(TODO rewrite to be more approachable)
+
+```slug
+ty expression(Expressions Patterns Types)
+    [ let
+        { pattern pattern(Patterns Types)
+          value slot(Expressions)
+          result slot(Expressions)
+        }
+      ...
+    ]
+
+ty state
+    { projects-buf buf(^projects project-state)
+      projects opt(span(^projects))
+    }
+```
+Note that unlike references, slots and spans themselves do _not_ store their type.
+Functions instead explicitly list the bufs as parameters.
+The rule to make it all safe: a buf must not be able to be defined with an origin that is already directly reachable (in existing slots, spans or bufs)
+
+(But a value _can_ outlive any ^origin it references and it _can_ reference an ^origin that is not yet defined.)
+
+Use nested bufs instead of one big one to operate on one chunk in a clear way, e.g. pre-allocating, altering, reusing memory, stepping, quick bulk deletion / bulk access / bulk modification without needing to reach into _all_ items of the same kind.
+```slug
+ty project-state
+    { expressions buf(^expressions expression)
+      patterns buf(^patterns pattern)
+      types buf(^types pattern)
+      base-expression expression(^expressions ^patterns ^types)
+    }
+
+fn initial-state({}) state
+    { projects-buf projects-buf buf-empty<^projects project-state>()
+      projects [yes<opt(span(^projects))> {}]
+    }
 ```
 
 ## syntax
@@ -154,63 +195,6 @@ auto-format = true
 For other editors, there's usually a way to specify `slug` as the language server and or point to the directory `tree-sitter/` in this repository.
 
 
-
-## 🧩 each slot/span has one associated collection
-(TODO rewrite to be more approachable)
-
-```slug
-ty expression(Expressions Patterns Types)
-    [ let
-        { pattern pattern(Patterns Types)
-          value slot(Expressions)
-          result slot(Expressions)
-        }
-      ...
-    ]
-
-ty state
-    { projects-buf buf(^projects project-state)
-      projects opt(span(^projects))
-    }
-
-ty project-state
-    { expressions buf(^expressions expression)
-      patterns buf(^patterns pattern)
-      types buf(^types pattern)
-      base-expression expression(^expressions ^patterns ^types)
-    }
-
-fn initial-state({}) state
-    { projects-buf projects-buf buf-empty<^projects project-state>()
-      projects [yes<opt(span(^projects))> {}]
-    }
-```
-slots and spans themselves deliberately do _not_ store their type.
-Functions instead explicitly list the bufs as parameters (which can get autofilled because origin is unique in callsite?). Other rules:
-  - a value must not outlive any ^origin it references
-  - a buf must not be able to be defined with an origin that is already in use
-  - a value cannot reference an ^origin that is not yet defined
-
-This seems like a wonderful (and still relatively simple) system to me.
-Potential open questions / issues:
-  - syntax for creating a new buf + origin? Something like `buf-empty<^new-origin-name element-type>()` which automagically introduces `^new-origin-name` into the scope
-  - creating a safe rust core API seems close to impossible (not much of an issue)
-
-What weaknesses does this design address?
-  - how to operate on the underlying buf in a non-brittle and clear way, e.g. pre-allocating, altering, reusing memory, stepping
-  - it's not uncommon to want `buf<{ some: buf, other: buf, tree: ... }>` where slots and spans in `tree` refer only to within the same buf item. This enables quick and easy bulk deletion / bulk access / bulk modification without needing to reach into _all_ items of the same kind.
-    A possible runtime solution would be to introduce separate slot/span types which additionally track e.g. a runtime index u32 given on construction.
-    Issues:
-      - slots and spans become thicker (bad)
-      - this does not mesh well with existing APIs. Combining spans for example would not be possible
-    
-    I would judge it reasonable to somehow enable "slots and spans that point into a specific span"
-    but this seems similarly impossible to allow nicely.
-  - it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
-    This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
-    
-    The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
-
 > As a user of slug you can stop reading here. The rest is for developers and those interested in language design
 
 
@@ -223,25 +207,46 @@ What weaknesses does this design address?
 - shadowing is allowed and encouraged
 
 ## implementation details
-- if a type uses `^origin` but there exists !=1 actual origin buf for it, report an error suggesting to use type variables instead
-- bufs themselves are dropped once we know no more Slot/Span referencing its origin exists.
-  This should be at the end of its scope
-- If the input and output types never mention an origin created inside, we can allocate the buf with this origin with an arena
+- bufs are the only values passed by mutable reference! (double indirection)
+  Sadly this means it must be ref-counted.
+  Here's an example showing how simple ownership falls flat
+  ```slug
+  fn example() {}
+      = outer buf-empty<^outer buf(^inner u32)>()
+      = inner buf-empty<^inner u32>()
+      = _ outer.buf-add(inner)
+      = _ outer.buf-add(inner)
+      {}
+  ```
+  Honestly it is a little confusing that you can store multiple references to the same `buf` and modify through any of them.
+  Maybe this is also a hint that current `buf` passing semantics can be improved?
+  
+- expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
+  The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
+- If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
+- type aliases are _not_ (!) checked for origin violations, only actual expression code is
 
 ## TODO
 - implement compiler & tooling
 - website with online repl
 
+## known design weaknesses
+  - it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
+    This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
+    
+    The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
+
 ## potential improvements in the future
-- automatically figure out optimizations for "consume-only" parameters not needing to be cloned
+- (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
 - should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.
   Exclusive slots would need to be deeply (I think) cloned while shared slots (`slot-counted`?) are shallow-copied + count increased.
   They should live in separate bufs to save space and be faster.
   
   Also similarly, there could be a distinction for shared mutable and shared immutable slots. I wonder if there is a point?
-- I would **LOVE** if there was a way to allow for "unspecialized function types". If we decide to never compile to rust or rust gains support for this, we should instantly add this (and backport it to sloe)
+- automatically figure out optimizations for "consume-only" parameters not needing to be cloned
+- I would **LOVE** if there was a way to allow for "unspecialized function types". If e.g. rust gains support for this, we should add this (and maybe backport it to sloe)
 - could this approach be used to compile existing, high-level languages (e.g. elm/gren)?
-- should FFI be more ergonomic? Maybe by providing `extern-fn` signatures that must get populated by the platform
+- should FFI be more ergonomic? Maybe by providing `extern-fn` signatures (and maybe `extern-ty`?) that must get populated by the platform
 
 ## rejected
 (some points may be outdated)
