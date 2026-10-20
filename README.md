@@ -223,6 +223,7 @@ For other editors, there's usually a way to specify `slug` as the language serve
   
 - expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
   The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
+- when a slot or span is dropped or cloned, slug must check the ssociated origin bufs are reachable and error otherwise. This means that many functions still need to return the slots and spans that are passed in, like `slot-index`, `buf-span-sort`'s item sort function. This screams like a design failure but maybe it's fine.
 - If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
 - type aliases are _not_ (!) checked for origin violations, only actual expression code is
 

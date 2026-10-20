@@ -64,6 +64,7 @@ pub struct SyntaxTyParameters {
 }
 #[derive(Debug)]
 pub enum SyntaxType {
+    // TODO add Fn
     Variable(WithStartPosition<Name>),
     Origin {
         hat_start: lsp_types::Position,
@@ -129,6 +130,7 @@ pub struct SyntaxAngledTypeArguments {
 }
 #[derive(Debug)]
 pub enum SyntaxExpression<Expressions, Patterns> {
+    // TODO add Deconstruct
     Number {
         value: WithStartPosition<Box<str>>,
         type_: Option<SyntaxType>,
@@ -162,7 +164,7 @@ pub enum SyntaxExpression<Expressions, Patterns> {
     Fn {
         fn_keyword_start: lsp_types::Position,
         open_paren_start: Option<lsp_types::Position>,
-        parameter: Option<SyntaxPattern<Patterns>>,
+        parameters: Vec<SyntaxPattern<Patterns>>,
         closed_paren_start: Option<lsp_types::Position>,
         result: Option<core::Slot<Expressions>>,
     },
@@ -553,7 +555,7 @@ pub fn expression_end<Expressions, Patterns>(
         SyntaxExpression::Fn {
             fn_keyword_start,
             open_paren_start,
-            parameter,
+            parameters,
             closed_paren_start,
             result,
         } => result
@@ -564,8 +566,8 @@ pub fn expression_end<Expressions, Patterns>(
                     .map(|closed_bracket_start| symbol_end(closed_bracket_start, ")"))
             })
             .or_else(|| {
-                parameter
-                    .as_ref()
+                parameters
+                    .last()
                     .map(|parameter| pattern_end(parameter, patterns))
             })
             .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
@@ -1652,15 +1654,17 @@ fn parse_expression_fn<Expressions, Patterns>(
     parse_slug_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
     parse_slug_whitespace(state);
-    let parameter = parse_parameter_pattern(state, patterns);
-    parse_slug_whitespace(state);
+    let mut parameters = Vec::with_capacity(2);
+    while let Some(parameter) = parse_parameter_pattern(state, patterns){
+    parameters.push(parameter);
+    parse_slug_whitespace(state);}
     let closed_paren_start = parse_symbol_as_start(state, ")");
     parse_slug_whitespace(state);
     let result = parse_expression(state, expressions, patterns);
     Some(SyntaxExpression::Fn {
         fn_keyword_start,
         open_paren_start,
-        parameter: parameter,
+        parameters,
         closed_paren_start,
         result: result.map(|result| expressions.insert(result)),
     })
@@ -1724,6 +1728,7 @@ pub enum Type {
     Record(Vec<TypeField>),
     Choice(Vec<TypeVariant>),
     CoreConstruct { name: Name, arguments: Vec<Type> },
+    Fn { parameters: Vec<Type>, result: Box<Type> }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeField {
@@ -2253,7 +2258,7 @@ fn syntax_expression_connect_fns_in_graph_from<Expressions, Patterns>(
         SyntaxExpression::Fn {
             fn_keyword_start: _,
             open_paren_start:_,
-            parameter: _,
+            parameters: _,
             closed_paren_start: _,
             result,
         } => {
@@ -2435,7 +2440,7 @@ fn project_type_alias_check(
                         errors.push(ErrorNode {
                             range: name_range(with_start_position_as_ref(project_type.name)),
                             message: Box::from(
-                                "When declaring a type without parameters, its name needs to start with a lowercase letter. Only generic types (e.g. Buf _origin, _item) have an uppercase name",
+                                "When declaring a type without parameters, its name needs to start with a lowercase letter. Only generic types (e.g. buf(_origin _item)) have an uppercase name",
                             ),
                         });
                         vec![]
@@ -2447,7 +2452,7 @@ fn project_type_alias_check(
                                 parameters.parameters.iter().map(with_start_position_as_ref)
                             }),
                             actually_used_type_variables,
-                            "Type parameter variables follow after the name and are separated by commas, so for example ty Buf _origin, _item",
+                            "Type parameter variables follow after the name and are separated by commas, so for example ty buf(_origin _item)",
                         )
                     };
                     CheckedTypeAlias {
@@ -4359,52 +4364,62 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             }
         }
         SyntaxExpression::Fn {
-            fn_keyword_start: open_bracket_start,
+            fn_keyword_start,
             open_paren_start:_,
-            parameter,
+            parameters,
             closed_paren_start: _,
             result,
         } => {
-            let Some(syntax_parameter) = parameter else {
+            let Some(checked_local_fn) = checked_local_fns.get(fn_keyword_start) else {
                 zig_incomplete_expression(output);
                 return;
             };
-            let Some(checked_local_fn) = checked_local_fns.get(open_bracket_start) else {
-                zig_incomplete_expression(output);
-                return;
-            };
-            let local_function_scope_start = pattern_start(syntax_parameter);
-            let function_parameter_name = format!(
-                "@\"%{}:{}\"",
-                open_bracket_start.line, open_bracket_start.character
-            );
+            let local_function_scope_start = *fn_keyword_start;
+            fn function_parameter_name(output: &mut String, parameter_start: lsp_types::Position) {
+                use std::fmt::Write as _;
+                output.push_str("@\"%");
+                _ = write!(output, "{}", parameter_start.line);
+                output.push(':');
+                _ = write!(output, "{}", parameter_start.character);
+                output.push('"');
+            }
             if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
                 zig_break_start(output, label);
             }
+            // TODO
             output.push_str("@as(Fn(");
-            type_to_zig(output, &checked_local_fn.parameter_type);
-            output.push_str(", ");
+            for parameter_type in &checked_local_fn.parameter_types{
+            type_to_zig(output, parameter_type);
+            output.push_str(", ");}
             type_to_zig(output, &checked_local_fn.result_type);
             output.push_str(",), struct {\npub fn f(");
             zig_allocator_variable(output, local_function_scope_start);
             output.push_str(": std.mem.Allocator, ");
-            output.push_str(&function_parameter_name);
-            output.push_str(": ");
-            type_to_zig(output, &checked_local_fn.parameter_type);
+            for (parameter, parameter_type) in parameters.iter().zip(&checked_local_fn.parameter_types){
+                function_parameter_name(output, pattern_start(parameter));
+                output.push_str(": ");
+                type_to_zig(output, parameter_type);
+                output.push_str(",");
+            }
             output.push_str(") error{OutOfMemory}!");
             type_to_zig(output, &checked_local_fn.result_type);
-            output.push_str(" {\n_ = @TypeOf(");
+            output.push_str(" {\n");
+            output.push_str("_ = @TypeOf(");
             zig_allocator_variable(output, local_function_scope_start);
             output.push_str(");\n");
             let mut parameter_introduced_variables = std::collections::HashMap::new();
+            for syntax_parameter in parameters {
+            let mut parameter_name = String::new();
+            function_parameter_name(&mut parameter_name, pattern_start(syntax_parameter));
             syntax_pattern_to_zig_destructuring(
                 output,
                 syntax_parameter,
-                &function_parameter_name,
+                &parameter_name,
                 &mut parameter_introduced_variables,
                 checked_spread_records,
                 patterns,
             );
+            }
             output.push_str("return ");
             match result {
                 None => {
@@ -5361,7 +5376,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
         SyntaxExpression::Fn {
             fn_keyword_start: _,
             open_paren_start:_,
-            parameter,
+            parameters: parameter,
             closed_paren_start: _,
             result,
         } => {
@@ -5879,7 +5894,7 @@ fn syntax_expression_check<'a, Expressions, Patterns>(
                             *content_end
                         },
                     },
-                    message: Box::from("missing characters between the double quotes \"here\". There always needs to be at least one char, otherwise wrap it in an `Opt`"),
+                    message: Box::from("missing characters between the double quotes \"here\". There always needs to be at least one char, otherwise wrap it in an `opt`"),
                 });
                 return None;
             }
@@ -5893,7 +5908,7 @@ fn syntax_expression_check<'a, Expressions, Patterns>(
                             *content_end
                         },
                     },
-                    message: Box::from("too many characters between the double quotes \"here\". A `str` in slug can only hold up to 2^32 bytes just like `Buf` for example. Sorry! Open an issue if this limitation is blocking you"),
+                    message: Box::from("too many characters between the double quotes \"here\". A `str` in slug can only hold up to 2^32 bytes just like `buf` for example. Sorry! Open an issue if this limitation is blocking you"),
                 });
                 return None;
             }
@@ -5970,30 +5985,10 @@ Available variable names are {}",
             name,
             type_arguments: syntax_type_arguments,
             open_paren_start:_,
-            argument: syntax_arguments,
+            arguments: syntax_arguments,
             closed_paren_start:_,
         } => {
             let mut argument_types = Vec::with_capacity(syntax_arguments.len());
-            for syntax_argument in syntax_arguments{
-                let Some(checked_argument_type) = syntax_expression_check(
-                    errors,
-                    type_aliases,
-                    project_fns,
-                    expressions,
-                    patterns,
-                                    local_variables,
-                    origins,
-                    syntax_argument,
-                    checked_calls,
-                    checked_local_fns,
-                    checked_ifs,
-                    checked_spread_records,
-                    records_used,
-                    choices_used,
-                ) else {
-                    return None;
-                };
-            }
             // TODO handle name being local variable
             let Some(project_fn_info) = project_fns.get(name.value.as_str()) else {
                 errors.push(ErrorNode {
@@ -6002,10 +5997,7 @@ Available variable names are {}",
                 });
                 return None;
             };
-            let Some((project_fn_parameter_type, project_fn_result_type)) = project_fn_info
-                .parameter_types
-                .as_ref()
-                .zip(project_fn_info.result_type.as_ref())
+            let Some(project_fn_result_type) = &project_fn_info.result_type
             else {
                 return None;
             };
@@ -6040,7 +6032,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                 };
                 type_arguments.push(type_argument);
             }
-            let mut expected_argument_type = project_fn_parameter_type.clone();
+            let mut expected_argument_types = project_fn_info.parameter_types.clone();
             let mut result_type = project_fn_result_type.clone();
             let mut type_variable_replacements = project_fn_info
                 .type_parameters
@@ -6048,20 +6040,42 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                 .zip(type_arguments)
                 .map(|(type_parameter, type_argument)| (type_parameter.clone(), type_argument))
                 .collect();
+            for (expected_argument_type, syntax_argument) in expected_argument_types.iter_mut().flatten().zip(syntax_arguments) {
+
+                let Some(checked_argument_type) = syntax_expression_check(
+                    errors,
+                    type_aliases,
+                    project_fns,
+                    expressions,
+                    patterns,
+                                    local_variables,
+                    origins,
+                    syntax_argument,
+                    checked_calls,
+                    checked_local_fns,
+                    checked_ifs,
+                    checked_spread_records,
+                    records_used,
+                    choices_used,
+                ) else {
+                    return None;
+                };
+            {
+            let mut expected_argument_type = expected_argument_type.clone();
             type_replace_variables(&type_variable_replacements, &mut expected_argument_type);
             type_collect_variables_that_are_concrete_into(
                 &mut type_variable_replacements,
                 &expected_argument_type,
                 &checked_argument_type,
             );
-            let mut expected_concrete_argument_type = project_fn_parameter_type.clone();
+            }
             type_replace_variables(
                 &type_variable_replacements,
-                &mut expected_concrete_argument_type,
+                &mut expected_argument_type,
             );
             type_replace_variables(&type_variable_replacements, &mut result_type);
             if let Some(argument_variable_input_type_diff) =
-                type_diff(&expected_concrete_argument_type, &checked_argument_type)
+                type_diff(&expected_argument_type, &checked_argument_type)
             {
                 place_expression_type_diff_errors(
                     errors,
@@ -6072,7 +6086,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                                         checked_spread_records,
                 );
                 return None;
-            }
+            }}
             checked_calls.insert(
                 name.start,
                 CheckedCall {
@@ -6086,6 +6100,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
             name,
             type_: other_variants_type,
             value,
+            closed_bracket_start:_
         } => {
             let Some(name) = name else {
                 errors.push(ErrorNode {
@@ -6197,22 +6212,18 @@ If there should only ever by one variant, using a record with a single field is 
             }
         }
         SyntaxExpression::Fn {
-            fn_keyword_start: open_bracket_start,
-            parameter,
+            fn_keyword_start,
+            open_paren_start,
+            parameters,
             closed_paren_start: closed_bracket_start,
             result,
         } => {
-            let Some(parameter) = parameter else {
-                errors.push(ErrorNode {
-                    range: symbol_range(*open_bracket_start, "["),
-                    message: Box::from("missing parameter after open bracket [. An example of a local fn expression is [n u32] _u32-add .a n .b 1 u32"),
-                });
-                return None;
-            };
             let mut parameter_introduced_variables: std::collections::HashMap<
                 &Name,
                 CheckedLocalVariable,
             > = std::collections::HashMap::new();
+            let mut parameter_types = Vec::with_capacity(parameters.len());
+            for parameter in parameters {
             let Some(checked_parmeter_type) = syntax_parameter_pattern_check(
                 parameter,
                 errors,
@@ -6227,12 +6238,15 @@ If there should only ever by one variant, using a record with a single field is 
             ) else {
                 return None;
             };
+            parameter_types.push(checked_parmeter_type);
+            }
             let Some(result) = result else {
                 errors.push(ErrorNode {
                     range: closed_bracket_start
-                        .map(|closed_bracket_start| symbol_range(closed_bracket_start, "]"))
-                        .unwrap_or_else(|| symbol_range(*open_bracket_start, "[")),
-                    message: Box::from("missing function result after [..pattern..] here"),
+                        .map(|closed_bracket_start| symbol_range(closed_bracket_start, ")"))
+                        .or_else(|| open_paren_start.map(|open_paren_start| symbol_range(open_paren_start, "(")))
+                        .unwrap_or_else(|| symbol_range(*fn_keyword_start, "fn")),
+                    message: Box::from("missing function result after fn(..patterns..) here"),
                 });
                 return None;
             };
@@ -6263,33 +6277,22 @@ If there should only ever by one variant, using a record with a single field is 
                 ));
             }
             checked_local_fns.insert(
-                *open_bracket_start,
+                *fn_keyword_start,
                 CheckedLocalFn {
-                    parameter_type: checked_parmeter_type.clone(),
+                    parameter_types: parameter_types.clone(),
                     result_type: checked_result_type.clone(),
                 },
             );
-            Some(type_fn(checked_parmeter_type, checked_result_type))
+            Some(type_fn(parameter_types, checked_result_type))
         }
-        SyntaxExpression::RecordEmpty { dot_start: _ } => Some(Type::Record(vec![])),
-        SyntaxExpression::Record { part0, part1_up } => {
-            let mut maybe_field_types: Option<Vec<TypeField>> = Some(Vec::new());
-            'checking_fields: for part in std::iter::once(part0).chain(part1_up) {
-                match part {
-                    SyntaxRecordField::Field { name, value } => {
-                        let Some(field_name) = &name.value else {
-                            errors.push(ErrorNode {
-                                range: symbol_range(name.start, "."),
-                                message: Box::from(
-                                    "missing field name after this dot. An example of a valid record is .name \"svalbard\" .status \"hi\"",
-                                ),
-                            });
-                            continue 'checking_fields;
-                        };
-                        let checked_field_value_type: Option<Type> = match value {
+        SyntaxExpression::Record { open_curly_start:_, fields, closed_curly_start:_ } => {
+            let mut maybe_field_types: Option<Vec<TypeField>> = Some(Vec::with_capacity(fields.len()));
+            for field in fields {
+                  {  {
+                        let checked_field_value_type: Option<Type> = match &field.value {
                             None => {
                                 errors.push(ErrorNode {
-                                    range: name_range(name),
+                                    range: name_range(with_start_position_as_ref(&field.name)),
                                     message: Box::from(
                                         "missing field value expression after this field name",
                                     ),
@@ -6304,7 +6307,7 @@ If there should only ever by one variant, using a record with a single field is 
                                 patterns,
                                                                 local_variables,
                                 origins,
-                                expressions.item(field_value),
+                                field_value,
                                 checked_calls,
                                 checked_local_fns,
                                 checked_ifs,
@@ -6320,185 +6323,19 @@ If there should only ever by one variant, using a record with a single field is 
                                 }
                                 Some(checked_field_value_type) => {
                                     field_types.push(TypeField {
-                                        name: field_name.clone(),
+                                        name: field.name.value.clone(),
                                         value: checked_field_value_type,
                                     });
                                 }
                             }
                         }
                     }
-                    SyntaxRecordField::Spread {
-                        dot_dot_start,
-                        record,
-                    } => {
-                        let Some(record) = record else {
-                            errors.push(ErrorNode {
-                                range: symbol_range(*dot_dot_start, ".."),
-                                message: Box::from(
-                                    "missing record expression after this .. spread",
-                                ),
-                            });
-                            continue 'checking_fields;
-                        };
-                        let checked_record_type: Option<Type> = syntax_expression_check(
-                            errors,
-                            type_aliases,
-                            project_fns,
-                            expressions,
-                            patterns,
-                                                        local_variables,
-                            origins,
-                            expressions.item(record),
-                            checked_calls,
-                            checked_local_fns,
-                            checked_ifs,
-                            checked_spread_records,
-                            records_used,
-                            choices_used,
-                        );
-                        if let Some(field_types) = &mut maybe_field_types {
-                            match checked_record_type {
-                                None => {
-                                    maybe_field_types = None;
-                                }
-                                Some(checked_record_type) => {
-                                    let Type::Record(checked_record_type_fields) =
-                                        checked_record_type
-                                    else {
-                                        let mut error_message = "expression after this .. spread must be a known record but it's type is\n".to_string();
-                                        type_format(&mut error_message, 0, &checked_record_type);
-                                        errors.push(ErrorNode {
-                                            range: symbol_range(*dot_dot_start, ".."),
-                                            message: error_message.into_boxed_str(),
-                                        });
-                                        maybe_field_types = None;
-                                        continue 'checking_fields;
-                                    };
-                                    for checked_record_type_field in &checked_record_type_fields {
-                                        if let Some(existing_clashing_field) =
-                                            field_types.iter().find(|existing_field| {
-                                                checked_record_type_field.name
-                                                    == existing_field.name
-                                            })
-                                        {
-                                            let mut error_message = format!(
-                                                "record after this .. spread contains the field .{} which clashes with a previous field with the same name. The full type of the spread record is\n",
-                                                existing_clashing_field.name
-                                            );
-                                            type_record_format(
-                                                &mut error_message,
-                                                0,
-                                                &checked_record_type_fields,
-                                            );
-                                            errors.push(ErrorNode {
-                                                range: symbol_range(*dot_dot_start, ".."),
-                                                message: error_message.into_boxed_str(),
-                                            });
-                                            maybe_field_types = None;
-                                            continue 'checking_fields;
-                                        }
-                                    }
-                                    checked_spread_records.insert(
-                                        *dot_dot_start,
-                                        checked_record_type_fields
-                                            .iter()
-                                            .map(|field| field.name.clone())
-                                            .collect::<Vec<_>>(),
-                                    );
-                                    field_types.extend(checked_record_type_fields);
-                                }
-                            }
-                        }
-                    }
+
                 }
             }
             // the only way to use a record expression is through
             // a pattern or type. Nothing to add to used_records here
             maybe_field_types.map(Type::Record)
-        }
-        SyntaxExpression::Array {
-            semicolon_start,
-            item0,
-            item1_up,
-        } => {
-            let Some(item0) = item0 else {
-                errors.push(ErrorNode {
-                    range: symbol_range(*semicolon_start, ";"),
-                    message: Box::from("missing expression after array start ;. An example of an array is ; first ; second ; third"),
-                });
-                return None;
-            };
-            let Some(checked_item0) = syntax_expression_check(
-                errors,
-                type_aliases,
-                project_fns,
-                expressions,
-                patterns,
-                                local_variables,
-                origins,
-                expressions.item(item0),
-                checked_calls,
-                checked_local_fns,
-                checked_ifs,
-                checked_spread_records,
-                records_used,
-                choices_used,
-            ) else {
-                return None;
-            };
-            let mut type_fields = vec![TypeField {
-                name: array_record_field_name_for_index0,
-                value: checked_item0.clone(),
-            }];
-            for (item_index, item) in item1_up.iter().enumerate().map(|(i, it)| (i + 1, it)) {
-                let Some(item) = &item.item else {
-                    errors.push(ErrorNode {
-                        range: symbol_range(item.semicolon_start, ";"),
-                        message: Box::from("missing expression after ; in array. An example of an array is ; first ; second ; third"),
-                    });
-                    return None;
-                };
-                let Some(checked_item) = syntax_expression_check(
-                    errors,
-                    type_aliases,
-                    project_fns,
-                    expressions,
-                    patterns,
-                                        local_variables,
-                    origins,
-                    item,
-                    checked_calls,
-                    checked_local_fns,
-                    checked_ifs,
-                    checked_spread_records,
-                    records_used,
-                    choices_used,
-                ) else {
-                    return None;
-                };
-                if let Some(type_diff) = type_diff(&checked_item0, &checked_item) {
-                    place_expression_type_diff_errors(
-                        errors,
-                        item,
-                        &type_diff,
-                        expressions,
-                        patterns,
-                                                checked_spread_records,
-                    );
-                    return None;
-                }
-                type_fields.push(TypeField {
-                    name: array_record_field_name_for_index(item_index),
-                    value: checked_item,
-                });
-            }
-            records_used.insert(
-                type_fields
-                    .iter()
-                    .map(|type_field| type_field.name.clone())
-                    .collect::<Vec<_>>(),
-            );
-            Some(type_array(checked_item0, Type::Record(type_fields)))
         }
         SyntaxExpression::Commented {
             comments,
@@ -6533,12 +6370,14 @@ If there should only ever by one variant, using a record with a single field is 
         SyntaxExpression::If {
             if_keyword_start: question_mark_start,
             queried,
+            open_curly_start:_,
             cases,
+            closed_curly_start:_
         } => {
             let Some(queried) = queried else {
                 errors.push(ErrorNode {
-                    range: symbol_range(*question_mark_start, "?"),
-                    message: Box::from("missing queried expression after this colon. An example of a if is ? option ['yes n] n ['no .] 0 u32")
+                    range: symbol_range(*question_mark_start, "if"),
+                    message: Box::from("missing queried expression after this if keyword. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
                 });
                 return None;
             };
@@ -6546,7 +6385,7 @@ If there should only ever by one variant, using a record with a single field is 
             let Some((case0, case1_up)) = cases.split_first() else {
                 errors.push(ErrorNode {
                     range: symbol_range(*question_mark_start, "?"),
-                    message: Box::from("missing case(s) after the queried expression. Cases look like [pattern] result-expression. An example of a if is ? option ['yes n] n ['no .] 0 u32. If everything looks good on your end, try to parenthesize the expression after the ?, as the queried expression cannot already be an unpqrenthesized if")
+                    message: Box::from("missing case(s) after the queried expression. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
                 });
                 return None;
             };
@@ -6568,17 +6407,10 @@ If there should only ever by one variant, using a record with a single field is 
             ) else {
                 return None;
             };
-            let Some(case0_pattern) = &case0.pattern else {
-                errors.push(ErrorNode {
-                    range:  symbol_range(case0.open_bracket_start, "["),
-                    message: Box::from("missing if case pattern after this open bracket [. Cases consist of [pattern] result-expression. An example of a if is ? option ['yes n] n ['no] 0 u32")
-                });
-                return None;
-            };
             let Some(case0_result) = &case0.result else {
                 errors.push(ErrorNode {
-                    range: case0.closed_bracket_start.map(|closed_bracket_start| symbol_range(closed_bracket_start, "]")).unwrap_or_else(|| pattern_range(case0_pattern, patterns)),
-                    message: Box::from("missing result expression after this if case pattern. Cases look like [pattern] result-expression. An example of a if is ? option ['yes n] n ['no] 0 u32")
+                    range: pattern_range(&case0.pattern, patterns),
+                    message: Box::from("missing result expression after this if case pattern. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
                 });
                 return None;
             };
@@ -6587,7 +6419,7 @@ If there should only ever by one variant, using a record with a single field is 
                 CheckedLocalVariable,
             > = std::collections::HashMap::new();
             syntax_if_case_pattern_check(
-                case0_pattern,
+                &case0.pattern,
                 &checked_queried_type,
                 errors,
                 &mut case0_pattern_introduced_variables,
@@ -6602,7 +6434,7 @@ If there should only ever by one variant, using a record with a single field is 
             );
             specific_pattern_catches_remove_those_matched_by_pattern(
                 &mut remaining_specific_pattern_catch_possibilities,
-                case0_pattern,
+                &case0.pattern,
                 patterns,
                 checked_spread_records,
             );
@@ -6651,19 +6483,12 @@ If there should only ever by one variant, using a record with a single field is 
                 .enumerate()
                 .map(|(i_in_1up, case)| (i_in_1up + 1, case))
             {
-                let Some(case_pattern) = &case.pattern else {
-                    errors.push(ErrorNode {
-                        range:  symbol_range(case.open_bracket_start, "["),
-                        message: Box::from("missing if case pattern after this open bracket [. Cases are written as [pattern] result-expression. A full if could look like ? option ['yes n] n ['no] 0 u32")
-                    });
-                    continue 'checking_case1_up;
-                };
                 let mut case_pattern_introduced_variables: std::collections::HashMap<
                     &Name,
                     CheckedLocalVariable,
                 > = std::collections::HashMap::new();
                 syntax_if_case_pattern_check(
-                    case_pattern,
+                    &case.pattern,
                     &checked_queried_type,
                     errors,
                     &mut case_pattern_introduced_variables,
@@ -6675,7 +6500,7 @@ If there should only ever by one variant, using a record with a single field is 
                     remaining_specific_pattern_catch_possibilities.len();
                 specific_pattern_catches_remove_those_matched_by_pattern(
                     &mut remaining_specific_pattern_catch_possibilities,
-                    case_pattern,
+                    &case.pattern,
                     patterns,
                     checked_spread_records,
                 );
@@ -6683,10 +6508,7 @@ If there should only ever by one variant, using a record with a single field is 
                     == remaining_specific_pattern_catch_possibilities_count_before_case
                 {
                     errors.push(ErrorNode {
-                        range: lsp_types::Range {
-                            start: case.open_bracket_start,
-                            end: case.closed_bracket_start.map(|closed_bracket_start| symbol_end(closed_bracket_start, "]")).unwrap_or_else(|| pattern_end(case_pattern, patterns))
-                        },
+                        range: pattern_range(&case.pattern, patterns),
                         message: Box::from("this if case pattern only covers possibilities that earlier case patterns will already catch. This means that any code in this case result won't ever be called. Remove this case or correct the pattern.")
                     });
                     invalid_case_indexes.push(case_index);
@@ -6694,8 +6516,8 @@ If there should only ever by one variant, using a record with a single field is 
                 }
                 let Some(case_result) = &case.result else {
                     errors.push(ErrorNode {
-                        range: case.closed_bracket_start.map(|closed_bracket_start| symbol_range(closed_bracket_start, "]")).unwrap_or_else(||pattern_range(case_pattern, patterns)),
-                        message: Box::from("missing result expression after this if case pattern. Cases are written as [pattern] result-expression. An example of a if is ? option ['yes n] n ['no .] 0 u32")
+                        range: pattern_range(&case.pattern, patterns),
+                        message: Box::from("missing result expression after this if case pattern. Cases are written as  pattern result-expression. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
                     });
                     continue 'checking_case1_up;
                 };
@@ -6826,151 +6648,6 @@ If not, add patterns for the cases above"
             );
             Some(checked_if_result_type)
         }
-        SyntaxExpression::Origin {
-            caret_key_symbol_start,
-            parts,
-            name,
-            result,
-        } => {
-            let Some(origin_name) = name else {
-                errors.push(match parts.last() {
-                    None => ErrorNode {
-                        range: lsp_types::Range {
-                            start: *caret_key_symbol_start,
-                            end: symbol_end(*caret_key_symbol_start, "^"),
-                        },
-                        message: Box::from("missing origin name after ^ ..here.."),
-                    },
-                    Some(last_part) => ErrorNode {
-                        range: lsp_types::Range {
-                            start: *caret_key_symbol_start,
-                            end: name_end(last_part),
-                        },
-                        message: Box::from("missing origin name after ^ .parts ..here.."),
-                    },
-                });
-                return None;
-            };
-            if let Some(existing_origin_with_same_name) = origins.get(&origin_name.value) {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(origin_name)),
-                    message: format!(
-                        "an origin type with this name already exists at {}",
-                        position_to_string(existing_origin_with_same_name.origin_start)
-                    )
-                    .into_boxed_str(),
-                });
-            } else if core_type_aliases.contains_key(&origin_name.value) {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(origin_name)),
-                    message: Box::from(
-                        "a core type with this name already exists. Rename this origin",
-                    ),
-                });
-            } else if type_aliases.contains_key(&origin_name.value) {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(origin_name)),
-                    message: Box::from(
-                        "a project type alias with this name already exists. Rename this origin",
-                    ),
-                });
-            }
-            let Some(result) = result else {
-                errors.push(ErrorNode {
-                    range: lsp_types::Range {
-                        start: *caret_key_symbol_start,
-                        end: name_end(with_start_position_as_ref(origin_name)),
-                    },
-                    message: Box::from("missing expression after ^ origin-name ..here.."),
-                });
-                return None;
-            };
-            let mut part_names = Vec::new();
-            for part in parts {
-                match &part.value {
-                    None => {
-                        errors.push(ErrorNode {
-                            range: symbol_range(part.start, "."),
-                            message: Box::from("missing part name after the dot ."),
-                        });
-                    }
-                    Some(part_name) => {
-                        if part_names.contains(part_name) {
-                            let name_start = symbol_end(part.start, ".");
-                            errors.push(ErrorNode {
-                                range: lsp_types::Range {
-                                    start: name_start,
-                                    end: position_add_characters(
-                                        name_start,
-                                        part_name.len() as u32,
-                                    ),
-                                },
-                                message: Box::from(
-                                    "this part name already exists earlier. Remove it",
-                                ),
-                            });
-                        } else {
-                            records_used.insert(vec![part_name.clone()]);
-                            part_names.push(part_name.clone());
-                        }
-                    }
-                }
-            }
-            origins.insert(
-                &origin_name.value,
-                CheckedOrigin {
-                    origin_start: origin_name.start,
-                },
-            );
-            local_variables.insert(
-                &origin_name.value,
-                CheckedLocalVariable {
-                    origin_start: origin_name.start,
-                    type_: Some(origin_type_from_part_names(&origin_name.value, &part_names)),
-                },
-            );
-            if !part_names.is_empty() {
-                records_used.insert(part_names);
-            }
-            let checked_result_type = syntax_expression_check(
-                errors,
-                type_aliases,
-                project_fns,
-                expressions,
-                patterns,
-                                local_variables,
-                origins,
-                expressions.item(result),
-                checked_calls,
-                checked_local_fns,
-                checked_ifs,
-                checked_spread_records,
-                records_used,
-                choices_used,
-            );
-            if let Some(result_type) = &checked_result_type
-                && type_references_origin(result_type, &origin_name.value)
-            {
-                let mut type_string = String::new();
-                type_format(&mut type_string, 0, result_type);
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(origin_name)),
-                    message: format!(
-                        "the type of the resulting expression references this origin:\n{}. This is not allowed as it would allow creating multiple collections with the same origin. Move this origin creation to before the outer expression and/or pass the origin as an argument",
-                        type_string
-                    ).into_boxed_str(),
-                });
-                return None;
-            }
-            if local_variables.remove(&origin_name.value).is_some() {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(origin_name)),
-                    message: Box::from("this origin variable is never used. Use it or remove it"),
-                });
-            }
-            origins.remove(&origin_name.value);
-            checked_result_type
-        }
     }
 }
 fn origin_type_from_part_names<'a>(
@@ -7018,7 +6695,7 @@ pub struct CheckedCall {
     argument_type_variable_replacements: std::collections::BTreeMap<Name, Type>,
 }
 pub struct CheckedLocalFn {
-    pub parameter_type: Type,
+    pub parameter_types: Vec<Type>,
     pub result_type: Type,
 }
 pub struct CheckedIf {
@@ -7094,7 +6771,7 @@ pub fn syntax_pattern_type_variables_into<'a, Patterns>(
                 syntax_type_variables_into(type_variables, type_);
             }
         }
-        SyntaxPattern::Variant { name: _, value } => {
+        SyntaxPattern::Variant { open_bracket_start:_, name: _, value, closed_bracket_start:_ } => {
             if let Some(value) = value {
                 syntax_pattern_type_variables_into(
                     type_variables,
@@ -7103,8 +6780,7 @@ pub fn syntax_pattern_type_variables_into<'a, Patterns>(
                                     );
             }
         }
-        SyntaxPattern::RecordEmpty { dot_start: _ } => {}
-        SyntaxPattern::Record { part0, part1_up } => {
+        SyntaxPattern::Record { open_curly_start:_, fields, closed_curly_start:_ } => {
             for part in std::iter::once(part0).chain(part1_up) {
                 match part {
                     SyntaxRecordField::Field { name: _, value } => {
@@ -7150,13 +6826,13 @@ pub fn syntax_pattern_type_variables_into<'a, Patterns>(
 /// Fully validated type
 #[derive(Clone, Debug)]
 enum TypeDiff<'a> {
+    /// None means no difference
     Conflict {
         expected: &'a Type,
         actual: &'a Type,
     },
     CoreConstruct {
         name: &'a Name,
-        /// None means no difference
         arguments: Vec<Option<TypeDiff<'a>>>,
     },
     Record {
@@ -7165,17 +6841,16 @@ enum TypeDiff<'a> {
         actual_extraneous_fields: Vec<&'a Name>,
     },
     Choice(Vec<TypeDiffVariant<'a>>),
+    Fn { parameters: Vec<Option<TypeDiff>>, result: Option<TypeDiff> }
 }
 #[derive(Clone, Debug)]
 struct TypeDiffField<'a> {
     name: &'a Name,
-    /// None means no difference
     value: Option<TypeDiff<'a>>,
 }
 #[derive(Clone, Debug)]
 struct TypeDiffVariant<'a> {
     name: &'a Name,
-    /// None means no difference
     value: Option<TypeDiff<'a>>,
 }
 
@@ -7211,6 +6886,29 @@ fn type_collect_variables_that_are_concrete_into(
                         concrete_argument_type,
                     );
                 }
+            }
+        }
+        Type::Fn { parameters, result } => {
+            if let Type::Fn {
+                parameters: concrete_parameters,
+                result: concrete_result,
+            } = concrete_type
+            {
+                for (argument_type, concrete_argument_type) in parameters
+                    .iter()
+                    .zip(concrete_parameters)
+                {
+                    type_collect_variables_that_are_concrete_into(
+                        type_parameter_replacements,
+                        argument_type,
+                        concrete_argument_type,
+                    );
+                }
+                type_collect_variables_that_are_concrete_into(
+                        type_parameter_replacements,
+                        result,
+                        concrete_result,
+                    );
             }
         }
         Type::Record(fields) => {
@@ -7291,6 +6989,42 @@ fn type_diff<'a>(expected_type: &'a Type, actual_type: &'a Type) -> Option<TypeD
                             type_diff(expected_argument, actual_argument)
                         })
                         .collect(),
+                })
+            } else {
+                Some(TypeDiff::Conflict {
+                    expected: expected_type,
+                    actual: actual_type,
+                })
+            }
+        }
+        Type::Fn {
+            parameters: expected_parameters, result: expected_result
+        } => {
+            if let Type::Fn {
+                parameters: actual_parameters,
+                result: actual_result,
+            } = actual_type
+                && expected_name == actual_choice_type_construct_name
+            {
+                let result_type_diff = type_diff(expected_result, actual_result);
+                if result_type_diff.is_none() && expected_parameters
+                    .iter()
+                    .zip(actual_parameters)
+                    .all(|(expected, actual)| {
+                        type_diff(expected, actual).is_none()
+                    })
+                {
+                    return None;
+                }
+                Some(TypeDiff::Fn {
+                    parameters: expected_parameters
+                        .iter()
+                        .zip(actual_choice_type_construct_arguments.iter())
+                        .map(|(expected, actual)| {
+                            type_diff(expected, actual)
+                        })
+                        .collect(),
+                    result
                 })
             } else {
                 Some(TypeDiff::Conflict {
@@ -7441,22 +7175,56 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
         TypeDiff::CoreConstruct { name, arguments } => {
             formatted.push_str(name);
             if let Some((argument0, argument1_up)) = arguments.split_first() {
+                formatted.push('(');
                 let line_span: LineSpan = type_diff_line_span(type_diff);
                 space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                option_type_diff_parenthesized_if_open_ended_into(
+                option_type_diff_format(
                     formatted,
                     next_indent(indent),
                     argument0.as_ref(),
                 );
                 for argument in argument1_up {
-                    formatted.push(',');
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    option_type_diff_parenthesized_if_open_ended_into(
+                    option_type_diff_format(
                         formatted,
                         next_indent(indent),
                         argument.as_ref(),
                     );
                 }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                    }
+                formatted.push(')');
+            }
+        }
+        TypeDiff::Fn { parameters, result } => {
+            formatted.push_str("fn(");
+                let line_span: LineSpan = type_diff_line_span(type_diff);
+            if let Some((argument0, argument1_up)) = arguments.split_first() {
+                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                option_type_diff_format(
+                    formatted,
+                    next_indent(next_indent(indent)),
+                    argument0.as_ref(),
+                );
+                for argument in argument1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    option_type_diff_format(
+                        formatted,
+                        next_indent(next_indent(indent)),
+                        argument.as_ref(),
+                    );
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_(indent));
+                    }
+                formatted.push(')');
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    option_type_diff_format(
+                        formatted,
+                        next_indent(indent),
+                        result.as_ref(),
+                    );
             }
         }
         TypeDiff::Record {
@@ -7464,9 +7232,9 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
             actual_missing_fields,
             actual_extraneous_fields,
         } => {
+            formatted.push('{');
             match fields.split_first() {
                 None => {
-                    formatted.push('.');
                 }
                 Some((field0, field1_up)) => {
                     type_diff_field_format(formatted, indent, field0);
@@ -7478,16 +7246,18 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
                         LineSpan::Multiple
                     };
                     for field in field1_up {
-                        space_or_linebreak_indented_into(formatted, line_span, indent);
+                        space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
                         type_diff_field_format(formatted, indent, field);
                     }
                 }
             }
+            space_or_linebreak_indented_into(formatted, line_span, indent);
+            formatted.push('}');
             if !actual_missing_fields.is_empty() {
                 linebreak_indented_into(formatted, indent);
                 formatted.push_str("missing fields:");
                 for actual_missing_field_name in actual_missing_fields {
-                    formatted.push_str(" .");
+                    formatted.push(' ');
                     formatted.push_str(actual_missing_field_name);
                 }
             }
@@ -7495,7 +7265,7 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
                 linebreak_indented_into(formatted, indent);
                 formatted.push_str("extraneous fields:");
                 for actual_extraneous_field_name in actual_extraneous_fields {
-                    formatted.push_str(" .");
+                    formatted.push(' ');
                     formatted.push_str(actual_extraneous_field_name);
                 }
             }
@@ -7515,7 +7285,7 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
         },
     }
 }
-fn option_type_diff_parenthesized_if_open_ended_into(
+fn option_type_diff_format(
     formatted: &mut String,
     indent: usize,
     type_diff: Option<&TypeDiff>,
@@ -7524,40 +7294,7 @@ fn option_type_diff_parenthesized_if_open_ended_into(
         None => {
             formatted.push_str("(...)");
         }
-        Some(type_diff) => type_diff_parenthesized_if_open_ended_into(formatted, indent, type_diff),
-    }
-}
-fn type_diff_parenthesized_if_open_ended_into(
-    formatted: &mut String,
-    indent: usize,
-    type_diff: &TypeDiff,
-) {
-    let should_parenthesize_argument: bool = match type_diff {
-        TypeDiff::Conflict { .. } => true,
-        TypeDiff::CoreConstruct {
-            name: _,
-            arguments: argument_arguments,
-        } => !argument_arguments.is_empty(),
-        TypeDiff::Record {
-            fields,
-            actual_missing_fields,
-            actual_extraneous_fields,
-        } => {
-            !actual_missing_fields.is_empty()
-                || !actual_extraneous_fields.is_empty()
-                || !fields.is_empty()
-        }
-        TypeDiff::Choice(variants) => !variants.is_empty(),
-    };
-    if should_parenthesize_argument {
-        formatted.push('(');
-        type_diff_format(formatted, indent + 1, type_diff);
-        if type_diff_line_span(type_diff) == LineSpan::Multiple {
-            linebreak_indented_into(formatted, indent);
-        }
-        formatted.push(')');
-    } else {
-        type_diff_format(formatted, indent, type_diff);
+        Some(type_diff) => type_diff_format(formatted, indent, type_diff),
     }
 }
 fn type_diff_field_format(formatted: &mut String, indent: usize, type_diff_field: &TypeDiffField) {
@@ -7568,7 +7305,7 @@ fn type_diff_field_format(formatted: &mut String, indent: usize, type_diff_field
         option_type_diff_line_span(type_diff_field.value.as_ref()),
         next_indent(indent),
     );
-    option_type_diff_parenthesized_if_open_ended_into(
+    option_type_diff_format(
         formatted,
         next_indent(indent),
         type_diff_field.value.as_ref(),
@@ -7586,7 +7323,7 @@ fn type_diff_variant_format(
         option_type_diff_line_span(type_diff_variant.value.as_ref()),
         next_indent(indent),
     );
-    option_type_diff_parenthesized_if_open_ended_into(
+    option_type_diff_format(
         formatted,
         next_indent(indent),
         type_diff_variant.value.as_ref(),
@@ -7629,6 +7366,13 @@ fn type_diff_length_estimate(type_diff: &TypeDiff) -> usize {
                     .iter()
                     .map(|argument| 2 + option_type_diff_length_estimate(argument.as_ref()))
                     .sum::<usize>()
+        }
+        TypeDiff::Fn{parameters, result} => {
+            5 +
+            arguments
+                    .iter()
+                    .map(|argument| 1 + option_type_diff_length_estimate(argument.as_ref()))
+                    .sum::<usize>() + option_type_diff_length_estimate(result.as_ref())
         }
         TypeDiff::Record {
             fields,
@@ -7684,6 +7428,12 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                 message: type_diff_error_message(type_diff).into_boxed_str(),
             });
         }
+        SyntaxExpression::FunctionWithTypeArguments { .. } => {
+            errors.push(ErrorNode {
+                range: expression_range(expression, expressions, patterns),
+                message: type_diff_error_message(type_diff).into_boxed_str(),
+            });
+        }
         SyntaxExpression::Call { .. } => {
             errors.push(ErrorNode {
                 range: expression_range(expression, expressions, patterns),
@@ -7694,7 +7444,7 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
             open_bracket_start: _,
             type_: _,
             name,
-            value,
+            value,closed_bracket_start:_
         } => match name {
             Some(name) => match type_diff {
                 TypeDiff::Choice(variant_type_diffs) => {
@@ -7724,9 +7474,7 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                         }
                     }
                 }
-                TypeDiff::Conflict { .. }
-                | TypeDiff::CoreConstruct { .. }
-                | TypeDiff::Record { .. } => {
+                _ => {
                     errors.push(ErrorNode {
                         range: expression_range(expression, expressions, patterns),
                         message: type_diff_error_message(type_diff).into_boxed_str(),
@@ -7741,54 +7489,30 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
             }
         },
         SyntaxExpression::Fn {
-            fn_keyword_start: _,
-            parameter,
+            fn_keyword_start: _,open_paren_start:_,
+            parameters,
             closed_paren_start: _,
             result,
         } => match type_diff {
-            TypeDiff::CoreConstruct { name, arguments } => {
-                if *name == "Fn"
-                    && let [parameter_type_diff, result_type_diff] = arguments.as_slice()
-                {
-                    if let Some(parameter) = parameter
-                        && let Some(parameter_type_diff) = parameter_type_diff
-                    {
-                        place_pattern_type_diff_errors(
-                            errors,
-                            parameter,
-                            parameter_type_diff,
-                            patterns,
-                                                        checked_spread_records,
-                        );
-                    }
-                    if let Some(result) = result
-                        && let Some(result_type_diff) = result_type_diff
-                    {
-                        place_expression_type_diff_errors(
-                            errors,
-                            expressions.item(result),
-                            result_type_diff,
-                            expressions,
-                            patterns,
-                                                        checked_spread_records,
-                        );
-                    }
-                }
+            TypeDiff::Fn { parameters: type_diff_parameters, result: type_diff_result } => {
+                if let Some(type_diff_result) = type_diff_result && let Some(result) = result {
+                place_expression_type_diff_errors(
+                    errors,
+                    expressions.item(result),
+                    type_diff_result,
+                    expressions,
+                    patterns,
+                    checked_spread_records,
+                );}
             }
-            TypeDiff::Record { .. } | TypeDiff::Conflict { .. } | TypeDiff::Choice(_) => {
+            _ => {
                 errors.push(ErrorNode {
                     range: expression_range(expression, expressions, patterns),
                     message: type_diff_error_message(type_diff).into_boxed_str(),
                 });
             }
         },
-        SyntaxExpression::RecordEmpty { .. } => {
-            errors.push(ErrorNode {
-                range: expression_range(expression, expressions, patterns),
-                message: type_diff_error_message(type_diff).into_boxed_str(),
-            });
-        }
-        SyntaxExpression::Record { part0, part1_up } => match type_diff {
+        SyntaxExpression::Record { open_curly_start, fields, closed_curly_start:_ } => match type_diff {
             TypeDiff::Record {
                 fields: type_diff_fields,
                 actual_extraneous_fields,
@@ -7797,11 +7521,8 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                 if !actual_missing_fields.is_empty() {
                     errors.push(ErrorNode {
                         range: symbol_range(
-                            match part0 {
-                                SyntaxRecordField::Field { name, value: _ } => name.start,
-                                SyntaxRecordField::Spread { dot_dot_start, record: _ } => *dot_dot_start,
-                            },
-                            "."
+                            *open_curly_start,
+                            "{"
                         ),
                         message: format!(
                             "missing fields:{}. Those fields are included in the record type expected for this expression. Add them",
@@ -7809,19 +7530,19 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                         ).into_boxed_str(),
                     });
                 }
-                for part in std::iter::once(part0).chain(part1_up) {
-                    match part {
-                        SyntaxRecordField::Field { name, value } => {
-                            if let Some(name_value) = &name.value {
+                for field in fields {
+                      {
+                      {
+                             {
                                 if let Some(field_type_diff) = type_diff_fields
                                     .iter()
-                                    .find(|field_type_diff| name_value == field_type_diff.name)
-                                    && let Some(value) = value
+                                    .find(|field_type_diff| field.name.value == field_type_diff.name)
+                                    && let Some(value) = &field.value
                                 {
                                     if let Some(field_value_type_diff) = &field_type_diff.value {
                                         place_expression_type_diff_errors(
                                             errors,
-                                            expressions.item(value),
+                                            value,
                                             field_value_type_diff,
                                             expressions,
                                             patterns,
@@ -7831,122 +7552,24 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                                 } else {
                                     // actual_extraneous_fields.contains(&name_value)
                                     errors.push(ErrorNode {
-                                        range: name_range(WithStartPosition { start: name.start, value:name_value }),
+                                        range: name_range(with_start_position_as_ref(&field.name)),
                                         message: Box::from("extraneous field. This field is not included in the record type expected for this expression. Remove it"),
                                     });
                                 }
                             }
                         }
-                        SyntaxRecordField::Spread {
-                            dot_dot_start,
-                            record,
-                        } => {
-                            if let Some(spread_field_names) =
-                                checked_spread_records.get(dot_dot_start)
-                                && let Some(record) = record
-                                && (actual_extraneous_fields.iter().any(
-                                    |actual_extraneous_field_name| {
-                                        spread_field_names.contains(actual_extraneous_field_name)
-                                    },
-                                ) || type_diff_fields.iter().any(|field_type_diff| {
-                                    field_type_diff.value.is_some()
-                                        && spread_field_names.contains(field_type_diff.name)
-                                }))
-                            {
-                                place_expression_type_diff_errors(
-                                    errors,
-                                    expressions.item(record),
-                                    &TypeDiff::Record {
-                                        fields: type_diff_fields
-                                            .iter()
-                                            .filter(|field_type_diff| {
-                                                spread_field_names.contains(field_type_diff.name)
-                                            })
-                                            .cloned()
-                                            .collect(),
-                                        actual_missing_fields: vec![],
-                                        actual_extraneous_fields: actual_extraneous_fields
-                                            .iter()
-                                            .copied()
-                                            .filter(|actual_extraneous_field_name| {
-                                                spread_field_names
-                                                    .contains(actual_extraneous_field_name)
-                                            })
-                                            .collect(),
-                                    },
-                                    expressions,
-                                    patterns,
-                                                                        checked_spread_records,
-                                );
-                            }
-                        }
+
                     }
                 }
             }
-            TypeDiff::Conflict { .. } | TypeDiff::CoreConstruct { .. } | TypeDiff::Choice(_) => {
+            _ => {
                 errors.push(ErrorNode {
                     range: expression_range(expression, expressions, patterns),
                     message: type_diff_error_message(type_diff).into_boxed_str(),
                 });
             }
         },
-        SyntaxExpression::Array {
-            semicolon_start,
-            item0,
-            item1_up: _,
-        } => match type_diff {
-            TypeDiff::CoreConstruct { name, arguments } => {
-                if *name == "Array"
-                    && let [item_type_diff, length_type_diff] = arguments.as_slice()
-                {
-                    if let Some(item_type_diff) = item_type_diff
-                        && let Some(item0) = item0
-                    {
-                        place_expression_type_diff_errors(
-                            errors,
-                            expressions.item(item0),
-                            item_type_diff,
-                            expressions,
-                            patterns,
-                                                        checked_spread_records,
-                        );
-                    }
-                    if length_type_diff.is_some() {
-                        errors.push(ErrorNode {
-                            range: symbol_range(*semicolon_start, ";"),
-                            message: type_diff_error_message(type_diff).into_boxed_str(),
-                        });
-                    }
-                } else {
-                    errors.push(ErrorNode {
-                        range: expression_range(expression, expressions, patterns),
-                        message: type_diff_error_message(type_diff).into_boxed_str(),
-                    });
-                }
-            }
-            TypeDiff::Conflict { .. } | TypeDiff::Record { .. } | TypeDiff::Choice(_) => {
-                errors.push(ErrorNode {
-                    range: expression_range(expression, expressions, patterns),
-                    message: type_diff_error_message(type_diff).into_boxed_str(),
-                });
-            }
-        },
-        SyntaxExpression::Parenthesized {
-            open_paren_start: _,
-            inner,
-            closed_paren_start: _,
-        } => {
-            if let Some(inner) = inner {
-                place_expression_type_diff_errors(
-                    errors,
-                    expressions.item(inner),
-                    type_diff,
-                    expressions,
-                    patterns,
-                                        checked_spread_records,
-                );
-            }
-        }
+
         SyntaxExpression::Commented {
             comments: _,
             expression,
@@ -7965,12 +7588,12 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
         SyntaxExpression::If {
             if_keyword_start: _,
             queried: _,
+            open_curly_start:_,
             cases,
+            closed_curly_start:_
         } => {
             if let Some(SyntaxExpressionIfCase {
-                open_bracket_start: _,
                 pattern: _,
-                closed_bracket_start: _,
                 result: case_result,
             }) = cases.first()
                 && let Some(case_result) = case_result
@@ -7978,23 +7601,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                 place_expression_type_diff_errors(
                     errors,
                     case_result,
-                    type_diff,
-                    expressions,
-                    patterns,
-                                        checked_spread_records,
-                );
-            }
-        }
-        SyntaxExpression::Origin {
-            caret_key_symbol_start: _,
-            parts: _,
-            name: _,
-            result,
-        } => {
-            if let Some(result) = result {
-                place_expression_type_diff_errors(
-                    errors,
-                    expressions.item(result),
                     type_diff,
                     expressions,
                     patterns,
@@ -8019,12 +7625,12 @@ fn place_pattern_type_diff_errors<Patterns>(
                 message: type_diff_error_message(type_diff).into_boxed_str(),
             });
         }
-        SyntaxPattern::Variant { name, value } => match &name.value {
-            Some(name_value) => match type_diff {
+        SyntaxPattern::Variant { open_bracket_start:_, name, value, closed_bracket_start:_ } => match name {
+            Some(name) => match type_diff {
                 TypeDiff::Choice(variant_type_diffs) => {
                     match variant_type_diffs
                         .iter()
-                        .find(|variant_type_diff| variant_type_diff.name == name_value)
+                        .find(|variant_type_diff| variant_type_diff.name == &name.value)
                     {
                         Some(variant_type_diff) => {
                             if let Some(value) = value
@@ -8047,9 +7653,7 @@ fn place_pattern_type_diff_errors<Patterns>(
                         }
                     }
                 }
-                TypeDiff::Conflict { .. }
-                | TypeDiff::CoreConstruct { .. }
-                | TypeDiff::Record { .. } => {
+                _ => {
                     errors.push(ErrorNode {
                         range: pattern_range(pattern, patterns),
                         message: type_diff_error_message(type_diff).into_boxed_str(),
@@ -8063,13 +7667,7 @@ fn place_pattern_type_diff_errors<Patterns>(
                 });
             }
         },
-        SyntaxPattern::RecordEmpty { .. } => {
-            errors.push(ErrorNode {
-                range: pattern_range(pattern, patterns),
-                message: type_diff_error_message(type_diff).into_boxed_str(),
-            });
-        }
-        SyntaxPattern::Record { part0, part1_up } => match type_diff {
+        SyntaxPattern::Record { open_curly_start, fields, closed_curly_start:_ } => match type_diff {
             TypeDiff::Record {
                 fields: type_diff_fields,
                 actual_missing_fields,
@@ -8078,11 +7676,8 @@ fn place_pattern_type_diff_errors<Patterns>(
                 if !actual_missing_fields.is_empty() {
                     errors.push(ErrorNode {
                         range: symbol_range(
-                            match part0 {
-                                SyntaxRecordField::Field { name, value: _ } => name.start,
-                                SyntaxRecordField::Spread { dot_dot_start, record: _ } => *dot_dot_start,
-                            },
-                            "."
+                            *open_curly_start,
+                            "{"
                         ),
                         message: format!(
                             "missing fields:{}. Those fields are included in the record type expected for this expression. Add them",
@@ -8090,19 +7685,16 @@ fn place_pattern_type_diff_errors<Patterns>(
                         ).into_boxed_str(),
                     });
                 }
-                for part in std::iter::once(part0).chain(part1_up) {
-                    match part {
-                        SyntaxRecordField::Field { name, value } => {
-                            if let Some(name_value) = &name.value {
+                for field in fields {
                                 if let Some(field_type_diff) = type_diff_fields
                                     .iter()
-                                    .find(|field_type_diff| name_value == field_type_diff.name)
-                                    && let Some(value) = value
+                                    .find(|field_type_diff| field.name.value == field_type_diff.name)
+                                    && let Some(value) = &field.value
                                 {
                                     if let Some(field_value_type_diff) = &field_type_diff.value {
                                         place_pattern_type_diff_errors(
                                             errors,
-                                            patterns.item(value),
+                                            value,
                                             field_value_type_diff,
                                             patterns,
                                                                                         checked_spread_records,
@@ -8111,58 +7703,13 @@ fn place_pattern_type_diff_errors<Patterns>(
                                 } else {
                                     // actual_extraneous_fields.contains(&name_value)
                                     errors.push(ErrorNode {
-                                        range: name_range(WithStartPosition { start: name.start, value:name_value }),
+                                        range: name_range(with_start_position_as_ref(&field.name)),
                                         message: Box::from("extraneous field. This field is not included in the record type expected for this pattern. Remove it"),
                                     });
                                 }
-                            }
-                        }
-                        SyntaxRecordField::Spread {
-                            dot_dot_start,
-                            record,
-                        } => {
-                            if let Some(spread_field_names) =
-                                checked_spread_records.get(dot_dot_start)
-                                && let Some(record) = record
-                                && (actual_extraneous_fields.iter().any(
-                                    |actual_extraneous_field_name| {
-                                        spread_field_names.contains(actual_extraneous_field_name)
-                                    },
-                                ) || type_diff_fields.iter().any(|field_type_diff| {
-                                    field_type_diff.value.is_some()
-                                        && spread_field_names.contains(field_type_diff.name)
-                                }))
-                            {
-                                place_pattern_type_diff_errors(
-                                    errors,
-                                    patterns.item(record),
-                                    &TypeDiff::Record {
-                                        fields: type_diff_fields
-                                            .iter()
-                                            .filter(|field_type_diff| {
-                                                spread_field_names.contains(field_type_diff.name)
-                                            })
-                                            .cloned()
-                                            .collect(),
-                                        actual_missing_fields: vec![],
-                                        actual_extraneous_fields: actual_extraneous_fields
-                                            .iter()
-                                            .copied()
-                                            .filter(|actual_extraneous_field_name| {
-                                                spread_field_names
-                                                    .contains(actual_extraneous_field_name)
-                                            })
-                                            .collect(),
-                                    },
-                                    patterns,
-                                                                        checked_spread_records,
-                                );
-                            }
-                        }
-                    }
                 }
             }
-            TypeDiff::Conflict { .. } | TypeDiff::CoreConstruct { .. } | TypeDiff::Choice(_) => {
+            _ => {
                 errors.push(ErrorNode {
                     range: pattern_range(pattern, patterns),
                     message: type_diff_error_message(type_diff).into_boxed_str(),
@@ -8490,6 +8037,7 @@ fn syn_expr_reference<const N: usize>(segments: [&str; N]) -> syn::Expr {
 }
 
 const fn type_variable(name: &'static str) -> Type {
+    // TODO to upper or crash
     Type::Variable(Name::from_static(name))
 }
 fn type_record(fields: impl IntoIterator<Item = (&'static str, Type)>) -> Type {
@@ -8563,10 +8111,10 @@ fn type_order() -> Type {
         },
     ])
 }
-fn type_fn(in_: Type, out: Type) -> Type {
-    Type::CoreConstruct {
-        name: Name::from_static("Fn"),
-        arguments: vec![in_, out],
+fn type_fn(in_: Vec<Type>, out: Type) -> Type {
+    Type::Fn {
+        parameters: in_,
+        result: out
     }
 }
 fn type_origin(origin: Type, part: Type) -> Type {
@@ -8640,100 +8188,56 @@ pub static core_fns: std::sync::LazyLock<std::collections::HashMap<Name, Checked
     std::sync::LazyLock::new(|| {
         std::collections::HashMap::from([
             CoreFnInfo {
-                name: "P32-dup",
-                documentation:
-                    "Split the p32 in two values with the same content",
-                type_parameters: vec![],
-                parameter_type: type_p32,
-                result_type: type_record([("a", type_p32), ("b", type_p32)]),
-            },
-            CoreFnInfo {
-                name: "P32-rid",
-                documentation:
-                    "Mark the given p32 value as \"won't be used anymore\". This is usually done to scrap some function byproduct or to decompose some temporary storage at the end of some scope",
-                type_parameters: vec![],
-                parameter_type:  type_p32,
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "P32-to-u32",
+                name: "p32-to-u32",
                 documentation: "Convert to u32",
                 type_parameters: vec![],
                 parameter_type:  type_p32,
                 result_type: type_u32,
             },
             CoreFnInfo {
-                name: "P32-add-clamp",
+                name: "p32-add-clamp",
                 documentation: "Saturating a + b",
                 type_parameters: vec![],
                 parameter_type: type_record([("p", type_p32), ("u", type_u32)]),
                 result_type: type_p32,
             },
             CoreFnInfo {
-                name: "P32-mul-clamp",
+                name: "p32-mul-clamp",
                 documentation: "Saturating a * b",
                 type_parameters: vec![],
                 parameter_type: type_record([("p", type_p32), ("u", type_u32)]),
                 result_type: type_p32,
             },
             CoreFnInfo {
-                name: "P32-order",
+                name: "p32-order",
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameter_type: type_record([("left", type_p32), ("right", type_p32)]),
                 result_type: type_order(),
             },
             CoreFnInfo {
-                name: "P32-origin-isolate",
-                documentation: "Allow this value to be included in an `Origin-isolated`",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type:  type_p32,
-                result_type: type_origin_isolated(type_variable("origin"), type_p32),
-            },
-            CoreFnInfo {
-                name: "P32-origin-unisolate",
-                documentation: "Extract this value from an `Origin-isolated`. The inverse of `P32-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(type_variable("origin"), type_p32),
-                result_type: type_p32,
-            },
-            CoreFnInfo {
-                name: "U32-dup",
-                documentation: "Split the u32 in two values with the same content",
-                type_parameters: vec![],
-                parameter_type: type_u32,
-                result_type: type_record([("a", type_u32), ("b", type_u32)]),
-            },
-            CoreFnInfo {
-                name: "U32-rid",
-                documentation: "Mark the given u32 value as \"won't be used anymore\". This is usually done to scrap some function byproduct or to decompose some temporary storage at the end of some scope",
-                type_parameters: vec![],
-                parameter_type: type_u32,
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "U32-to-p32",
+                name: "u32-to-p32",
                 documentation: "Convert to a p32. If 0, returns 'no .",
                 type_parameters: vec![],
                 parameter_type: type_u32,
                 result_type: type_opt(type_p32),
             },
             CoreFnInfo {
-                name: "U32-successor-clamp",
+                name: "u32-successor-clamp",
                 documentation: "Saturating n + 1, returning a p32",
                 type_parameters: vec![],
                 parameter_type: type_u32,
                 result_type: type_p32,
             },
             CoreFnInfo {
-                name: "U32-to-i32-clamp",
+                name: "u32-to-i32-clamp",
                 documentation: "Saturating cast to fit it into an i32",
                 type_parameters: vec![],
                 parameter_type: type_u32,
                 result_type: type_p32,
             },
             CoreFnInfo {
-                name: "U32-round-to-nearest-f32-else-even",
+                name: "u32-round-to-nearest-f32-else-even",
                 documentation: "Lossy cast to fit it into an f32.
 Chooses the closest f32 representation, breaking exact ties towards the even significand (\"mantissa\")",
                 type_parameters: vec![],
@@ -8741,28 +8245,28 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "U32-add-clamp",
+                name: "u32-add-clamp",
                 documentation: "Saturating a + b",
                 type_parameters: vec![],
                 parameter_type: type_record([("a", type_u32), ("b", type_u32)]),
                 result_type: type_u32,
             },
             CoreFnInfo {
-                name: "U32-add-i32-clamp",
+                name: "u32-add-i32-clamp",
                 documentation: "Saturating u + i",
                 type_parameters: vec![],
                 parameter_type: type_record([("u", type_u32), ("i", type_i32)]),
                 result_type: type_u32,
             },
             CoreFnInfo {
-                name: "U32-mul-clamp",
+                name: "u32-mul-clamp",
                 documentation: "Saturating a * b",
                 type_parameters: vec![],
                 parameter_type: type_record([("a", type_u32), ("b", type_u32)]),
                 result_type: type_u32,
             },
             CoreFnInfo {
-                name: "U32-mul-wrap",
+                name: "u32-mul-wrap",
                 documentation: "a * b, wrapping around from 0 on overflow (like the remainder of (a * b) / 2^32).
 Prefer over U32-mul-clamp if you explicitly want this overflow behavior
 or performance is critical.",
@@ -8771,56 +8275,28 @@ or performance is critical.",
                 result_type: type_u32,
             },
             CoreFnInfo {
-                name: "U32-pow-clamp",
+                name: "u32-pow-clamp",
                 documentation: "Saturating base ^ exponent",
                 type_parameters: vec![],
                 parameter_type: type_record([("base", type_u32), ("exponent", type_p32)]),
                 result_type: type_u32,
             },
             CoreFnInfo {
-                name: "U32-order",
+                name: "u32-order",
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameter_type: type_record([("left", type_u32), ("right", type_u32)]),
                 result_type: type_order(),
             },
             CoreFnInfo {
-                name: "U32-origin-isolate",
-                documentation: "Allow this value to be included in an `Origin-isolated`",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type:  type_u32,
-                result_type: type_origin_isolated(type_variable("origin"), type_u32),
-            },
-            CoreFnInfo {
-                name: "U32-origin-unisolate",
-                documentation: "Extract this value from an `Origin-isolated`. The inverse of `U32-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(type_variable("origin"), type_u32),
-                result_type: type_u32,
-            },
-            CoreFnInfo {
-                name: "I32-dup",
-                documentation: "Split the i32 in two values with the same content",
-                type_parameters: vec![],
-                parameter_type: type_i32,
-                result_type: type_record([("a", type_i32), ("b", type_i32)]),
-            },
-            CoreFnInfo {
-                name: "I32-rid",
-                documentation: "Mark the given i32 value as \"won't be used anymore\". This is usually done to scrap some function byproduct or to decompose some temporary storage at the end of some scope",
-                type_parameters: vec![],
-                parameter_type: type_i32,
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "I32-to-u32",
+                name: "i32-to-u32",
                 documentation: "Convert to an u32. If negative, returns 'no .",
                 type_parameters: vec![],
                 parameter_type: type_i32,
                 result_type: type_opt(type_u32),
             },
             CoreFnInfo {
-                name: "I32-round-to-nearest-f32-else-even",
+                name: "i32-round-to-nearest-f32-else-even",
                 documentation: "Lossy cast to fit it into an f32.
 Chooses the closest f32 representation, breaking exact ties towards the even significand (\"mantissa\")",
                 type_parameters: vec![],
@@ -8828,99 +8304,70 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "I32-abs-to-u32",
+                name: "i32-abs-to-u32",
                 documentation: "If negative, negate, resulting in a u32",
                 type_parameters: vec![],
                 parameter_type: type_i32,
                 result_type: type_opt(type_u32),
             },
             CoreFnInfo {
-                name: "I32-negate-clamp",
+                name: "i32-negate-clamp",
                 documentation: "Saturating negation -n",
                 type_parameters: vec![],
                 parameter_type: type_i32,
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "I32-add-clamp",
+                name: "i32-add-clamp",
                 documentation: "Saturating a + b",
                 type_parameters: vec![],
                 parameter_type: type_record([("a", type_i32), ("b", type_i32)]),
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "I32-mul-clamp",
+                name: "i32-mul-clamp",
                 documentation: "Saturating a * b",
                 type_parameters: vec![],
                 parameter_type: type_record([("a", type_i32), ("b", type_i32)]),
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "I32-pow-clamp",
+                name: "i32-pow-clamp",
                 documentation: "Saturating a ^ b",
                 type_parameters: vec![],
                 parameter_type: type_record([("base", type_i32), ("exponent", type_p32)]),
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "I32-order",
+                name: "i32-order",
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameter_type: type_record([("left", type_i32), ("right", type_i32)]),
                 result_type: type_order(),
             },
             CoreFnInfo {
-                name: "I32-origin-isolate",
-                documentation: "Allow this value to be included in an `Origin-isolated`",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type:  type_i32,
-                result_type: type_origin_isolated(type_variable("origin"), type_i32),
-            },
-            CoreFnInfo {
-                name: "I32-origin-unisolate",
-                documentation: "Extract this value from an `Origin-isolated`. The inverse of `I32-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(type_variable("origin"), type_i32),
-                result_type: type_i32,
-            },
-            CoreFnInfo {
-                name: "F32-dup",
-                documentation: "Split the f32 in two values with the same content",
-                type_parameters: vec![],
-                parameter_type: type_f32,
-                result_type: type_record([("a", type_f32), ("b", type_f32)]),
-            },
-            CoreFnInfo {
-                name: "F32-rid",
-                documentation: "Mark the given f32 value as \"won't be used anymore\".
-This is usually done to scrap some function byproduct or to decompose some temporary storage at the end of some scope",
-                type_parameters: vec![],
-                parameter_type: type_f32,
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "F32-pi",
+                name: "f32-pi",
                 documentation: "Archimedes’ constant π",
                 type_parameters: vec![],
                 parameter_type:  type_record_empty,
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-abs",
+                name: "f32-abs",
                 documentation: "Set its sign to positive",
                 type_parameters: vec![],
                 parameter_type: type_f32,
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-negate",
+                name: "f32-negate",
                 documentation: "Flip its sign",
                 type_parameters: vec![],
                 parameter_type: type_f32,
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-ln",
+                name: "f32-ln",
                 documentation: "Its natural logarithm.
 If the result is too negative or the input is not positive, returns 'no .
 
@@ -8930,7 +8377,7 @@ Warning: Precision is unspecified and as such this function should never be used
                 result_type: type_opt(type_f32),
             },
             CoreFnInfo {
-                name: "F32-exp",
+                name: "f32-exp",
                 documentation: "e to the power of the given f32, known as the exponential function.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
@@ -8939,7 +8386,7 @@ Warning: Precision is unspecified and as such this function should never be used
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-sin",
+                name: "f32-sin",
                 documentation: "The sine of given radians.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
@@ -8948,7 +8395,7 @@ Warning: Precision is unspecified and as such this function should never be used
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-cos",
+                name: "f32-cos",
                 documentation: "The cosine of given radians.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
@@ -8957,7 +8404,7 @@ Warning: Precision is unspecified and as such this function should never be used
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-tan",
+                name: "f32-tan",
                 documentation: "The tangent of given radians.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
@@ -8966,7 +8413,7 @@ Warning: Precision is unspecified and as such this function should never be used
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-atan",
+                name: "f32-atan",
                 documentation: "The arctangent of given radians, returned in radians from -pi/2 to pi/2.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
@@ -8975,21 +8422,21 @@ Warning: Precision is unspecified and as such this function should never be used
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-add-clamp",
+                name: "f32-add-clamp",
                 documentation: "Saturating a + b",
                 type_parameters: vec![],
                 parameter_type: type_record([("a", type_f32), ("b", type_f32)]),
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-mul-clamp",
+                name: "f32-mul-clamp",
                 documentation: "Saturating a * b",
                 type_parameters: vec![],
                 parameter_type: type_record([("a", type_f32), ("b", type_f32)]),
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-div-clamp",
+                name: "f32-div-clamp",
                 documentation: "Saturating n / by.
 Try not to divide by 0.0, as 0.0 will be returned which is not mathematically correct. This behaviour is consistent with gleam, pony, coq, lean.",
                 type_parameters: vec![],
@@ -8997,14 +8444,14 @@ Try not to divide by 0.0, as 0.0 will be returned which is not mathematically co
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-square-root",
+                name: "f32-square-root",
                 documentation: "n ^ 0.5, returning 'no . when n < 0.0",
                 type_parameters: vec![],
                 parameter_type:  type_i32,
                 result_type: type_opt(type_f32),
             },
             CoreFnInfo {
-                name: "F32-pow-i32",
+                name: "f32-pow-i32",
                 documentation: "a ^ b, returning 'no . when the result is too large, too negative or undefined.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
@@ -9013,7 +8460,7 @@ Warning: Precision is unspecified and as such this function should never be used
                 result_type: type_opt(type_f32),
             },
             CoreFnInfo {
-                name: "F32-pow",
+                name: "f32-pow",
                 documentation: "a ^ b, returning 'no . when the result is too large, too negative or undefined.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.
@@ -9023,7 +8470,7 @@ As such, prefer F32-square-root if you can",
                 result_type: type_opt(type_f32),
             },
             CoreFnInfo {
-                name: "F32-round-nearest-else-away-from-0",
+                name: "f32-round-nearest-else-away-from-0",
                 documentation: "If not already equal to an integer value, find the closest neighboring integer.
 Round midpoint of a negative number to the lower neighbor
 and round midpoint of a positive number to the higher neighbor.
@@ -9040,7 +8487,7 @@ fn Age . : f32 =
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-round-nearest-else-even",
+                name: "f32-round-nearest-else-even",
                 documentation: r#"If not already equal to an integer value, find the closest neighboring integer.
 Round negative midpoint to the nearest even neighbor.
 This is sometimes called banker's rounding and is well-supported by architectures.
@@ -9055,7 +8502,7 @@ It's the default round operation implementation in e.g. python 3, dotnet, haskel
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-round-up",
+                name: "f32-round-up",
                 documentation: "If not already equal to an integer value, find the closest greater (not absolute greater) neighboring integer.
 Often called ceiling",
                 type_parameters: vec![],
@@ -9063,7 +8510,7 @@ Often called ceiling",
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-round-down",
+                name: "f32-round-down",
                 documentation: "If not already equal to an integer value, find the closest smaller (not absolute smaller) neighboring integer.
 Often called floor",
                 type_parameters: vec![],
@@ -9071,7 +8518,7 @@ Often called floor",
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-round-toward-0",
+                name: "f32-round-toward-0",
                 documentation: "If not already equal to an integer value, find the closest neighboring integer with a smaller absolute value.
 Often called truncate",
                 type_parameters: vec![],
@@ -9079,42 +8526,42 @@ Often called truncate",
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-round-away-from-0",
+                name: "f32-round-away-from-0",
                 documentation: "If not already equal to an integer value, find the closest neighboring integer with a greater absolute value",
                 type_parameters: vec![],
                 parameter_type: type_f32 ,
                 result_type: type_f32,
             },
             CoreFnInfo {
-                name: "F32-round-up-to-i32-clamp",
+                name: "f32-round-up-to-i32-clamp",
                 documentation: "`F32-round-up`, then clamp to within 32 bits",
                 type_parameters: vec![],
                 parameter_type: type_f32,
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "F32-round-down-to-i32-clamp",
+                name: "f32-round-down-to-i32-clamp",
                 documentation: "`F32-round-down`, then clamp to within 32 bits",
                 type_parameters: vec![],
                 parameter_type: type_f32,
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "F32-round-toward-0-to-i32-clamp",
+                name: "f32-round-toward-0-to-i32-clamp",
                 documentation: "`F32-round-toward-0`, then clamp to within 32 bits",
                 type_parameters: vec![],
                 parameter_type: type_f32,
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "F32-round-away-from-0-to-i32-clamp",
+                name: "f32-round-away-from-0-to-i32-clamp",
                 documentation: "`F32-round-away-from-0`, then clamp to within 32 bits",
                 type_parameters: vec![],
                 parameter_type: type_f32,
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "F32-round-nearest-else-away-from-0-to-i32-clamp",
+                name: "f32-round-nearest-else-away-from-0-to-i32-clamp",
                 documentation: "`F32-round-nearest-else-away-from-0`, then clamp to within 32 bits.
 In effect, `F32-round-toward-0-to-i32-clamp` truncates off at the decimal point:
 ```slug
@@ -9126,77 +8573,28 @@ fn Age . : f32 =
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "F32-round-nearest-else-even-to-i32-clamp",
+                name: "f32-round-nearest-else-even-to-i32-clamp",
                 documentation: "`F32-round-nearest-else-even`, then clamp to within 32 bits",
                 type_parameters: vec![],
                 parameter_type: type_f32,
                 result_type: type_i32,
             },
             CoreFnInfo {
-                name: "F32-order",
+                name: "f32-order",
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameter_type: type_record([("left", type_f32), ("right", type_f32)]),
                 result_type: type_order(),
             },
             CoreFnInfo {
-                name: "F32-origin-isolate",
-                documentation: "Allow this value to be included in an `Origin-isolated`",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type:  type_f32,
-                result_type: type_origin_isolated(type_variable("origin"), type_f32),
-            },
-            CoreFnInfo {
-                name: "F32-origin-unisolate",
-                documentation: "Extract this value from an `Origin-isolated`. The inverse of `F32-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(type_variable("origin"), type_f32),
-                result_type: type_f32,
-            },
-            CoreFnInfo {
-                name: "Char-dup",
-                documentation: "Split the char in two values with the same content",
-                type_parameters: vec![],
-                parameter_type: type_char,
-                result_type: type_record([("a", type_char), ("b", type_char)]),
-            },
-            CoreFnInfo {
-                name: "Char-to-u32",
+                name: "char-to-u32",
                 documentation: "Its code as a u32",
                 type_parameters: vec![],
                 parameter_type: type_char,
                 result_type: type_u32,
             },
             CoreFnInfo {
-                name: "Char-rid",
-                documentation: "Mark the given char value as \"won't be used anymore\". This is usually done to scrap some function byproduct or to decompose some temporary storage at the end of some scope",
-                type_parameters: vec![],
-                parameter_type: type_char,
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "Char-origin-isolate",
-                documentation: "Allow this value to be included in an `Origin-isolated`",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type:  type_char,
-                result_type: type_origin_isolated(type_variable("origin"), type_char),
-            },
-            CoreFnInfo {
-                name: "Char-origin-unisolate",
-                documentation: "Extract this value from an `Origin-isolated`. The inverse of `Char-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(type_variable("origin"), type_char),
-                result_type: type_char,
-            },
-            CoreFnInfo {
-                name: "Str-dup",
-                documentation: "Split the str in two values with the same content",
-                type_parameters: vec![],
-                parameter_type: type_str,
-                result_type: type_record([("a", type_str), ("b", type_str)]),
-            },
-            CoreFnInfo {
-                name: "Str-utf8-length",
+                name: "str-utf8-length",
                 documentation: "Its number of bytes when encoded as UTF-8.
 You usually want to use the slower Str-char-count.",
                 type_parameters: vec![],
@@ -9204,95 +8602,25 @@ You usually want to use the slower Str-char-count.",
                 result_type: type_p32,
             },
             CoreFnInfo {
-                name: "Str-char-count",
+                name: "str-char-count",
                 documentation: "Its number of unicode codepoints aka chars",
                 type_parameters: vec![],
                 parameter_type: type_str,
                 result_type: type_p32,
             },
             CoreFnInfo {
-                name: "Str-start",
+                name: "str-start",
                 documentation: "Split off its first char",
                 type_parameters: vec![],
                 parameter_type: type_str,
                 result_type: type_record([("start", type_char), ("after", type_opt(type_str))]),
             },
             CoreFnInfo {
-                name: "Str-end",
+                name: "str-end",
                 documentation: "Split off its last char",
                 type_parameters: vec![],
                 parameter_type: type_str,
                 result_type: type_record([("end", type_char), ("before", type_opt(type_str))]),
-            },
-            CoreFnInfo {
-                name: "Str-rid",
-                documentation: "Mark the given str value as \"won't be used anymore\".
-This is usually done to scrap some function byproduct or to decompose some temporary storage at the end of some scope",
-                type_parameters: vec![],
-                parameter_type: type_str,
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "Str-origin-isolate",
-                documentation: "Allow this value to be included in an `Origin-isolated`",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type:  type_str,
-                result_type: type_origin_isolated(type_variable("origin"), type_str),
-            },
-            CoreFnInfo {
-                name: "Str-origin-unisolate",
-                documentation: "Extract this value from an `Origin-isolated`. The inverse of `Str-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(type_variable("origin"), type_str),
-                result_type: type_str,
-            },
-            CoreFnInfo {
-                name: "Fn-dup",
-                documentation: "Split the fn in two values with the same content",
-                type_parameters: vec![],
-                parameter_type: type_fn(type_variable("in"), type_variable("out")),
-                result_type: type_record([
-                    ("a", type_fn(type_variable("in"), type_variable("out"))),
-                    ("b", type_fn(type_variable("in"), type_variable("out"))),
-                ]),
-            },
-            CoreFnInfo {
-                name: "Fn-rid",
-                documentation: "Mark the given fn value as \"won't be used anymore\".
-This is usually done to scrap some function byproduct or to decompose some temporary storage at the end of some scope",
-                type_parameters: vec![],
-                parameter_type: type_fn(type_variable("in"), type_variable("out")),
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "Call",
-                documentation: "Run a function which is passed by value.
-```slug
-fn Three . : . =
-    ? ([n u32] U32-add-clamp .a n .b 1 u32) [increment]
-    Call .fn increment .in 2
-```
-(Regular function calls are `Function argument`)",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("fn", type_fn(type_variable("in"), type_variable("out"))),
-                    ("in", type_variable("in")),
-                ]),
-                result_type: type_variable("out"),
-            },
-            CoreFnInfo {
-                name: "Fn-origin-isolate",
-                documentation: "Allow this function to be included in an `Origin-isolated`",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type:  type_fn(type_variable("in"), type_variable("out")),
-                result_type: type_origin_isolated(type_variable("origin"), type_fn(type_variable("in"), type_variable("out"))),
-            },
-            CoreFnInfo {
-                name: "Fn-origin-unisolate",
-                documentation: "Extract this value from an `Origin-isolated`. The inverse of `Fn-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(type_variable("origin"), type_fn(type_variable("in"), type_variable("out"))),
-                result_type: type_fn(type_variable("in"), type_variable("out")),
             },
             CoreFnInfo {
                 name: "Choice-empty-to",
@@ -9366,430 +8694,74 @@ please limit your creativity for the rest of us mortals."#,
                 result_type: type_variable("result")
             },
             CoreFnInfo {
-                name: "Origin-rid",
-                documentation: "Mark the given origin value as \"won't be used anymore\". This is usually done to ignore it only in some case",
-                type_parameters: vec![],
-                parameter_type: type_origin(type_variable("origin"), type_variable("part")),
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "Origin-erase",
-                documentation: "After grouping values with a specific origin into one value,
-we can erase the specific origin from the type.
-The resulting `Origin-erased` can then be stored in a `Buf`
-or otherwise passed as if it didn't have an origin to begin with.
-See `Origin-erased` for an example.
-To convert an `Origin-erased` value into a normal value with an origin again, use `Origin-unerase`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_variable("value-erased")
-                ),
-                result_type: type_origin_erased(type_variable("value-erased"))
-            },
-            CoreFnInfo {
-                name: "Origin-unerase",
-                documentation: "Take an `Origin-erased` value
-and convert it to an `Origin-isolated` with a new origin.
-This is basically the inverse of `Origin-erase`.
-That `Origin-isolated` can then be manually unpacked with e.g.
-`Slot-origin-unisolate`, `Origin-isolated-split`, `Origin-unisolate`.
-See `Origin-erased` for an example.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("erased", type_origin_erased(type_variable("value-erased"))),
-                    ("origin", type_origin(type_variable("origin"), type_record_empty)),
-                ]),
-                result_type: type_origin_isolated(type_variable("origin"), type_variable("value-erased"))
-            },
-            CoreFnInfo {
-                name: "Origin-isolate-constant",
-                documentation: "Isolate a value that can be created from nothing.
-```slug
-ty direction
-    'down . 'up .
-
-? color
-['up .] Origin-isolate-constant [.] 'up{direction} .
-['down .] Origin-isolate-constant [.] 'down{direction} .
-```
-
-See also `Origin-isolated-map` on how to convert actual variant values",
-                type_parameters: vec![Name::from_static("origin")],
-                parameter_type: type_fn(type_record_empty, type_variable("constant")),
-                result_type: type_origin_isolated(type_variable("origin"), type_variable("constant")),
-            },
-            CoreFnInfo {
-                name: "Origin-isolated-merge",
-                documentation: "Pair up two `Origin-isolated` values and combine them into one.
-The isolated value will have `.a` and `.b` field names
-so it's recommended to `Origin-isolated-map` to give them more descriptive names.
-```slug
-Origin-isolated-map
-.isolated (
-    Origin-isolated-merge
-    .a Slot-origin-isolate red-slot
-    .b
-    Origin-isolated-merge
-    .a Slot-origin-isolate blue-slot
-    .b Slot-origin-isolate green-slot
-)
-.change
-[
-    .a red Slot Origin erased, .
-    .b
-    .a blue Slot Origin erased, .
-    .b green Slot Origin erased, .
-]
-.red red .green green .blue blue
-```
-Quite wordy, I'm sorry :/ (If you have another API idea, open an issue)
-
-Check out `Origin-isolated-map` and `Origin-isolate-constant` for how to convert variants",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("a", type_origin_isolated(type_variable("origin"), type_variable("a-erased"))),
-                    ("b", type_origin_isolated(type_variable("origin"), type_variable("b-erased"))),
-                ]),
-                result_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_record([
-                        ("a", type_variable("a-erased")),
-                        ("b", type_variable("b-erased")),
-                    ])
-                ),
-            },
-            CoreFnInfo {
-                name: "Origin-isolated-split",
-                documentation: "Open an `Origin-isolated` pair into a pair of Origin-isolated parts.
-This is the inverse of `Origin-isolated-merge`.
-The isolated value needs `.a` and `.b` field names
-so you may need `Origin-isolated-map` to map them from more descriptive names.
-```slug
-ty Color _origin
-    .red Slot Origin _origin, .
-    .green Slot Origin _origin, .
-    .blue Slot Origin _origin, .
-
-fn Color-origin-unisolate
-    color-isolated Origin-isolated _origin, Color erased
-: Color _origin
-=
-    ? (
-        Origin-isolated-map
-        .isolated color-isolated
-        .change
-        [color Color erased]
-        ? color [.red red .green green .blue blue]
-        .a red .b .a green .b blue
-    )
-    [rgb]
-    ? Origin-isolated-split rgb [.a red .b gb]
-    ? Origin-isolated-split gb [.a green .b blue]
-    .red Slot-origin-isolate red
-    .green Slot-origin-unisolate green
-    .blue Slot-origin-unisolate blue
-```
-A bit wordy, I'm sorry :/ (If you have another API idea, open an issue)
-
-Check out `Origin-unisolate` for how to unisolate variants",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_record([
-                        ("a", type_variable("a-erased")),
-                        ("b", type_variable("b-erased")),
-                    ])
-                ),
-                result_type: type_record([
-                    ("a", type_origin_isolated(type_variable("origin"), type_variable("a-erased"))),
-                    ("b", type_origin_isolated(type_variable("origin"), type_variable("b-erased"))),
-                ]),
-            },
-            CoreFnInfo {
-                name: "Origin-isolated-map",
-                documentation: "Do something inside the `Origin-isolated` value.
-
-`Origin-isolated-map` is often used to give more descriptive names to values created with `Origin-isolated-merge`.
-It's also necessary to convert a choice (for example `'parsed u32 'error str`) to an `Origin-isolated` value.
-```slug
-ty Color _origin
-    'red Slot _origin 'green Slot _origin 'blue _origin
-
-? color
-['red red]
-    Origin-isolated-map
-    .isolated Slot-origin-isolate red
-    .change [red Slot Origin erased, .] 'red{Color Origin erased, .} red
-['green green]
-    Origin-isolated-map
-    .isolated Slot-origin-isolate green
-    .change [green Slot Origin erased, .] 'green{Color Origin erased, .} green
-['blue blue]
-    Origin-isolated-map
-    .isolated Slot-origin-isolate blue
-    .change [blue Slot Origin erased, .] 'blue{Color Origin erased, .} blue
-```
-Isn't that nice.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("change", type_fn(type_variable("erased"), type_variable("new-erased"))),
-                    ("isolated", type_origin_isolated(type_variable("origin"), type_variable("erased"))),
-                ]),
-                result_type: type_origin_isolated(type_variable("origin"), type_variable("new-erased")),
-            },
-            CoreFnInfo {
-                name: "Origin-isolated-rid",
-                documentation: "Scrap the origin-erased value inside `Origin-isolated`.
-The effect is the same as un-isolating, then scrapping it.
-It may also be more performant on some host languages.
-```slug
-ty Slice-char _origin
-    .buf Buf _origin, char
-    .span Span _origin
-
-fn Slice-char-origin-isolated-rid
-    slice Origin-isolated _origin, Slice-char Origin erased, .
-: . =
-    Origin-isolated-rid
-    .isolated slice
-    .rid
-    [slice Slice Origin erased, .]
-    Buf-rid Buf-span-rid .. slice .item-rid [c char] Char-rid c
-```
-Similar: `Origin-erased-rid`",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("isolated", type_origin_isolated(type_variable("origin"), type_variable("erased"))),
-                    ("rid", type_fn(type_variable("erased"), type_record_empty)),
-                ]),
-                result_type: type_record_empty,
-            },
-            CoreFnInfo {
-                name: "Origin-unisolate",
-                documentation: "Un-isolate a choice type.
-```slug
-ty color 'red . 'green . 'blue .
-fn Color-origin-unisolate color Origin-isolated _origin, color : color =
-    Origin-unisolate
-    .isolated color
-    .unisolate
-    [.erased color color .unisolater unisolater Origin-unisolater _origin]
-    ? color
-    ['red .] (
-        Origin-erased-unisolate
-        .unisolater unisolater
-        .erased .
-        .unisolate
-        [v Origin-isolated _origin, .]
-        ? Origin-isolated-rid .isolated v .rid [.] . [.]
-        'red{color} .
-    )
-    ['green .] (
-        Origin-erased-unisolate
-        .unisolater unisolater
-        .erased .
-        .unisolate
-        [v Origin-isolated _origin, .]
-        ? Origin-isolated-rid .isolated v .rid [.] . [.]
-        'green{color} .
-    )
-    ['blue .] (
-        Origin-erased-unisolate
-        .unisolater unisolater
-        .erased .
-        .unisolate
-        [v Origin-isolated _origin, .]
-        ? Origin-isolated-rid .isolated v .rid [.] . [.]
-        'blue{color} .
-    )
-```
-`Origin-unisolate`'s `.unisolate` requires returning a `Origin-unisolated`
-value, which means we need to call `Origin-erased-unisolate` to wrap each variant value.
-It's quite cool that this works if you ask me.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("isolated", type_origin_isolated(type_variable("origin"), type_variable("erased"))),
-                    (
-                        "unisolate",
-                        type_fn(
-                            type_record([
-                                ("erased", type_variable("erased")),
-                                ("unisolater", type_origin_unisolater(type_variable("origin"))),
-                            ]),
-                            type_origin_unisolated(type_variable("unisolated"))
-                        )
-                    ),
-                ]),
-                result_type: type_variable("unisolated"),
-            },
-            CoreFnInfo {
-                name: "Origin-erased-unisolate",
-                documentation: "Used for `Origin-unisolate`.
-Un-isolate an erased variant value by mapping its Origin-isolated representation.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("erased", type_variable("erased")),
-                    ("unisolater", type_origin_unisolater(type_variable("origin"))),
-                    (
-                        "unisolate",
-                        type_fn(
-                            type_origin_isolated(type_variable("origin"), type_variable("erased")),
-                            type_origin_unisolated(type_variable("unisolated"))
-                        )
-                    ),
-                ]),
-                result_type: type_origin_unisolated(type_variable("new-erased")),
-            },
-            CoreFnInfo {
-                name: "Origin-erased-map",
-                documentation: "Do something inside the `Origin-erased` value.
-Rarely useful. Similar: `Origin-isolated-map`.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("erased", type_origin_erased(type_variable("value-erased"))),
-                    ("change", type_fn(type_variable("value-erased"), type_variable("new-value-erased")))
-                ]),
-                result_type: type_origin_erased(type_variable("new-value-erased"))
-            },
-            CoreFnInfo {
-                name: "Origin-erased-rid",
-                documentation: r#"Mark an `Origin-erased` value as "won't be used anymore".
-The effect is the same as calling `Origin-unerase`, un-isolating, then scrapping it.
-It may also be more performant on some host languages.
-```slug
-ty Slice-char _origin
-    .buf Buf _origin, char
-    .span Span _origin
-
-fn Slice-char-origin-erased-rid
-    slice Origin-erased Slice-char Origin erased, .
-: . =
-    Origin-erased-rid
-    .erased slice
-    .rid
-    [slice Slice Origin erased, .]
-    Buf-rid Buf-span-rid .. slice .item-rid [c char] Char-rid c
-```
-Similar: `Origin-isolated-rid`."#,
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("erased", type_origin_erased(type_variable("value-erased"))),
-                    ("rid", type_fn(type_variable("value-erased"), type_record_empty))
-                ]),
-                result_type: type_record_empty
-            },
-            CoreFnInfo {
-                name: "Slot-index",
+                name: "slot-index",
                 documentation: "At what offset the referenced item is located.
 For example, the second item in a Buf is at index 1",
                 type_parameters: vec![],
-                parameter_type: type_slot(type_variable("origin")),
-                result_type:
-                    type_record([
-                        ("slot", type_slot(type_variable("origin"))),
-                        ("index", type_u32)
-                    ]),
+                parameter_type: type_slot(type_variable("Origin")),
+                result_type: type_u32
             },
             CoreFnInfo {
-                name: "Slot-to-span",
+                name: "slot-to-span",
                 documentation: "Create a span covering just the one given slot",
                 type_parameters: vec![],
-                parameter_type: type_slot(type_variable("origin")),
-                result_type: type_span(type_variable("origin")),
+                parameter_type: type_slot(type_variable("Origin")),
+                result_type: type_span(type_variable("Origin")),
             },
             CoreFnInfo {
-                name: "Slot-origin-isolate",
-                documentation: "Replace its origin type by `erased`",
-                type_parameters: vec![],
-                parameter_type: type_slot(type_origin(type_variable("origin"), type_variable("part"))),
-                result_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_slot(type_origin(type_erased, type_variable("part"))),
-                ),
-            },
-            CoreFnInfo {
-                name: "Slot-origin-unisolate",
-                documentation: "Replace its origin type by `erased`. The inverse of `Slot-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_slot(type_origin(type_erased, type_variable("part")))
-                ),
-                result_type: type_slot(type_origin(type_variable("origin"), type_variable("part")))
-            },
-            CoreFnInfo {
-                name: "Span-start-index",
+                name: "span-start-index",
                 documentation: "At what offset the first contained slot is located.
 For example, the second item in a Buf is at index 1",
                 type_parameters: vec![],
-                parameter_type: type_span(type_variable("origin")),
-                result_type:
-                    type_record([
-                        ("span", type_span(type_variable("origin"))),
-                        ("index", type_u32)
-                    ]),
+                parameter_type: type_span(type_variable("Origin")),
+                result_type: type_u32,
             },
             CoreFnInfo {
-                name: "Span-length",
+                name: "span-length",
                 documentation: "How many slots it spans",
                 type_parameters: vec![],
-                parameter_type: type_span(type_variable("origin")),
-                result_type:
-                    type_record([
-                        (
-                            "span",
-                            type_span(type_variable("origin"))
-                        ),
-                        ("length", type_p32)
-                    ]),
+                parameter_type: type_span(type_variable("Origin")),
+                result_type: type_p32
             },
             CoreFnInfo {
-                name: "Opt-span-length",
+                name: "opt-span-length",
                 documentation: "How many slots it spans",
                 type_parameters: vec![],
-                parameter_type: type_opt(type_span(type_variable("origin"))),
-                result_type:
-                    type_record([
-                        (
-                            "span",
-                            type_opt(type_span(type_variable("origin")))
-                        ),
-                        ("length", type_u32)
-                    ]),
+                parameter_type: type_opt(type_span(type_variable("Origin"))),
+                result_type: type_u32
             },
             CoreFnInfo {
-                name: "Span-start",
+                name: "span-start",
                 documentation: "Split into the first slot and span after.
-To join disconnected slots and spans back together, use helpers like `Buf-span-add-own-opt-span`.
-Note that to only read the start index you can directly call `Span-start-index`",
+To join disconnected slots and spans back together, use helpers like `buf-span-add-own-opt-span`.
+Note that to only read the start index you can directly call `span-start-index`",
                 type_parameters: vec![],
-                parameter_type: type_span(type_variable("origin")),
+                parameter_type: type_span(type_variable("Origin")),
                 result_type:
                     type_record([
                         (
                             "start",
-                            type_slot(type_variable("origin"))
+                            type_slot(type_variable("Origin"))
                         ),
-                        ("after", type_opt(type_span(type_variable("origin"))))
+                        ("after", type_opt(type_span(type_variable("Origin"))))
                     ]),
             },
             CoreFnInfo {
-                name: "Span-end",
+                name: "span-end",
                 documentation: "Split into the last slot and span before",
                 type_parameters: vec![],
-                parameter_type: type_span(type_variable("origin")),
+                parameter_type: type_span(type_variable("Origin")),
                 result_type:
                     type_record([
                         (
                             "end",
-                            type_slot(type_variable("origin"))
+                            type_slot(type_variable("Origin"))
                         ),
-                        ("before", type_opt(type_span(type_variable("origin"))))
+                        ("before", type_opt(type_span(type_variable("Origin"))))
                     ]),
             },
             CoreFnInfo {
-                name: "Span-start-of-length-positive",
+                name: "span-start-of-length-positive",
                 documentation: "Split after a given length with the start half known to have positive length.
 If the length is greater than the given span's length, .start will be the existing span and .after will be empty.
 ```slug
@@ -9809,97 +8781,97 @@ fn Span-slot-at
     ? Span-end start [.before before .end at]
     .before before .at at .after after
 ```
-See also `Span-end-of-length-positive`, `Span-start`.",
+See also `span-end-of-length-positive`, `span-start`.",
                 type_parameters: vec![],
                 parameter_type: type_record([
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("length", type_p32),
                 ]),
                 result_type: type_record([
-                    ("start", type_span(type_variable("origin"))),
-                    ("after", type_opt(type_span(type_variable("origin"))))
+                    ("start", type_span(type_variable("Origin"))),
+                    ("after", type_opt(type_span(type_variable("Origin"))))
                 ]),
             },
             CoreFnInfo {
-                name: "Span-end-of-length-positive",
+                name: "span-end-of-length-positive",
                 documentation: "Split before a given length from the end with the end half known to have positive length.
 If the length is greater than the given span's length, .end will be the existing span and .before will be empty.
-See also `Span-start-of-length-positive`, `Span-end`.",
+See also `span-start-of-length-positive`, `span-end`.",
                 type_parameters: vec![],
                 parameter_type: type_record([
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("length", type_p32),
                 ]),
                 result_type: type_record([
-                    ("end", type_span(type_variable("origin"))),
-                    ("before", type_opt(type_span(type_variable("origin"))))
+                    ("end", type_span(type_variable("Origin"))),
+                    ("before", type_opt(type_span(type_variable("Origin"))))
                 ]),
             },
             CoreFnInfo {
-                name: "Span-step",
+                name: "span-step",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line.
-A less powerful version that preserves the Span is `Buf-span-step`",
+A less powerful version that preserves the Span is `buf-span-step`",
                 type_parameters: vec![],
                 parameter_type: type_record([
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
-                            type_record([
-                                ("slot", type_slot(type_variable("origin"))),
-                                ("state", type_variable("state")),
-                            ]),
-                            type_variable("state")
+                            vec![
+                                type_variable("State"),
+                                type_slot(type_variable("Origin")),
+                            ],
+                            type_variable("State")
                         )
                     )
                 ]),
-                result_type: type_variable("state"),
+                result_type: type_variable("State"),
             },
             CoreFnInfo {
-                name: "Opt-span-step",
+                name: "opt-span-step",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line.
-A less powerful version that preserves the Span is `Buf-opt-span-step`",
+A less powerful version that preserves the Span is `buf-opt-span-step`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "span",
-                        type_opt(type_span(type_variable("origin")))
+                        type_opt(type_span(type_variable("Origin")))
                     ),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
-                            type_record([
-                                ("slot", type_slot(type_variable("origin"))),
-                                ("state", type_variable("state")),
-                            ]),
-                            type_variable("state")
+                            vec![
+                                type_variable("State"),
+                                type_slot(type_variable("Origin")),
+                            ],
+                            type_variable("State")
                         )
                     )
                 ]),
-                result_type: type_variable("state"),
+                result_type: type_variable("State"),
             },
             CoreFnInfo {
-                name: "Span-step-while",
+                name: "span-step-while",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line
 by returning `'going` or exiting early with `'done` (like calling `break` in other languages).
-An example can be found in `Opt-span-step-while`",
+An example can be found in `opt-span-step-while`",
                 type_parameters: vec![],
                 parameter_type: type_record([
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
-                            type_record([
-                                ("slot", type_slot(type_variable("origin"))),
-                                ("state", type_variable("state")),
-                            ]),
-                            type_choice([("done", type_variable("done")), ("going", type_variable("state"))])
+                            vec![
+                                type_variable("State"),
+                                type_slot(type_variable("Origin")),
+                            ],
+                            type_choice([("done", type_variable("done")), ("going", type_variable("State"))])
                         )
                     )
                 ]),
@@ -9908,62 +8880,61 @@ An example can be found in `Opt-span-step-while`",
                         "done",
                         type_record([
                             ("done", type_variable("done")),
-                            ("rest", type_opt(type_span(type_variable("origin"))))
+                            ("rest", type_opt(type_span(type_variable("Origin"))))
                         ])
                     ),
-                    ("going", type_variable("state"))
+                    ("going", type_variable("State"))
                 ]),
             },
             CoreFnInfo {
-                name: "Opt-span-step-while",
+                name: "opt-span-step-while",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line
 by returning `'going` or exiting early with `'done` (like calling `break` in other languages).
 ```slug
-fn Next-non-space
-    .chars chars Buf _origin, char
-    .span span Opt Span _origin
-:
-    .chars Buf _origin, char
-    .non-space Opt char
-    .after Opt Span _origin
-=
-    ? (
-        Opt-span-step-while
-        .span span
-        .direction 'up{'down .} .
-        .state chars
-        .step
-        [.slot slot Slot _origin .state chars Buf _origin, char]
-        ? Buf-remove .buf chars .slot slot [.buf chars .item char]
-        ? Char-dup char [.a char-use .b char]
-        ? U32-order .left Char-to-u32 char-use .right Char-to-u32 \" \" char
-        ['equal .] (
-            ? Char-rid char [.]
-            'going{'done .chars Buf _origin, char .non-space char} chars
-        )
-        ['less .] 'done{'going Buf _origin, char} .chars chars .non-space char
-        ['greater .] 'done{'going Buf _origin, char} .chars chars .non-space char
+fn next-non-space(
+        span opt(span(_origin))
+        chars buf (_origin char)
     )
-    ['going chars]
-        .chars chars .non-space 'no{Opt char} . .after 'no{Opt Span _origin} .
-    ['done .rest span-after .done (.chars chars .non-space non-space)]
-        .chars chars .non-space 'yes{'no .} non-space .after span-after
+    { non-space opt(char)
+      after opt(span(_origin))
+    }
+    if
+        opt-span-step-while(
+            span
+            [up<[down {}]> {}],
+            chars,
+            fn(slot slot(_origin) chars buf(_origin char)
+            = char buf-remove(chars slot)
+            if u32-order(char-to-u32(char) char-to-u32(\" \" char)) {
+            [equal {}] (
+                [going<[done { chars buf(_origin char) non-space char }]> chars]
+            )
+            [less {}] [done<[going buf(_origin char)]> { chars chars non-space char }]
+            [greater {}] [done<[going buf(_origin char)]> { chars chars non-space char }]
+            }
+        )
+    {
+    [going _]
+        { non-space [no<opt(char)> {}] after [no<opt(span(_origin)) {}] }
+    [done { rest span-after done { chars chars non-space non-space } }]
+        { non-space [yes<[no {}]> non-space] after span-after }
+    }
 ```
-Note that `.rest` does not include any Slot given to the step function, even the Slot that resulted in `'done`.
-(This example looks convoluted. If you introduce helpers like Char-equal it gets more resonable)",
+Note that `.rest` does not include any slot given to the step function, even the slot that resulted in `[done]`.
+(This example looks convoluted. If you introduce helpers like char-equal it gets more resonable)",
                 type_parameters: vec![],
                 parameter_type: type_record([
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
-                            type_record([
-                                ("slot", type_slot(type_variable("origin"))),
-                                ("state", type_variable("state")),
-                            ]),
-                            type_choice([("done", type_variable("done")), ("going", type_variable("state"))])
+                            vec![
+                                type_variable("State"),
+                                type_slot(type_variable("Origin")),
+                            ],
+                            type_choice([("done", type_variable("done")), ("going", type_variable("State"))])
                         )
                     )
                 ]),
@@ -9972,67 +8943,27 @@ Note that `.rest` does not include any Slot given to the step function, even the
                         "done",
                         type_record([
                             ("done", type_variable("done")),
-                            ("rest", type_opt(type_span(type_variable("origin"))))
+                            ("rest", type_opt(type_span(type_variable("Origin"))))
                         ])
                     ),
-                    ("going", type_variable("state"))
+                    ("going", type_variable("State"))
                 ]),
             },
             CoreFnInfo {
-                name: "Span-origin-isolate",
-                documentation: "Replace its origin type by `erased`",
-                type_parameters: vec![],
-                parameter_type: type_span(type_origin(type_variable("origin"), type_variable("part"))),
-                result_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_span(type_origin(type_erased, type_variable("part"))),
-                ),
-            },
-            CoreFnInfo {
-                name: "Opt-span-origin-isolate",
-                documentation: "Replace its origin type by `erased`",
-                type_parameters: vec![],
-                parameter_type: type_opt(type_span(type_origin(type_variable("origin"), type_variable("part")))),
-                result_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_opt(type_span(type_origin(type_erased, type_variable("part")))),
-                ),
-            },
-            CoreFnInfo {
-                name: "Span-origin-unisolate",
-                documentation: "Replace its origin type from `erased`. The inverse of `Span-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_span(type_origin(type_erased, type_variable("part"))),
-                ),
-                result_type: type_span(type_origin(type_variable("origin"), type_variable("part"))),
-            },
-            CoreFnInfo {
-                name: "Opt-span-origin-unisolate",
-                documentation: "Replace its origin type from `erased`. The inverse of `Opt-span-origin-isolate`",
-                type_parameters: vec![],
-                parameter_type: type_origin_isolated(
-                    type_variable("origin"),
-                    type_opt(type_span(type_origin(type_erased, type_variable("part")))),
-                ),
-                result_type: type_opt(type_span(type_origin(type_variable("origin"), type_variable("part")))),
-            },
-            CoreFnInfo {
-                name: "Buf-empty",
-                documentation: "Initialize a `Buf` with 0 items and no pre-allocated space.
-Modify with `Buf-pre-allocate-at-least`, `Buf-add`, `Buf-add-array`, `Buf-add-unset` etc.",
-                type_parameters: vec![Name::from_static("item")],
-                parameter_type: type_origin(type_variable("origin"), type_variable("part")),
+                name: "buf-empty",
+                documentation: "Initialize a `buf` with 0 items and no pre-allocated space.
+Modify with `buf-pre-allocate-at-least`, `buf-add`, `buf-add-array`, `buf-add-unset` etc.",
+                type_parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
+                parameter_type: type_record_empty(),
                 result_type: type_buf(
-                    type_origin(type_variable("origin"), type_variable("part")),
-                    type_variable("item")
+                    type_variable("Origin"),
+                    type_variable("Item")
                 ),
             },
             CoreFnInfo {
-                name: "Buf-reuse",
-                documentation: "Initialize a `Buf` with 0 items and spare allocated memory from an `Unset-slice`.
-This can be used to recycle `Buf` memory from one `Buf` with one origin into another `Buf` with a different origin.
+                name: "buf-reuse",
+                documentation: "Initialize a `buf` with 0 items and spare allocated memory from an `Unset-slice`.
+This can be used to recycle `buf` memory from one `buf` with one origin into another `buf` with a different origin.
 ```slug
 fn Buf-recycle-empty
     .new-origin new-origin Origin _new-origin, _new-part
@@ -10041,210 +8972,139 @@ fn Buf-recycle-empty
     ? Buf-to-unset old [unset-slice]
     Buf-reuse .origin new-origin .slice unset-slice
 ```",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("origin", type_origin(type_variable("origin"), type_variable("part"))),
-                    ("slice", type_unset_slice(type_variable("item"))),
-                ]),
+                type_parameters: vec![Name::from_static("Origin")],
+                parameter_type: type_unset_slice(type_variable("Item")),
                 result_type: type_buf(
-                    type_origin(type_variable("origin"), type_variable("part")),
-                    type_variable("item")
+                    type_variable("Origin"),
+                    type_variable("Item")
                 ),
             },
             CoreFnInfo {
-                name: "Buf-pre-allocate-at-least",
+                name: "buf-pre-allocate-at-least",
                 documentation: "Reserves spare capacity for at least `.length` more items to be added.
 This can prevent frequent re-allocation of the underlying array.
 If you can guesstimate a lower bound of how many items are ultimately added, this is always worth it!
 
 If for example memory is limited and you want to handle out of memory errors more gracefully,
-use `Buf-try-pre-allocate-at-least` instead.",
+use `buf-try-pre-allocate-at-least` instead.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
                     ("length", type_u32),
                 ]),
-                result_type: type_buf(type_variable("origin"), type_variable("item")),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-try-pre-allocate-at-least",
+                name: "buf-try-pre-allocate-at-least",
                 documentation: "Reserves spare capacity for at least `.length` more items to be added
 and if not possible returns `.out-of-memory 'yes .` (if the output language target can detect this).
-A version which only checks for errors behind the scenes is `Buf-pre-allocate-at-least`",
+A version which only checks for errors behind the scenes is `buf-pre-allocate-at-least`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
                     ("length", type_u32),
                 ]),
                 result_type: type_record([
-                    ("buf", type_buf(type_variable("origin"), type_variable("item"))),
                     ("out-of-memory", type_opt(type_record_empty))
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-pre-allocation-rid",
+                name: "buf-pre-allocation-rid",
                 documentation: "Shrinks down spare capacity as much as possible.
-Some allocators may scrap and re-allocate the whole `Buf` as a result.
-It's rarely useful but can reuce idle memory usage for `Buf`s that are very unlikely to be added to in the future.
-You may also use it to adjust memory usage after `Buf-reuse` when the given `Unset-slice` was large",
+Some allocators may scrap and re-allocate the whole `buf` as a result.
+It's rarely useful but can reuce idle memory usage for `buf`s that are very unlikely to be added to in the future.
+You may also use it to adjust memory usage after `buf-reuse` when the given `Unset-slice` was large",
                 type_parameters: vec![],
-                parameter_type: type_buf(type_variable("origin"), type_variable("item")),
-                result_type: type_buf(type_variable("origin"), type_variable("item")),
+                parameter_type: type_buf(type_variable("Origin"), type_variable("Item")),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-insert",
-                documentation: "Add a new item into the `Buf` and keep a slot to it,
-reusing unset space closest to the start of the `Buf` when available.
-Use `Buf-add` if you don't care about reuse.
-Use `Buf-set-or-insert` if you already know of an index that's likely unset",
+                name: "buf-insert",
+                documentation: "Add a new item into the `buf` and keep a slot to it,
+reusing unset space closest to the start of the `buf` when available.
+Use `buf-add` if you don't care about reuse.
+Use `buf-set-or-insert` if you already know of an index that's likely unset",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("new", type_variable("item")),
+                    ("new", type_variable("Item")),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("slot", type_slot(type_variable("origin"))),
-                ]),
+                result_type: type_slot(type_variable("Origin")),
             },
             CoreFnInfo {
-                name: "Buf-set-or-insert",
-                documentation: "Add a new item into the `Buf`
+                name: "buf-set-or-insert",
+                documentation: "Add a new item into the `buf`
 a a specific index (starting at 0 for the first item) and keep a slot to it.
-If the given index is already occupied, chooses an unset index closest to the start of the `Buf` when available.
+If the given index is already occupied, chooses an unset index closest to the start of the `buf` when available.
 
 You can use this to more cheaply return temporarily removed items to their original spots.
-```slug
-fn Buf-dup-char
-    .buf buf Buf _origin, char
-    .slot slot Slot _origin
-:
-    .buf Buf _origin, char
-    .slot Slot _origin
-    .item char
-=
-    ? Slot-index slot [.slot slot .index index]
-    ? Buf-remove .buf buf .slot slot [.buf buf .item item]
-    ? Char-dup item [.a item .b item-duped]
-    # you may have chosen Buf-insert here.
-    # while that works, it may try to find an unset Slot earlier than the one you removed.
-    .. Buf-set-or-insert .buf buf .index index .new item
-    .item item-duped
-```
-`Span-start-index` is also often useful here.
-Note that `Buf-item-step`, `Buf-swap` etc. will be enough to fulfill most of the same purposes without indexes flying about.
+`span-start-index` is also often useful here.
+Note that `buf-item-step`, `buf-swap` etc. will be enough to fulfill most of the same purposes without indexes flying about.
 
-Use `Buf-add` if you don't care about reuse.",
+Use `buf-add` if you don't care about reuse.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
                     ("index", type_u32),
-                    ("new", type_variable("item")),
+                    ("new", type_variable("Item")),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("slot", type_slot(type_variable("origin"))),
-                ]),
+                result_type: type_slot(type_variable("Origin")),
             },
             CoreFnInfo {
-                name: "Buf-add",
-                documentation: "Add a new item to the end of the `Buf` and keep a slot to it without trying to reuse unset slots.
-Can be faster than `Buf-insert` when you expect no unset space or when all the storage gets scrapped soon anyway.",
+                name: "buf-add",
+                documentation: "Add a new item to the end of the `buf` and keep a slot to it without trying to reuse unset slots.
+Can be faster than `buf-insert` when you expect no unset space or when all the storage gets scrapped soon anyway.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("new", type_variable("item")),
+                    ("new", type_variable("Item")),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("slot", type_slot(type_variable("origin"))),
-                ]),
+                result_type: type_slot(type_variable("Origin"))
             },
             CoreFnInfo {
-                name: "Buf-add-array",
-                documentation: "Add a given `Array` of new items to the end of the `Buf` and keep a span to it without trying to reuse unset slots.
-Convenient equivalent to `Buf-opt-span-add-array` with an empty span.",
+                name: "buf-add-str-chars",
+                documentation: "Attach the chars in a given `str` to the end of the `buf` and keep a span to it without trying to reuse unset slots.
+Convenient equivalent to `buf-opt-span-add-str-chars` with an empty span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("new", type_array(type_variable("item"), type_variable("record"))),
-                ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_span(type_variable("origin"))),
-                ]),
-            },
-            CoreFnInfo {
-                name: "Buf-add-str-chars",
-                documentation: "Attach the chars in a given `str` to the end of the `Buf` and keep a span to it without trying to reuse unset slots.
-Convenient equivalent to `Buf-opt-span-add-str-chars` with an empty span.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
                     ("new", type_str),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("origin")))
-                ]),
+                result_type: type_span(type_variable("Origin")),
             },
             CoreFnInfo {
-                name: "Buf-remove",
-                documentation: "Unset and retrieve an item from the `Buf` at a given slot (the inverse of `Buf-insert`/`Buf-add`)",
+                name: "buf-remove",
+                documentation: "Unset and retrieve an item from the `buf` at a given slot (the inverse of `buf-insert`/`buf-add`)",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("slot", type_slot(type_variable("origin"))),
+                    ("slot", type_slot(type_variable("Origin"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("item", type_variable("item")),
-                ]),
+                result_type: type_variable("Item"),
             },
             CoreFnInfo {
-                name: "Buf-swap",
+                name: "buf-swap",
                 documentation: "Replace the item at slot-a with the item at slot-b and the other way around.
 Important: the resulting slot-a and slot-b will each refer to their original item (which is now at at different position in the Buf).
 
@@ -10258,160 +9118,83 @@ then remove the last slot with the item from the original certain index.
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("slot-a", type_slot(type_variable("origin"))),
-                    ("slot-b", type_slot(type_variable("origin"))),
+                    ("slot-a", type_slot(type_variable("Origin"))),
+                    ("slot-b", type_slot(type_variable("Origin"))),
                 ]),
                 result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("slot-a", type_slot(type_variable("origin"))),
-                    ("slot-b", type_slot(type_variable("origin"))),
+                    ("slot-a", type_slot(type_variable("Origin"))),
+                    ("slot-b", type_slot(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-replace",
-                documentation: "Switch out the item from the `Buf` at a given slot and return the original item.
-A more versatile version is `Buf-item-step`.",
+                name: "buf-replace",
+                documentation: "Switch out the item from the `buf` at a given slot and return the original item.
+A more versatile version is `buf-item-step`.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("slot", type_slot(type_variable("origin"))),
-                    ("new", type_variable("item"))
+                    ("slot", type_slot(type_variable("Origin"))),
+                    ("new", type_variable("Item"))
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("slot", type_slot(type_variable("origin"))),
-                    ("item", type_variable("item")),
-                ]),
+                result_type: type_variable("Item"),
             },
             CoreFnInfo {
-                name: "Buf-item-step",
-                documentation: "Look at an item from the `Buf` at a given slot, change it and return something out.
-It behaves like `Buf-remove` followed by `Buf-insert` but is more performant because it always operates on the same slot.
-It's common to create simple helpers using `Buf-item-step`, for example
-```slug
-fn Buf-item-dup
-    .buf buf Buf _origin, _item
-    .slot slot Slot _origin
-    .dup (dup Fn _item, .a _item .b _item)
-:
-    .buf Buf _origin, _item
-    .slot Slot _origin
-    .item _item
-=
-    ? (
-        Buf-item-step
-        .buf buf
-        .slot slot
-        .in dup
-        .step
-        [.in (dup Fn _item, .a _item .b _item) .item item _item]
-        ? Call .fn dup .in item [.a item .b item-duped]
-        .item item .out item-duped
-    )
-    [.buf buf .slot slot .out item-duped]
-    .buf buf .slot slot .item item-duped
-```
-To just switch out an item, use `Buf-replace`",
+                name: "buf-item-step",
+                documentation: "Look at an item from the `buf` at a given slot, change it and return something out.
+It behaves like `buf-remove` followed by `buf-insert` but is more performant because it always operates on the same slot.
+It's common to create simple helpers using `buf-item-step`, for example
+To just switch out an item, use `buf-replace`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("slot", type_slot(type_variable("origin"))),
-                    ("in", type_variable("in")),
+                    ("slot", type_slot(type_variable("Origin"))),
+                    ("in", type_variable("In")),
                     (
                         "step",
                         type_fn(
-                            type_record([("in", type_variable("in")), ("item", type_variable("item"))]),
-                            type_record([("out", type_variable("out")), ("item", type_variable("item"))])
+                            vec![type_variable("In"), type_variable("Item")],
+                            type_record([("out", type_variable("Out")), ("item", type_variable("Item"))])
                         )
                     )
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("slot", type_slot(type_variable("origin"))),
-                    ("out", type_variable("out")),
-                ]),
+                result_type: type_variable("Out")
             },
             CoreFnInfo {
-                name: "Buf-span-rid",
-                documentation: "Mark items as \"won't be used anymore\"
-and return their `Span` back to the `Buf` for potential future reuse by functions like `Buf-insert`.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("buf", type_buf(type_variable("origin"), type_variable("item"))),
-                    ("span", type_span(type_variable("origin"))),
-                    ("item-rid", type_fn(type_variable("item"), type_record_empty)),
-                ]),
-                result_type: type_buf(type_variable("origin"), type_variable("item")),
-            },
-            CoreFnInfo {
-                name: "Buf-opt-span-rid",
-                documentation: "Mark items as \"won't be used anymore\"
-and return their `Opt Span` back to the `Buf` for potential future reuse by functions like `Buf-insert`.",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    ("buf", type_buf(type_variable("origin"), type_variable("item"))),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                    ("item-rid", type_fn(type_variable("item"), type_record_empty)),
-                ]),
-                result_type: type_buf(type_variable("origin"), type_variable("item")),
-            },
-            CoreFnInfo {
-                name: "Buf-span-reverse",
+                name: "buf-span-reverse",
                 documentation: "Order the referenced items such that the previously last is now first, second last is second etc.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_span(type_variable("origin"))),
-                ]),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-opt-span-reverse",
+                name: "buf-opt-span-reverse",
                 documentation: "Order the referenced items such that the previously last is now first, second last is second etc.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                ]),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-span-sort",
+                name: "buf-span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
 Items whose comparison returns `'equal .` are ordered according to their original position in the Span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
@@ -10421,34 +9204,21 @@ Do no rely on a specific order of when items are compared."#,
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     (
                         "order",
                         type_fn(
-                            type_record([
-                                ("left", type_variable("item")),
-                                ("right", type_variable("item")),
-                            ]),
-                            type_record([
-                                ("left", type_variable("item")),
-                                ("right", type_variable("item")),
-                                ("order", type_order()),
-                            ])
+                            vec![type_variable("Item"), type_variable("Item")],
+                            type_order()
                         )
                     )
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_span(type_variable("origin"))),
-                ]),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-opt-span-sort",
+                name: "buf-opt-span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
 Items whose comparison returns `'equal .` are ordered according to their original position in the Span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
@@ -10458,210 +9228,167 @@ Do no rely on a specific order of when items are compared."#,
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     (
                         "order",
                         type_fn(
-                            type_record([
-                                ("left", type_variable("item")),
-                                ("right", type_variable("item")),
-                            ]),
-                            type_record([
-                                ("left", type_variable("item")),
-                                ("right", type_variable("item")),
-                                ("order", type_order()),
-                            ])
+                            vec![type_variable("Item"), type_variable("Item")],
+                            type_order()
                         )
                     )
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                ]),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-span-alter",
+                name: "buf-span-alter",
                 documentation: "Change every item referenced by the given Span with a given function to a new item of the same type.
-If your change function needs extra context from the outside, use `Buf-span-step` instead",
+If your change function needs extra context from the outside, use `buf-span-step` instead",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
-                    ("item-alter", type_fn(type_variable("item"), type_variable("item"))),
+                    ("span", type_span(type_variable("Origin"))),
+                    ("item-alter", type_fn(vec![type_variable("Item")], type_variable("Item"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_span(type_variable("origin"))),
-                ]),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-opt-span-alter",
+                name: "buf-opt-span-alter",
                 documentation: "Change every item referenced by the given Span with a given function to a new item of the same type.
-If your change function needs extra context from the outside, use `Buf-opt-span-step` instead",
+If your change function needs extra context from the outside, use `buf-opt-span-step` instead",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                    ("item-alter", type_fn(type_variable("item"), type_variable("item"))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
+                    ("item-alter", type_fn(vec![type_variable("Item")], type_variable("Item"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                ]),
+                result_type: type_record_empty,
             },
             CoreFnInfo {
-                name: "Buf-span-step",
+                name: "buf-span-step",
                 documentation: "Step through each item for a given Span,
 change it to a new item of the same type and update the given initial state.
-If you want to be able to exit anytime, use `Buf-span-step-while` instead.
-If you need more control (for example accessing the given Buf during a step), use `Span-step` instead.
-To change every item without any state, use `Buf-span-alter`",
+If you want to be able to exit anytime, use `buf-span-step-while` instead.
+If you need more control (for example accessing the given Buf during a step), use `span-step` instead.
+To change every item without any state, use `buf-span-alter`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
+                            vec![
+                                type_variable("State"),
+                                type_variable("Item"),
+                            ],
                             type_record([
-                                ("item", type_variable("item")),
-                                ("state", type_variable("state")),
-                            ]),
-                            type_record([
-                                ("item", type_variable("item")),
-                                ("state", type_variable("state")),
+                                ("item", type_variable("Item")),
+                                ("state", type_variable("State")),
                             ]),
                         )
                     ),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_span(type_variable("origin"))),
-                    ("state", type_variable("state")),
-                ]),
+                result_type: type_variable("State"),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-step",
+                name: "buf-opt-span-step",
                 documentation: "Step through each item for a given Opt Span,
 change it to a new item of the same type and update the given initial state.
-If you want to be able to exit anytime, use `Buf-opt-span-step-while` instead.
-If you need more control (for example accessing the given Buf during a step), use `Opt-span-step` instead.
-To change every item without any state, use `Buf-opt-span-alter`",
+If you want to be able to exit anytime, use `buf-opt-span-step-while` instead.
+If you need more control (for example accessing the given Buf during a step), use `opt-span-step` instead.
+To change every item without any state, use `buf-opt-span-alter`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
+                            vec![
+                                type_variable("State"),
+                                type_variable("Item"),
+                            ],
                             type_record([
-                                ("item", type_variable("item")),
-                                ("state", type_variable("state")),
-                            ]),
-                            type_record([
-                                ("item", type_variable("item")),
-                                ("state", type_variable("state")),
+                                ("item", type_variable("Item")),
+                                ("state", type_variable("State")),
                             ]),
                         )
                     ),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                    ("state", type_variable("state")),
-                ]),
+                result_type: type_variable("State"),
             },
             CoreFnInfo {
-                name: "Buf-span-step-while",
-                documentation: "Step through each item for a given Span,
+                name: "buf-span-step-while",
+                documentation: "Step through each item for a given span,
 change it to a new item of the same type and update the given initial state or exit early.
 ```slug
-fn Buf-span-last-negative-i32
-    .buf buf Buf _origin, i32
-    .span span Span _origin
-:
-    .buf Buf _origin, i32
-    .span Span _origin
-    .last-negative 'yes i32 'no .
-=
-    ?
-        Buf-span-step-while
-        .buf buf
-        .span span
-        .direction 'down{'up .} .
-        .state .
-        .step
-        [.state . .item i]
-        ? I32-dup i [.a i-to-return .b i]
-        .item i-to-return
-        .state (
-            ? I32-dup i [.a i-use .b i]
-            ? I32-order .left i-use .right 0
-            ['less .] 'done{'going .} i
-            ['equal .] ? I32-rid i [.] 'going{'done i32} .
-            ['greater .] ? I32-rid i [.] 'going{'done i32} .
+fn buf-span-last-negative-i32(
+    buf buf(_origin i32)
+    span span(_origin)
+)
+    opt(i32)
+    if
+        buf-span-step-while(
+            buf
+            span
+            [down<[up {}]> {}]
+            {},
+            fn({} i i32)
+            { item i
+              state (
+                if i32-order(i 0 i32) {
+                [less {}] [done<[going {}]> i]
+                [equal {}] [going<[done i32]> {}]
+                [greater {}] [going<[done i32]> {}]
+                }
+            }
         )
-    [.. buf-span .state state]
-    .. buf-span .last-negative ? state ['going .] 'no . ['done i] i
+    [going {}] [no<opt(i32)> {}]
+    [done i] [yes<opt(i32)> i]
 ```
-If you want to step through all items instead, use `Buf-span-step`.
-If you need more control (for example accessing the given Buf during a step), use `Span-step-while` instead.
-To change every item without any state, use `Buf-span-alter`",
+If you want to step through all items instead, use `buf-span-step`.
+If you need more control (for example accessing the given Buf during a step), use `span-step-while` instead.
+To change every item without any state, use `buf-span-alter`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
                             type_record([
-                                ("item", type_variable("item")),
-                                ("state", type_variable("state")),
+                                ("item", type_variable("Item")),
+                                ("state", type_variable("State")),
                             ]),
                             type_record([
-                                ("item", type_variable("item")),
+                                ("item", type_variable("Item")),
                                 (
                                     "state",
                                     type_choice([
-                                        ("going", type_variable("state")),
+                                        ("going", type_variable("State")),
                                         ("done", type_variable("done")),
                                     ])
                                 )
@@ -10672,47 +9399,47 @@ To change every item without any state, use `Buf-span-alter`",
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     (
                         "state",
                         type_choice([
-                            ("going", type_variable("state")),
+                            ("going", type_variable("State")),
                             ("done", type_variable("done")),
                         ])
                     )
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-step-while",
+                name: "buf-opt-span-step-while",
                 documentation: "Step through each item for a given Span,
 change it to a new item of the same type and update the given initial state with the possibility to exit early.
-If you want to step through all items instead, use `Buf-opt-span-step`.
-If you need more control (for example accessing the given Buf during a step), use `Opt-span-step-while` instead.
-To change every item without any state, use `Buf-opt-span-alter`",
+If you want to step through all items instead, use `buf-opt-span-step`.
+If you need more control (for example accessing the given Buf during a step), use `opt-span-step-while` instead.
+To change every item without any state, use `buf-opt-span-alter`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
-                    ("state", type_variable("state")),
+                    ("state", type_variable("State")),
                     (
                         "step",
                         type_fn(
                             type_record([
-                                ("item", type_variable("item")),
-                                ("state", type_variable("state")),
+                                ("item", type_variable("Item")),
+                                ("state", type_variable("State")),
                             ]),
                             type_record([
-                                ("item", type_variable("item")),
+                                ("item", type_variable("Item")),
                                 (
                                     "state",
                                     type_choice([
-                                        ("going", type_variable("state")),
+                                        ("going", type_variable("State")),
                                         ("done", type_variable("done")),
                                     ])
                                 )
@@ -10723,349 +9450,349 @@ To change every item without any state, use `Buf-opt-span-alter`",
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     (
                         "state",
                         type_choice([
-                            ("going", type_variable("state")),
+                            ("going", type_variable("State")),
                             ("done", type_variable("done")),
                         ])
                     )
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add",
+                name: "buf-opt-span-add",
                 documentation: "Attach a given item at the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                    ("new", type_variable("item")),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
+                    ("new", type_variable("Item")),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin")))
+                    ("span", type_span(type_variable("Origin")))
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add",
+                name: "buf-span-add",
                 documentation: "Attach a given item at the end of the span",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
-                    ("new", type_variable("item")),
+                    ("span", type_span(type_variable("Origin"))),
+                    ("new", type_variable("Item")),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin")))
+                    ("span", type_span(type_variable("Origin")))
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add-array",
+                name: "buf-span-add-array",
                 documentation: "Attach a given `Array` of items at the end of the span.
-This can remove a bunch of noise compared to chaining `Buf-span-add` operations",
+This can remove a bunch of noise compared to chaining `buf-span-add` operations",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
-                    ("new", type_array(type_variable("item"), type_variable("record"))),
+                    ("span", type_span(type_variable("Origin"))),
+                    ("new", type_array(type_variable("Item"), type_variable("record"))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin")))
+                    ("span", type_span(type_variable("Origin")))
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add-array",
+                name: "buf-opt-span-add-array",
                 documentation: "Attach a given `Array` of items at the end of the span.
-This can remove a bunch of noise compared to chaining `Buf-span-add` operations",
+This can remove a bunch of noise compared to chaining `buf-span-add` operations",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
-                    ("new", type_array(type_variable("item"), type_variable("record"))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
+                    ("new", type_array(type_variable("Item"), type_variable("record"))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin")))
+                    ("span", type_span(type_variable("Origin")))
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add-str-chars",
+                name: "buf-opt-span-add-str-chars",
                 documentation: "Attach a given `str` at the end of the span",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_str),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin")))
+                    ("span", type_span(type_variable("Origin")))
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add-str-chars",
+                name: "buf-span-add-str-chars",
                 documentation: "Attach a given `str` to the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("new", type_str),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add-u32-chars",
+                name: "buf-span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("new", type_u32),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add-u32-chars",
+                name: "buf-opt-span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_u32),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add-i32-chars",
+                name: "buf-span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("new", type_i32),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add-i32-chars",
+                name: "buf-opt-span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_i32),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add-f32-chars",
+                name: "buf-span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                     ("new", type_f32),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add-f32-chars",
+                name: "buf-opt-span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_f32),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_char),
+                        type_buf(type_variable("Origin"), type_char),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-move-to-unset",
+                name: "buf-opt-span-move-to-unset",
                 documentation: "Move the given span to a unset range if there is unset space available where moving the given span to would reduce the amount of unset space.
 Try to use sparingly",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-move-to-unset",
+                name: "buf-span-move-to-unset",
                 documentation: "Move the given span to a unset range if there is unset space available where moving the given span to would reduce the amount of unset space.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-move-to-end",
+                name: "buf-span-move-to-end",
                 documentation: "Move the given span to after all existing items if necessary.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-move-to-end",
+                name: "buf-opt-span-move-to-end",
                 documentation: "Move the given span to after all existing items if necessary.",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add-own-span",
+                name: "buf-span-add-own-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
-As an example, you could implement `Buf-span-add` in slug itself as
+As an example, you could implement `buf-span-add` in slug itself as
 ```slug
 fn Buf-span-add
-    .buf buf Buf _origin, _item
+    .buf buf buf(_origin _item)
     .span span Span _origin
     .new new _item
 :
-    .buf Buf _origin, _item
+    .buf buf(_origin _item)
     .span Span _origin
 =
     # the first line is optional: it ensures that the new slot will actually be connected,
@@ -11081,89 +9808,89 @@ fn Buf-span-add
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("start", type_span(type_variable("origin"))),
-                    ("end", type_span(type_variable("origin"))),
+                    ("start", type_span(type_variable("Origin"))),
+                    ("end", type_span(type_variable("Origin"))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-span-add-own-opt-span",
+                name: "buf-span-add-own-opt-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
-The most common use case is re-combining spans that have been split up with e.g. `Span-start` (see also `Slot-to-span`)",
+The most common use case is re-combining spans that have been split up with e.g. `span-start` (see also `slot-to-span`)",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("start", type_span(type_variable("origin"))),
-                    ("end", type_opt(type_span(type_variable("origin")))),
+                    ("start", type_span(type_variable("Origin"))),
+                    ("end", type_opt(type_span(type_variable("Origin")))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add-own-span",
+                name: "buf-opt-span-add-own-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
-The most common use case is re-combining spans that have been split up with e.g. `Span-end` (see also `Slot-to-span`)",
+The most common use case is re-combining spans that have been split up with e.g. `span-end` (see also `slot-to-span`)",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("start", type_opt(type_span(type_variable("origin")))),
-                    ("end", type_span(type_variable("origin"))),
+                    ("start", type_opt(type_span(type_variable("Origin")))),
+                    ("end", type_span(type_variable("Origin"))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_span(type_variable("origin"))),
+                    ("span", type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-opt-span-add-own-opt-span",
+                name: "buf-opt-span-add-own-opt-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("start", type_opt(type_span(type_variable("origin")))),
-                    ("end", type_opt(type_span(type_variable("origin")))),
+                    ("start", type_opt(type_span(type_variable("Origin")))),
+                    ("end", type_opt(type_span(type_variable("Origin")))),
                 ]),
                 result_type: type_record([
                     (
                         "buf",
-                        type_buf(type_variable("origin"), type_variable("item")),
+                        type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
-                    ("span", type_opt(type_span(type_variable("origin")))),
+                    ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
             },
             CoreFnInfo {
-                name: "Buf-origin-isolate",
+                name: "buf-origin-isolate",
                 documentation: "Replace its origin type by `erased`,
 along with erasing the origin in its items if necessary.
-An example of a `Buf inner, Opt Span inner`:
+An example of a `buf inner, Opt Span inner`:
 ```slug
 Buf-origin-isolate
 .buf buf-inner
@@ -11171,7 +9898,7 @@ Buf-origin-isolate
 ```
 Small warning: while the function type allows completely changing the contents of each item,
 I recommend against it.
-For one, changing items to a wildly different type may re-allocate the whole `Buf`.
+For one, changing items to a wildly different type may re-allocate the whole `buf`.
 For two, this may be seen as spooky action at a distance (albeit not that great of a distance):
 Changing an item that is referenced by an outside slot/span etc. may be unexpected.",
                 type_parameters: vec![],
@@ -11179,28 +9906,28 @@ Changing an item that is referenced by an outside slot/span etc. may be unexpect
                     (
                         "buf",
                         type_buf(
-                            type_origin(type_variable("origin"), type_variable("part")),
-                            type_variable("item")
+                            type_origin(type_variable("Origin"), type_variable("part")),
+                            type_variable("Item")
                         ),
                     ),
                     (
                         "item-isolate",
                         type_fn(
-                            type_variable("item"),
+                            type_variable("Item"),
                             type_origin_isolated(
-                                type_variable("origin"),
+                                type_variable("Origin"),
                                 type_variable("item-erased")
                             ),
                         )
                     )
                 ]),
                 result_type: type_origin_isolated(
-                    type_variable("origin"),
+                    type_variable("Origin"),
                     type_buf(type_origin(type_erased, type_variable("part")), type_variable("item-erased"))
                 ),
             },
             CoreFnInfo {
-                name: "Buf-origin-unisolate",
+                name: "buf-origin-unisolate",
                 documentation: "Replace its origin type from `erased`,
 along with un-erasing the origin in its items.
 ```slug
@@ -11219,7 +9946,7 @@ fn Example-unisolate
 Small warning: while the function type allows completely changing the contents of each item,
 I strongly recommend against it.
 For one, changing items to a wildly different type
-may re-allocate the whole `Buf`.
+may re-allocate the whole `buf`.
 For two, this may be seen as spooky action at a distance (albeit not that great of a distance):
 Changing an item that is referenced by an outside slot/span etc. may be unexpected.",
                 type_parameters: vec![],
@@ -11227,49 +9954,49 @@ Changing an item that is referenced by an outside slot/span etc. may be unexpect
                     (
                         "buf",
                         type_origin_isolated(
-                            type_variable("origin"),
+                            type_variable("Origin"),
                             type_buf(type_origin(type_erased, type_variable("part")), type_variable("item-erased"))),
                         ),
                     (
                         "item-unisolate",
                         type_fn(
-                            type_origin_isolated(type_variable("origin"), type_variable("item-erased")),
-                            type_variable("item"),
+                            type_origin_isolated(type_variable("Origin"), type_variable("item-erased")),
+                            type_variable("Item"),
                         )
                     )
                 ]),
                 result_type: type_buf(
-                    type_origin(type_variable("origin"), type_variable("part")),
-                    type_variable("item")
+                    type_origin(type_variable("Origin"), type_variable("part")),
+                    type_variable("Item")
                 )
             },
             CoreFnInfo {
-                name: "Buf-to-unset",
+                name: "buf-to-unset",
                 documentation: "Extract the underlying slice that been used to store items in including spare capacity.
 This `Unset-slice` can if necessary be casted to a new item type with `Unset-slice-cast-or-rid-and-allocate`.
-Finally, the allocation can be the base of a new `Buf` with `Buf-reuse` or be scrapped with `Unset-slice-rid`",
+Finally, the allocation can be the base of a new `buf` with `buf-reuse` or be scrapped with `Unset-slice-rid`",
                 type_parameters: vec![],
-                parameter_type: type_buf(type_variable("origin"), type_variable("item")),
-                result_type: type_unset_slice(type_variable("item")),
+                parameter_type: type_buf(type_variable("Origin"), type_variable("Item")),
+                result_type: type_unset_slice(type_variable("Item")),
             },
             CoreFnInfo {
-                name: "Buf-rid",
-                documentation: "Mark the given `Buf` value as \"won't be used anymore\".
-Used for temporary `Buf`s at the end of their scope once all of their items are used up.
+                name: "buf-rid",
+                documentation: "Mark the given `buf` value as \"won't be used anymore\".
+Used for temporary `buf`s at the end of their scope once all of their items are used up.
 If any slots or spans are still floating around, you will not be able to get rid of them.
-This nicely forces you to handle all remaining items before you can get rid of the `Buf`.
-To reuse the underlying allocation, use `Buf-to-unset`",
+This nicely forces you to handle all remaining items before you can get rid of the `buf`.
+To reuse the underlying allocation, use `buf-to-unset`",
                 type_parameters: vec![],
-                parameter_type: type_buf(type_variable("origin"), type_variable("item")),
+                parameter_type: type_buf(type_variable("Origin"), type_variable("Item")),
                 result_type: type_record_empty,
             },
             CoreFnInfo {
                 name: "Unset-slice-allocate-length",
                 documentation: "Create a new `Unset-slice` with a given length.
 There rarely is a need to use this except when a function expects an `Unset-slice` as an argument",
-                type_parameters: vec![Name::from_static("item")],
+                type_parameters: vec![Name::from_static("Item")],
                 parameter_type: type_u32,
-                result_type: type_unset_slice(type_variable("item")),
+                result_type: type_unset_slice(type_variable("Item")),
             },
             CoreFnInfo {
                 name: "Unset-slice-cast-or-rid-and-allocate",
@@ -11294,7 +10021,7 @@ which is a bit of a stinker. The reasons are:
   when the slice pointer happens to align correctly
 - slug has a simple type system so I'm happy such a compromise can exist at all"#,
                 type_parameters: vec![Name::from_static("new-item")],
-                parameter_type: type_unset_slice(type_variable("item")),
+                parameter_type: type_unset_slice(type_variable("Item")),
                 result_type: type_unset_slice(type_variable("new-item"))
             },
             CoreFnInfo {
@@ -11305,7 +10032,7 @@ fn Hand-warmer-in-debug-mode . : . =
     Unset-slice-rid Unset-slice-allocate-length 9999999
 ```",
                 type_parameters: vec![],
-                parameter_type: type_unset_slice(type_variable("item")),
+                parameter_type: type_unset_slice(type_variable("Item")),
                 result_type: type_record_empty,
             },
         ].map(|core_fn_info| {
@@ -11418,31 +10145,10 @@ like `"abc" str` or `"\"hello 👀 \\\r\n world \(2665)\"" str`
 - `\r` represents carriage return
 
 Internally, a string is compactly represented as UTF-8 bytes and can be accessed as such.
-When building new strings at runtime, use functions like `Buf-opt-span-add-str-chars`."#,
+When building new strings at runtime, use functions like `buf-opt-span-add-str-chars`."#,
                 )),
                 parameters: vec![],
                 type_: Some(type_str),
-            },
-        ),
-        (
-            Name::from_static("Fn"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "A transformation from _in to _out.
-It cannot access local variables from the outside; everything must be passed in and out explicitly.
-The parameter pattern must always have a known type.
-Project functions are called as `Function argument`.
-Functions values can be copied with `Fn-dup` and scrapped with `Fn-rid`.
-This is only possible because functions do not have access to variables from the outside.
-```slug
-fn Three . : . =
-    ? ([n u32] U32-add-clamp .a n .b 1 u32) [increment]
-    Call .fn increment .in 2
-```"
-                )),
-                parameters: vec![Name::from_static("in"), Name::from_static("out")],
-                type_: Some(type_fn(type_variable("in"), type_variable("out"))),
             },
         ),
         (
@@ -11452,14 +10158,15 @@ fn Three . : . =
                 documentation: Some(Box::from(
                     "Result of a binary comparison.
 ```slug
-U32-order .left 12 u32 .right 20 u32
-# = 'less{order} .
+u32-order(12 u32 20 u32)
+# = [less<order> {}]
 
-fn U32-max .a a u32 .b b u32 : u32 =
-    ? U32-order .left a .right b
-    ['less] (? U32-rid a [.] b)
-    ['equal] (? U32-rid a [.] b)
-    ['greater] (? U32-rid b [.] a)
+fn u32-max(a u32 b u32) u32
+    if u32-order(a b) {
+    [less {}] b
+    [equal {}] b
+    [greater {}] a
+    }
 ```",
                 )),
                 parameters: vec![],
@@ -11467,7 +10174,7 @@ fn U32-max .a a u32 .b b u32 : u32 =
             },
         ),
         (
-            Name::from_static("Opt"),
+            Name::from_static("opt"),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
@@ -11478,189 +10185,7 @@ fn U32-max .a a u32 .b b u32 : u32 =
             },
         ),
         (
-            Name::from_static("Origin"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "Each variable created with `^` is of this type.
-Origins can not be arbitrary values because values like `u32` could be duplicated leading to different collections with the same origin type.
-This is not possible for values of type `Origin`.
-
-When you create an `Origin` with `^ some-origin  expression-that-uses-the-origin-variable`,
-`some-origin` will be of type `Origin some-origin, .`.
-The first type uniquely identifies the `Origin` with type `some-origin`.
-The second type here specifies that there are no `Origin` values with the same unique origin type (explained later).
-
-An `Origin` type will also be present in `Slot`, `Span`, `Buf`, as the first type argument.
-For example `Slot Origin some-origin, .`
-refers to an index in a `Buf (Origin some-origin, .), char`.
-
-Btw if you're wondering how to name origins:
-I recommend using the same name you're using for the collection variable.
-For example if you have a `Buf` of type `text`, create it with an origin named `text`
-(works because the original `text` variable is consumed before the new `text` buf variable comes into scope).
-
-There is a second way to create origins by listing parts
-which all have the same unique origin type.
-For example `Slot Origin combined-origin, .chars .`
-could refer to an index in a `Buf (Origin combined-origin, .chars .), char`
-where the origin was created with `^ .chars .some .other .origins combined-origin`.
-The types are as follows:
-```slug
-^ .a .b .c combined-origin
-# The variable combined-origin is of type
-# .a Origin combined-origin, .a .
-# .b Origin combined-origin, .b .
-# .c Origin combined-origin, .c .
-
-# get the actual origins out with a if
-? combined-origin [.a a .b b .c c]
-```
-This gives you a way to for example just pass one origin to a type alias and
-inside of the type alias use the .a ., .b . or .c . to choose the part you want.
-It's also extremely important for `Origin-isolated`"
-                )),
-                parameters: vec![Name::from_static("region"), Name::from_static("part")],
-                type_: Some(type_origin(type_variable("region"), type_variable("part"))),
-            },
-        ),
-        (
-            Name::from_static("erased"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "Previously a specific origin type. Used in `Origin-erase`"
-                )),
-                parameters: vec![],
-                type_: Some(type_erased),
-            },
-        ),
-        (
-            Name::from_static("Origin-erased"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "Self-contained value where each part had the same unique origin.
-Can be used to for example create Bufs containing Bufs without having incompatible origin types between items.
-An `Origin-erased` value can be turned back into an `Origin-isolated` on demand with `Origin-unerase`,
-which can be turned into a proper value with a new specific origin.
-If none of this sounded useful to you, you don't need this (yet).
-```slug
-^ outer
-? Buf-empty{Origin-erased .buf Buf (Origin erased .), u32 .slot Slot Origin erased, .} outer
-[buf-outer]
-
-? (
-    ^ inner
-    ? Buf-empty{u32} inner [buf-inner]
-    ? Buf-add .buf buf-inner .new 0 u32 [.buf buf-inner .slot slot-inner]
-    ? Slot-origin-isolate slot-inner [slot-isolated]
-    ? Buf-origin-isolate buf-inner [buf-isolated]
-    Origin-erase-map
-    .isolated Origin-isolated-merge .a buf-isolated .b slot-isolated
-    .change
-    # mapping them to descriptive names is optional but nicer
-    [
-        .a buf Buf-origin-isolated ., u32
-        .b slot Slot Origin erased, .
-    ]
-    .buf buf .slot slot
-)
-[erased-inner0]
-
-? (
-    ^ inner
-    ? Buf-empty{u32} inner1 [buf-inner1]
-    ? Buf-add .buf buf-inner1 .new 0 u32 [.buf buf-inner1 .slot slot-inner1]
-    ? ..do the same as in Origin-erase for slot0..
-)
-[erased-inner1]
-
-# now both erased-inner0 erased-inner1 have the same type :)
-Buf-add-array .buf buf-outer .new ; erased-inner0 ; erased-inner1
-
-# example of how to recover an erased value
-^ inner0
-? (
-    Origin-isolated-split
-    Origin-isolated-map
-    .isolated (Origin-unerase .erased erased-inner0 .origin inner)
-    .change
-    [.buf buf Buf (Origin erased, .), u32 .slot slot Slot (Origin erased, .)]
-    .a buf .b slot
-)
-[.a buf Buf (Origin erased, .), u32 .b slot Slot (Origin erased, .)]
-? Slot-origin-unisolate slot [slot]
-?
-    Buf-origin-unisolate
-    .buf buf
-    .item-unisolate [u Origin-isolated inner0, u32] U32-origin-unisolate u
-[buf]
-.buf buf .slot slot
-```
-As juicy as this may look, avoid this if you can.
-Nesting always means more segmented memory. We don't want that.
-Valid use cases are
-- inner Bufs are scrapped in bulk
-- any one of the inner Bufs could change size at any moment
-- (less important) the inner Bufs are always read and modified together by themselves"
-                )),
-                parameters: vec![Name::from_static("value-erased")],
-                type_: Some(type_origin_erased(type_variable("value-erased"))),
-            },
-        ),
-        (
-            Name::from_static("Origin-isolated"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "Collections, slots and spans that are guaranteed to have the same unique origin.
-For example
-- `Buf (Origin o, .a .), u32`
-- `Buf (Origin o, .b .), f32`
-- `Span Origin o, .a .`
-- `Slot Origin o, .b .`
-
-could all be contained in a single `Origin-isolated`.
-Since we know the origin is the same across all parts,
-we can safely erase the unique origin type entirely with `Origin-erase`.
-
-See `Origin-erased`, `Slot-origin-isolate`, `Span-origin-isolate`, `Opt-span-origin-isolate`,
-`Buf-origin-isolate`, `Char-origin-isolate` (same for all other primitives),
-`Origin-erase-merge`, `Origin-erase-constant`, `Origin-erase-map`"
-                )),
-                parameters: vec![Name::from_static("origin"), Name::from_static("value-erased")],
-                type_: Some(type_origin_isolated(type_variable("origin"), type_variable("value-erased"))),
-            },
-        ),
-        (
-            Name::from_static("Origin-unisolater"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "See `Origin-unisolate`. This wrapper is just permission to call `Origin-erased-unisolate` with this specific origin.
-If anyone could call `Origin-erased-unisolate` with any origin,
-you would be able to e.g. convert a `Slot (Origin erased, .)` to a Slot with any origin which is unsound."
-                )),
-                parameters: vec![Name::from_static("origin")],
-                type_: Some(type_origin_unisolater(type_variable("origin"))),
-            },
-        ),
-        (
-            Name::from_static("Origin-unisolated"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "See `Origin-unisolate`.
-This wrapper is just proof that this value was created with `Origin-erased-unisolate`,
-making it safe to extract knowing that no erased value is directly accessible."
-                )),
-                parameters: vec![Name::from_static("unisolated")],
-                type_: Some(type_origin_unisolated(type_variable("unisolated"))),
-            },
-        ),
-        (
-            Name::from_static("Buf"),
+            Name::from_static("buf"),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
@@ -11678,73 +10203,49 @@ fn Use-a-buf . : u32 =
     first-item # = 609 u32
 ```"
                 )),
-                parameters: vec![Name::from_static("origin"), Name::from_static("item")],
-                type_: Some(type_buf(type_variable("origin"), type_variable("item"))),
+                parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
+                type_: Some(type_buf(type_variable("Origin"), type_variable("Item"))),
             },
         ),
         (
-            Name::from_static("Slot"),
+            Name::from_static("slot"),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
                     "A valid position of an item in a collection.
 This works because each collection has a unique origin and only gives out one slot for each position.
-For consecutive `Slot`s, check out `Span`."
+For consecutive `slot`s, check out `span`."
                 )),
-                parameters: vec![Name::from_static("origin")],
-                type_: Some(type_slot(type_variable("origin"))),
+                parameters: vec![Name::from_static("Origin")],
+                type_: Some(type_slot(type_variable("Origin"))),
             },
         ),
         (
-            Name::from_static("Span"),
+            Name::from_static("span"),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
                     "A range of ≥1 consecutive valid slots in a collection.
 This works because each collection has a unique origin and only gives out one span for each range.
-For potentially 0-length spans, use `Opt Span`"
+For potentially 0-length spans, use `opt Span`"
                 )),
-                parameters: vec![Name::from_static("origin")],
-                type_: Some(type_span(type_variable("origin"))),
+                parameters: vec![Name::from_static("Origin")],
+                type_: Some(type_span(type_variable("Origin"))),
             },
         ),
         (
-            Name::from_static("Unset-slice"),
+            Name::from_static("unset-slice"),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
                     "A heap-allocated array with unknown length and undefined contents.
 Can be constructed manually or as an intermediate type when recycling the allocated space of a collection,
-see `Buf-to-unset`.
+see `buf-to-unset`.
 Since you can't read from it, you can also safely attempt to reuse this allocation for a different item type,
 see `Unset-slice-cast-or-rid-and-allocate`."
                 )),
-                parameters: vec![Name::from_static("origin")],
-                type_: Some(type_unset_slice(type_variable("origin"))),
-            },
-        ),
-        (
-            Name::from_static("Array"),
-            CheckedTypeAlias {
-                name_range: None,
-                documentation: Some(Box::from(
-                    "An array of known, positive length, stack-allocated if the target language supports it.
-Arrays make adding multiple items of the same type much less cumbersome,
-see `Buf-add-array`/`Buf-span-add-array`/`Buf-opt-span-add-array`.
-This is a very bare-bones feature because of slug's simple type system.
-
-How does Array work then? The second record argument is set to an equivalent record
-that the runtime knows how to interpret as an actual array.
-```slug
-fn Example-array . : Array u32, .i0 u32 .i1 u32 =
-    ; 6 u32 ; 9 u32
-```
-This is quite cursed!
-It is _not_ recommended or useful to use an `Array` with a non-variable record type argument _ever_.
-Use a regular record instead!"
-                )),
-                parameters: vec![Name::from_static("item"), Name::from_static("record")],
-                type_: Some(type_array(type_variable("item"), type_variable("record"))),
+                parameters: vec![Name::from_static("Origin")],
+                type_: Some(type_unset_slice(type_variable("Origin"))),
             },
         ),
     ])
@@ -11775,11 +10276,17 @@ pub static core_records: std::sync::LazyLock<std::collections::HashSet<&'static 
                         type_records(argument, records);
                     }
                 }
+                Type::Fn { parameters, result } => {
+                    type_records(result, records);
+                    for parameter in parameters {
+                        type_records(parameter, records);
+                    }
+                }
             }
         }
         let mut records = std::collections::HashSet::new();
         for core_fn_info in core_fns.values() {
-            if let Some(parameter_type) = &core_fn_info.parameter_types {
+            for parameter_type in core_fn_info.parameter_types.iter().flatten() {
                 type_records(parameter_type, &mut records);
             }
             if let Some(result_type) = &core_fn_info.result_type {
@@ -11814,11 +10321,17 @@ pub static core_choices: std::sync::LazyLock<std::collections::HashSet<&'static 
                         type_choices(argument, records);
                     }
                 }
+                Type::Fn { parameters, result } => {
+                    type_choices(result, records);
+                    for parameter in parameters {
+                        type_choices(parameter, records);
+                    }
+                }
             }
         }
         let mut variants = std::collections::HashSet::new();
         for core_fn_info in core_fns.values() {
-            if let Some(parameter_type) = &core_fn_info.parameter_types {
+            for parameter_type in core_fn_info.parameter_types.iter().flatten() {
                 type_choices(parameter_type, &mut variants);
             }
             if let Some(result_type) = &core_fn_info.result_type {
@@ -11829,68 +10342,56 @@ pub static core_choices: std::sync::LazyLock<std::collections::HashSet<&'static 
     });
 pub fn is_core_fn_taking_allocator_in_zig(fn_name: &str) -> bool {
     match fn_name {
-        "Unset-slice-rid" | "Buf-rid" | "Buf-to-unset" => true,
+        "buf-to-unset" => true,
         _ => is_core_fn_that_can_run_out_of_memory_in_zig(fn_name),
     }
 }
 pub fn is_core_fn_that_can_run_out_of_memory_in_zig(fn_name: &str) -> bool {
     match fn_name {
-        "Call"
-        | "Origin-isolated-map"
-        | "Origin-isolated-rid"
-        | "Origin-isolate-constant"
-        | "Origin-erased-map"
-        | "Origin-erased-rid"
-        | "Origin-unisolate"
-        | "Origin-erased-unisolate"
-        | "Span-step"
-        | "Opt-span-step"
-        | "Span-step-while"
-        | "Opt-span-step-while"
-        | "Unset-slice-cast-or-rid-and-allocate"
-        | "Unset-slice-allocate-length"
-        | "Buf-item-step"
-        | "Buf-origin-isolate"
-        | "Buf-origin-unisolate"
-        | "Buf-opt-span-sort"
-        | "Buf-span-sort"
-        | "Buf-opt-span-rid"
-        | "Buf-span-rid"
-        | "Buf-opt-span-alter"
-        | "Buf-span-alter"
-        | "Buf-opt-span-step"
-        | "Buf-span-step"
-        | "Buf-opt-span-step-while"
-        | "Buf-span-step-while"
-        | "Buf-opt-span-move-to-end"
-        | "Buf-span-move-to-end"
-        | "Buf-opt-span-add-own-opt-span"
-        | "Buf-span-add-own-opt-span"
-        | "Buf-opt-span-add-own-span"
-        | "Buf-span-add-own-span"
-        | "Buf-opt-span-add-buf-span"
-        | "Buf-opt-span-add-buf-opt-span"
-        | "Buf-span-add-buf-span"
-        | "Buf-span-add-buf-opt-span"
-        | "Buf-opt-span-add-array"
-        | "Buf-span-add-array"
-        | "Buf-opt-span-add-f32-chars"
-        | "Buf-span-add-f32-chars"
-        | "Buf-opt-span-add-i32-chars"
-        | "Buf-span-add-i32-chars"
-        | "Buf-opt-span-add-u32-chars"
-        | "Buf-span-add-u32-chars"
-        | "Buf-span-add-str-chars"
-        | "Buf-opt-span-add-str-chars"
-        | "Buf-span-add"
-        | "Buf-opt-span-add"
-        | "Buf-add-array"
-        | "Buf-add-str-chars"
-        | "Buf-add"
-        | "Buf-insert"
-        | "Buf-set-or-insert"
-        | "Buf-pre-allocation-rid"
-        | "Buf-pre-allocate-at-least" => true,
+        "span-step"
+        | "opt-span-step"
+        | "span-step-while"
+        | "opt-span-step-while"
+        | "unset-slice-cast-or-rid-and-allocate"
+        | "unset-slice-allocate-length"
+        | "buf-item-step"
+        | "buf-opt-span-sort"
+        | "buf-span-sort"
+        | "buf-opt-span-rid"
+        | "buf-span-rid"
+        | "buf-opt-span-alter"
+        | "buf-span-alter"
+        | "buf-opt-span-step"
+        | "buf-span-step"
+        | "buf-opt-span-step-while"
+        | "buf-span-step-while"
+        | "buf-opt-span-move-to-end"
+        | "buf-span-move-to-end"
+        | "buf-opt-span-add-own-opt-span"
+        | "buf-span-add-own-opt-span"
+        | "buf-opt-span-add-own-span"
+        | "buf-span-add-own-span"
+        | "buf-opt-span-add-buf-span"
+        | "buf-opt-span-add-buf-opt-span"
+        | "buf-span-add-buf-span"
+        | "buf-span-add-buf-opt-span"
+        | "buf-opt-span-add-f32-chars"
+        | "buf-span-add-f32-chars"
+        | "buf-opt-span-add-i32-chars"
+        | "buf-span-add-i32-chars"
+        | "buf-opt-span-add-u32-chars"
+        | "buf-span-add-u32-chars"
+        | "buf-span-add-str-chars"
+        | "buf-opt-span-add-str-chars"
+        | "buf-span-add"
+        | "buf-opt-span-add"
+        | "buf-add-array"
+        | "buf-add-str-chars"
+        | "buf-add"
+        | "buf-insert"
+        | "buf-set-or-insert"
+        | "buf-pre-allocation-rid"
+        | "buf-pre-allocate-at-least" => true,
         _ => false,
     }
 }
@@ -12229,7 +10730,7 @@ fn syntax_expression_open_end<Expressions, Patterns>(
         },
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            parameter: _,
+            parameters: _,
             closed_paren_start: _,
             result,
         } => match result {
@@ -12500,7 +11001,7 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: open_bracket_start,
-            parameter,
+            parameters: parameter,
             closed_paren_start: _,
             result,
         } => {
@@ -13856,7 +12357,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            parameter,
+            parameters: parameter,
             closed_paren_start: _,
             result,
         } => {
@@ -15310,7 +13811,7 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            parameter,
+            parameters: parameter,
             closed_paren_start: _,
             result,
         } => {
@@ -16093,7 +14594,7 @@ fn syntax_expression_highlight<Expressions, Patterns>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: open_bracket_start,
-            parameter,
+            parameters: parameter,
             closed_paren_start: closed_bracket_start,
             result,
         } => {
@@ -16579,7 +15080,7 @@ fn syntax_expression_rid<Expressions, Patterns>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,open_paren_start:_,
-            parameter,
+            parameters: parameter,
             closed_paren_start: _,
             result,
         } => {
