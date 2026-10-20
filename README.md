@@ -223,11 +223,28 @@ For other editors, there's usually a way to specify `slug` as the language serve
   
 - expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
   The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
-- when a slot or span is dropped or cloned, slug must check the ssociated origin bufs are reachable and error otherwise. This means that many functions still need to return the slots and spans that are passed in, like `slot-index`, `buf-span-sort`'s item sort function. This screams like a design failure but maybe it's fine.
+- when a slot or span is dropped or cloned, slug must check the ssociated origin bufs are reachable and error otherwise. This means that many functions still need to return the slots and spans that are passed in, like `slot-index`, `span-start`. This screams like a small design failure but maybe it's fine.
 - If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
 - type aliases are _not_ (!) checked for origin violations, only actual expression code is
 
 ## TODO
+- the current rules for detecting mis-association are too loose.
+  E.g.
+  ```
+  fn (
+      first slot(Origin)
+      second slot(Origin)
+      buf buf(Origin { x X y Y })
+      xy-rid fn({ x X y Y }) {}
+  )
+      {}
+    # swaps x y, calls xy-rid({ x first-x y second-y }), then xy-rid({ x second-y y first-y })
+  ```
+  this tells me that is should be an error to do anything with type variable-typed values that you couldn't also do with bufs.
+  
+  So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
+  
+  Seems oof but does this actually restrict useful code?
 - implement compiler & tooling
 - website with online repl
 
