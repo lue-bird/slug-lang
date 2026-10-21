@@ -50,7 +50,7 @@ ty project-state
 
 fn initial-state({}) state
     { projects-buf projects-buf buf-empty<^projects project-state>()
-      projects [yes<opt(span(^projects))> {}]
+      projects [yes<opt(span(^projects))> *]
     }
 ```
 
@@ -81,10 +81,14 @@ first-argument.some-function(second)
 # Function declarations will explicitly list those <Parameters> (see later)
 some-function<type arguments>(argument)
 
-# record. You may know it as "struct".
-# If field values themselves end in records they need to be parenthesized.
-# The last field value can end in a record without needing to be parenthesized
-{ first-field first-value second-field second-value }
+# tuple, positional group of values
+*(first-value second-value third-value)
+
+# empty tuple. Used for example for variants without a useful value
+*
+
+# record, like a tuple with names for each part. You may know it as "struct"
+{first-field first-value second-field second-value}
 
 # local function. The pattern must add a type to all variables
 # can **not** use variables from the outer scope.
@@ -226,10 +230,8 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - when a slot or span is dropped or cloned, slug must check the ssociated origin bufs are reachable and error otherwise. This means that many functions still need to return the slots and spans that are passed in, like `slot-index`, `span-start`. This screams like a small design failure but maybe it's fine.
 - If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
 - type aliases are _not_ (!) checked for origin violations, only actual expression code is
-
-## TODO
-- the current rules for detecting mis-association are too loose.
-  E.g.
+- type aliases are checked as if they contained any number of buf origins and slot/span origins.
+  To illustrate why this could otherwise lead to issues, look at
   ```
   fn (
       first slot(Origin)
@@ -237,15 +239,18 @@ For other editors, there's usually a way to specify `slug` as the language serve
       buf buf(Origin { x X y Y })
       xy-rid fn({ x X y Y }) {}
   )
-      {}
-    # swaps x y, calls xy-rid({ x first-x y second-y }), then xy-rid({ x second-y y first-y })
+      
+      = {} xy-rid({ x first-x y second-y })
+      xy-rid({ x second-y y first-y })
   ```
   this tells me that is should be an error to do anything with type variable-typed values that you couldn't also do with bufs.
   
   So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
-  
-  Seems oof but does this actually restrict useful code?
-- add tuples
+
+## TODO
+- add tuples, including `*` which is short for `*()` (the formatter changes both to `*`).
+  `*(inner)` tuples are formatted as `inner`
+- change `{}` to `*` in standard library code, examples and the formatter
 - add dot syntax
 - fix the countless bugs
 - implement association checking
