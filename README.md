@@ -255,6 +255,7 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - fix the countless bugs
 - implement association checking
 - reimplement standard library (positional + removing redundant linear stuff)
+- switch away from rust-implementation internal Slot stuff to get rid of core.rs
 - website with online repl
 
 ## known design weaknesses
@@ -265,10 +266,12 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - slots, spans and type variable-typed values can not be trivially cloned and scrapped when the necessary bufs are not in scope.
   This is a little annoying to check (considering slot items might themselves introduce).
   An easy and very convenient (but heartbreaking, because 3x memory usage) fix would be embedding the buffer rc pointer in each slot and span.
+  Another, more difficult but faster solution could be always passing a "bundle of reachable bufs" around and somehow (?) associate the right one with slots/spans
 - bufs are passed by rc, leading to indirection. Being able to store a buf multiple times is also very, very confusing.
 
   Better (but also slightly confusing) semantics may be to always pass bufs "by inout", meaning they cannot be duplicated and must not be part of the result in any way.
   Or I could just give up and require bufs to be linear at the expense of convenience but easier to analyze and more intuitive.
+- building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
 
 ## potential improvements in the future
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.

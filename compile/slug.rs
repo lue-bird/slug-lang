@@ -64,11 +64,17 @@ pub struct SyntaxTyParameters {
 }
 #[derive(Debug)]
 pub enum SyntaxType {
-    // TODO add Fn
     Variable(WithStartPosition<Name>),
     Origin {
         hat_start: lsp_types::Position,
         name: Option<WithStartPosition<Name>>,
+    },
+    Fn {
+        fn_keyword_start: lsp_types::Position,
+        open_paren_start: Option<lsp_types::Position>,
+        parameters: Vec<SyntaxType>,
+        closed_paren_start: Option<lsp_types::Position>,
+        result: Option<Box<SyntaxType>>,
     },
     // TODO combine into one Construct { arguments: Option<SyntaxTypeConstructArguments> }
     ConstructWithoutArguments(WithStartPosition<Name>),
@@ -354,6 +360,9 @@ pub fn type_start(type_: &SyntaxType) -> lsp_types::Position {
     match type_ {
         SyntaxType::Variable(name) => name.start,
         SyntaxType::Origin { hat_start, name: _ } => *hat_start,
+        SyntaxType::Fn {
+            fn_keyword_start, ..
+        } => *fn_keyword_start,
         SyntaxType::ConstructWithoutArguments(name) => name.start,
         SyntaxType::ConstructWithArguments { name, .. } => name.start,
         SyntaxType::Tuple { star_start, .. } => *star_start,
@@ -372,6 +381,21 @@ pub fn type_end(type_: &SyntaxType) -> lsp_types::Position {
             Some(name) => name_end(with_start_position_as_ref(name)),
             None => symbol_end(*hat_start, "^"),
         },
+        SyntaxType::Fn {
+            fn_keyword_start,
+            open_paren_start,
+            parameters,
+            closed_paren_start,
+            result,
+        } => result
+            .as_ref()
+            .map(|result| type_end(result))
+            .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
+            .or_else(|| parameters.last().map(|parameter| type_end(parameter)))
+            .or_else(|| {
+                closed_paren_start.map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
+            })
+            .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
         SyntaxType::ConstructWithoutArguments(name) => name_end(with_start_position_as_ref(name)),
         SyntaxType::ConstructWithArguments {
             name: _,
@@ -1457,6 +1481,7 @@ pub fn parse_type(state: &mut ParseState) -> Option<SyntaxType> {
         .or_else(|| parse_type_construct(state))
         .or_else(|| parse_type_record(state))
         .or_else(|| parse_type_choice(state))
+        .or_else(|| parse_type_fn(state))
 }
 fn parse_type_variable(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(name) = parse_slug_uppercase_name_with_start(state) else {
@@ -1551,6 +1576,29 @@ fn parse_type_construct(state: &mut ParseState) -> Option<SyntaxType> {
             })
         }
     }
+}
+fn parse_type_fn(state: &mut ParseState) -> Option<SyntaxType> {
+    let Some(fn_keyword_start) = parse_symbol_as_start(state, "fn") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    let open_paren_start = parse_symbol_as_start(state, "(");
+    parse_slug_whitespace(state);
+    let mut parameters = Vec::new();
+    while let Some(parameter) = parse_type(state) {
+        parameters.push(parameter);
+        parse_slug_whitespace(state);
+    }
+    let closed_paren_start = parse_symbol_as_start(state, ")");
+    parse_slug_whitespace(state);
+    let result = parse_type(state);
+    Some(SyntaxType::Fn {
+        fn_keyword_start,
+        open_paren_start,
+        parameters,
+        closed_paren_start,
+        result: result.map(Box::new),
+    })
 }
 pub fn parse_expression<Expressions, Patterns>(
     state: &mut ParseState,
@@ -2357,6 +2405,28 @@ fn syntax_type_connect_type_names_in_graph_from(
     match type_ {
         SyntaxType::Variable(_) => {}
         SyntaxType::Origin { .. } => {}
+        SyntaxType::Fn {
+            fn_keyword_start: _,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            for parameter in parameters {
+                syntax_type_connect_type_names_in_graph_from(
+                    type_graph_node_by_name,
+                    parameter,
+                    type_graph,
+                );
+            }
+            if let Some(result) = result {
+                syntax_type_connect_type_names_in_graph_from(
+                    type_graph_node_by_name,
+                    result,
+                    type_graph,
+                );
+            }
+        }
         SyntaxType::ConstructWithoutArguments(name) => {
             if let Some(referenced_type_graph_node) =
                 type_graph_node_by_name.get(name.value.as_str()).copied()
@@ -2991,6 +3061,27 @@ pub fn syntax_type_to_type(
         SyntaxType::Origin { hat_start: _, name } => {
             name.as_ref().map(|name| Type::Variable(name.value.clone()))
         }
+        SyntaxType::Fn {
+            fn_keyword_start: _,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            let Some(result) = result else {
+                return None;
+            };
+            let Some(result) = syntax_type_to_type(result, type_aliases) else {
+                return None;
+            };
+            Some(Type::Fn {
+                parameters: parameters
+                    .iter()
+                    .filter_map(|parameter| syntax_type_to_type(parameter, type_aliases))
+                    .collect(),
+                result: Box::new(result),
+            })
+        }
         SyntaxType::ConstructWithoutArguments(name) => {
             if let Some(origin_type_alias) = type_aliases.get(&name.value) {
                 origin_type_alias.type_.clone()
@@ -3089,6 +3180,35 @@ pub fn syntax_type_check(
                 return None;
             };
             Some(Type::Origin(name.value.clone()))
+        }
+        SyntaxType::Fn {
+            fn_keyword_start: _,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            let Some(result) = result else {
+                return None;
+            };
+            let Some(result) =
+                syntax_type_check(result, errors, type_aliases, records_used, choices_used)
+            else {
+                return None;
+            };
+            let Some(parameters) = parameters
+                .iter()
+                .map(|parameter| {
+                    syntax_type_check(parameter, errors, type_aliases, records_used, choices_used)
+                })
+                .collect::<Option<Vec<_>>>()
+            else {
+                return None;
+            };
+            Some(Type::Fn {
+                parameters,
+                result: Box::new(result),
+            })
         }
         SyntaxType::ConstructWithoutArguments(name) => {
             if let Some(project_type_alias) = type_aliases.get(&name.value) {
@@ -7745,6 +7865,20 @@ pub fn syntax_type_variables_into<'a>(
             type_variables.insert(&name.value);
         }
         SyntaxType::Origin { .. } => {}
+        SyntaxType::Fn {
+            fn_keyword_start: _,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            for parameter in parameters {
+                syntax_type_variables_into(type_variables, parameter);
+            }
+            if let Some(result) = result {
+                syntax_type_variables_into(type_variables, result);
+            }
+        }
         SyntaxType::ConstructWithoutArguments(_) => {}
         SyntaxType::ConstructWithArguments {
             name: _,
@@ -11968,6 +12102,45 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                 formatted.push_str(&name.value);
             }
         }
+        SyntaxType::Fn {
+            fn_keyword_start,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            formatted.push_str("fn(");
+            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
+                let parameters_line_span = match parameters.last() {
+                    None => LineSpan::Single,
+                    Some(last_parameter) => range_line_span(gen_lsp_types::Range {
+                        start: *fn_keyword_start,
+                        end: type_end(last_parameter),
+                    }),
+                };
+                if parameters_line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                syntax_type_format(formatted, next_indent(indent), parameter0);
+                for parameter in parameter1_up {
+                    space_or_linebreak_indented_into(
+                        formatted,
+                        parameters_line_span,
+                        next_indent(indent),
+                    );
+                    syntax_type_format(formatted, next_indent(indent), parameter);
+                }
+                if parameters_line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+            }
+            formatted.push(')');
+            let line_span = range_line_span(type_range(type_));
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            if let Some(result) = result {
+                syntax_type_format(formatted, next_indent(indent), result);
+            }
+        }
         SyntaxType::ConstructWithoutArguments(name) => {
             formatted.push_str(&name.value);
         }
@@ -11978,22 +12151,19 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             closed_paren_start: _,
         } => {
             formatted.push_str(&name.value);
-            match arguments.split_first() {
-                None => {}
-                Some((argument0, argument1_up)) => {
-                    formatted.push('(');
-                    let line_span = range_line_span(lsp_types::Range {
-                        start: name.start,
-                        end: type_range(argument1_up.last().unwrap_or(argument0)).end,
-                    });
+            if let Some((argument0, argument1_up)) = arguments.split_first() {
+                formatted.push('(');
+                let line_span = range_line_span(lsp_types::Range {
+                    start: name.start,
+                    end: type_range(argument1_up.last().unwrap_or(argument0)).end,
+                });
+                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                syntax_type_format(formatted, next_indent(indent), argument0);
+                for argument_type in argument1_up {
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_type_format(formatted, next_indent(indent), argument0);
-                    for argument_type in argument1_up {
-                        space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                        syntax_type_format(formatted, next_indent(indent), argument_type);
-                    }
-                    formatted.push(')');
+                    syntax_type_format(formatted, next_indent(indent), argument_type);
                 }
+                formatted.push(')');
             }
         }
         SyntaxType::Tuple {
@@ -12002,17 +12172,23 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             parts,
             closed_paren_start: _,
         } => {
-            // TODO
-            formatted.push_str("*(");
-            let line_span = range_line_span(type_range(type_));
-            for part in parts {
-                space_or_linebreak_indented_into(formatted, line_span, indent);
-                syntax_type_format(formatted, next_indent(indent), part);
+            formatted.push('*');
+            if let Some((part0, part1_up)) = parts.split_first() {
+                formatted.push('(');
+                let line_span = range_line_span(type_range(type_));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                syntax_type_format(formatted, next_indent(indent), part0);
+                for part in part1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    syntax_type_format(formatted, next_indent(indent), part);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                formatted.push(')');
             }
-            if line_span == LineSpan::Multiple {
-                linebreak_indented_into(formatted, indent);
-            }
-            formatted.push(')');
         }
         SyntaxType::Record {
             open_curly_start: _,
@@ -12985,6 +13161,20 @@ fn type_symbol_at_position<'a, Expressions, Patterns>(
                 None
             }
         }
+        SyntaxType::Fn {
+            fn_keyword_start: _,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => parameters
+            .iter()
+            .find_map(|parameter| type_symbol_at_position(parameter, position, scope))
+            .or_else(|| {
+                result
+                    .as_ref()
+                    .and_then(|result| type_symbol_at_position(result, position, scope))
+            }),
         SyntaxType::ConstructWithoutArguments(name) => Some(SyntaxSymbol::ProjectTypeOrUnknown {
             name: with_start_position_as_ref(name),
             construct_info: ConstructInfo::NotExpectingArgument,
@@ -13350,6 +13540,20 @@ fn syntax_type_symbol_uses_into<Expressions, Patterns>(
                 && name.value == symbol_name
             {
                 uses.push(name_range(with_start_position_as_ref(name)));
+            }
+        }
+        SyntaxType::Fn {
+            fn_keyword_start: _,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            for parameter in parameters {
+                syntax_type_symbol_uses_into(uses, parameter, symbol);
+            }
+            if let Some(result) = result {
+                syntax_type_symbol_uses_into(uses, result, symbol);
             }
         }
         SyntaxType::Tuple {
@@ -14134,6 +14338,21 @@ pub fn syntax_type_highlight(state: &mut HighlightState, type_: &SyntaxType) {
                 syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::TypeParameter);
             }
         }
+        SyntaxType::Fn {
+            fn_keyword_start,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            keyword_highlight(state, "fn", *fn_keyword_start);
+            for parameter in parameters {
+                syntax_type_highlight(state, parameter);
+            }
+            if let Some(result) = result {
+                syntax_type_highlight(state, result);
+            }
+        }
         SyntaxType::ConstructWithoutArguments(name) => {
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Type);
         }
@@ -14509,14 +14728,19 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
         }
         Type::Fn { parameters, result } => {
             formatted.push_str("fn(");
-            // TODO split_first
             let line_span: LineSpan = type_line_span(type_);
-            for parameter in parameters {
-                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                type_format(formatted, next_indent(indent), parameter);
-            }
-            if line_span == LineSpan::Multiple {
-                linebreak_indented_into(formatted, next_indent(indent));
+            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                type_format(formatted, next_indent(indent), parameter0);
+                for parameter in parameter1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    type_format(formatted, next_indent(indent), parameter);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
             }
             formatted.push(')');
             space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
