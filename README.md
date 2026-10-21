@@ -1,7 +1,8 @@
 fast programming language where indexes know their origin array. An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet(name str chars buf(Chars char)) *(buf(Chars char) span(Chars))
+fn greet(name str chars buf(Chars char))
+    *(buf(Chars char) span(Chars))
     buf-add-str-chars("Hello, " str)
     .buf-span-add-str-chars(name)
     .buf-span-add("!" char)
@@ -248,9 +249,6 @@ For other editors, there's usually a way to specify `slug` as the language serve
   So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
 
 ## TODO
-- add tuples, including `*` which is short for `*()` (the formatter changes both to `*`).
-  `*(inner)` tuples are formatted as `inner`
-- change `{}` to `*` in standard library code, examples and the formatter
 - add dot syntax
 - fix the countless bugs
 - implement association checking
@@ -284,6 +282,7 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - I would **LOVE** if there was a way to allow for "unspecialized function types". If e.g. rust gains support for this, we should add this (and maybe backport it to sloe)
 - could this approach be used to compile existing, high-level languages (e.g. elm/gren)?
 - should FFI be more ergonomic? Maybe by providing `extern-fn` signatures (and maybe `extern-ty`?) that must get populated by the platform
+- change `{}` to `*` in the formatter
 
 ## rejected
 (some points may be outdated)

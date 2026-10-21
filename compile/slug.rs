@@ -7513,7 +7513,7 @@ If there should only ever by one variant, using a record with a single field is 
                     message: (error_message + "
 
 A destruct pattern must cover all possible cases, otherwise the program would need to crash if such a value was matched on.
-If you want to handle cases in separate branches, use an if like  if option { [yes n] n [no {}] 0 u32 }"
+If you want to handle cases in separate branches, use an if like  if option { [yes n] n [no *] 0 u32 }"
                         ).into_boxed_str(),
                 });
             }
@@ -7537,7 +7537,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
             let Some(queried) = queried else {
                 errors.push(ErrorNode {
                     range: symbol_range(*if_keyword_start, "if"),
-                    message: Box::from("missing queried expression after this if keyword. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
+                    message: Box::from("missing queried expression after this if keyword. An example of a if is if option { [yes n] n [no *] 0 u32 }")
                 });
                 return None;
             };
@@ -7545,7 +7545,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
             let Some((case0, case1_up)) = cases.split_first() else {
                 errors.push(ErrorNode {
                     range: symbol_range(*if_keyword_start, "if"),
-                    message: Box::from("missing case(s) after the queried expression. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
+                    message: Box::from("missing case(s) after the queried expression. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no *] 0 u32 }")
                 });
                 return None;
             };
@@ -7569,7 +7569,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
             let Some(case0_result) = &case0.result else {
                 errors.push(ErrorNode {
                     range: pattern_range(&case0.pattern, patterns),
-                    message: Box::from("missing result expression after this if case pattern. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
+                    message: Box::from("missing result expression after this if case pattern. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no *] 0 u32 }")
                 });
                 return None;
             };
@@ -7674,7 +7674,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 let Some(case_result) = &case.result else {
                     errors.push(ErrorNode {
                         range: pattern_range(&case.pattern, patterns),
-                        message: Box::from("missing result expression after this if case pattern. Cases are written as  pattern result-expression. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
+                        message: Box::from("missing result expression after this if case pattern. Cases are written as  pattern result-expression. An example of a if is if option { [yes n] n [no *] 0 u32 }")
                     });
                     continue 'checking_case1_up;
                 };
@@ -9025,6 +9025,9 @@ const fn type_variable(name: &'static str) -> Type {
     // TODO to upper or crash
     Type::Variable(Name::from_static(name))
 }
+fn type_tuple(fields: impl IntoIterator<Item = Type>) -> Type {
+    Type::Tuple(fields.into_iter().collect())
+}
 fn type_record(fields: impl IntoIterator<Item = (&'static str, Type)>) -> Type {
     Type::Record(
         fields
@@ -9036,7 +9039,9 @@ fn type_record(fields: impl IntoIterator<Item = (&'static str, Type)>) -> Type {
             .collect(),
     )
 }
-const type_record_empty: Type = Type::Record(vec![]);
+/// preferred type to hold no information
+const type_empty: Type = type_tuple_empty;
+const type_tuple_empty: Type = Type::Tuple(vec![]);
 const type_choice_empty: Type = Type::Choice(vec![]);
 fn type_choice(variants: impl IntoIterator<Item = (&'static str, Type)>) -> Type {
     Type::Choice(
@@ -9075,21 +9080,21 @@ const type_str: Type = Type::CoreConstruct {
 };
 
 fn type_opt(yes: Type) -> Type {
-    type_choice([("no", type_record_empty), ("yes", yes)])
+    type_choice([("no", type_empty), ("yes", yes)])
 }
 fn type_order() -> Type {
     Type::Choice(vec![
         TypeVariant {
             name: Name::from_static("less"),
-            value: type_record_empty,
+            value: type_empty,
         },
         TypeVariant {
             name: Name::from_static("equal"),
-            value: type_record_empty,
+            value: type_empty,
         },
         TypeVariant {
             name: Name::from_static("greater"),
-            value: type_record_empty,
+            value: type_empty,
         },
     ])
 }
@@ -9302,7 +9307,7 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
                 name: "f32-pi",
                 documentation: "Archimedes’ constant π",
                 type_parameters: vec![],
-                parameter_type:  type_record_empty,
+                parameter_type:  type_empty,
                 result_type: type_f32,
             },
             CoreFnInfo {
@@ -9767,7 +9772,7 @@ A less powerful version that preserves the Span is `buf-span-step`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     ("span", type_span(type_variable("Origin"))),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -9792,7 +9797,7 @@ A less powerful version that preserves the Span is `buf-opt-span-step`",
                         "span",
                         type_opt(type_span(type_variable("Origin")))
                     ),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -9815,7 +9820,7 @@ An example can be found in `opt-span-step-while`",
                 type_parameters: vec![],
                 parameter_type: type_record([
                     ("span", type_span(type_variable("Origin"))),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -9854,23 +9859,23 @@ fn next-non-space(
     if
         opt-span-step-while(
             span
-            [up<[down {}]> {}],
+            [up<[down *]> *],
             chars,
             fn(slot slot(_origin) chars buf(_origin char)
             = char buf-remove(chars slot)
             if u32-order(char-to-u32(char) char-to-u32(\" \" char)) {
-            [equal {}] (
+            [equal *] (
                 [going<[done { chars buf(_origin char) non-space char }]> chars]
             )
-            [less {}] [done<[going buf(_origin char)]> { chars chars non-space char }]
-            [greater {}] [done<[going buf(_origin char)]> { chars chars non-space char }]
+            [less *] [done<[going buf(_origin char)]> { chars chars non-space char }]
+            [greater *] [done<[going buf(_origin char)]> { chars chars non-space char }]
             }
         )
     {
     [going _]
-        { non-space [no<opt(char)> {}] after [no<opt(span(_origin)) {}] }
+        { non-space [no<opt(char)> *] after [no<opt(span(_origin)) *] }
     [done { rest span-after done { chars chars non-space non-space } }]
-        { non-space [yes<[no {}]> non-space] after span-after }
+        { non-space [yes<[no *]> non-space] after span-after }
     }
 ```
 Note that `.rest` does not include any slot given to the step function, even the slot that resulted in `[done]`.
@@ -9878,7 +9883,7 @@ Note that `.rest` does not include any slot given to the step function, even the
                 type_parameters: vec![],
                 parameter_type: type_record([
                     ("span", type_opt(type_span(type_variable("Origin")))),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -9907,7 +9912,7 @@ Note that `.rest` does not include any slot given to the step function, even the
                 documentation: "Initialize a `buf` with 0 items and no pre-allocated space.
 Modify with `buf-pre-allocate-at-least`, `buf-add`, `buf-add-array`, `buf-add-unset` etc.",
                 type_parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
-                parameter_type: type_record_empty,
+                parameter_type: type_empty,
                 result_type: type_buf(
                     type_variable("Origin"),
                     type_variable("Item")
@@ -9948,7 +9953,7 @@ use `buf-try-pre-allocate-at-least` instead.",
                     ),
                     ("length", type_u32),
                 ]),
-                result_type: type_record_empty,
+                result_type: type_empty,
             },
             CoreFnInfo {
                 name: "buf-try-pre-allocate-at-least",
@@ -9964,7 +9969,7 @@ A version which only checks for errors behind the scenes is `buf-pre-allocate-at
                     ("length", type_u32),
                 ]),
                 result_type: type_record([
-                    ("out-of-memory", type_opt(type_record_empty))
+                    ("out-of-memory", type_opt(type_empty))
                 ]),
             },
             CoreFnInfo {
@@ -9975,7 +9980,7 @@ It's rarely useful but can reuce idle memory usage for `buf`s that are very unli
 You may also use it to adjust memory usage after `buf-reuse` when the given `Unset-slice` was large",
                 type_parameters: vec![],
                 parameter_type: type_buf(type_variable("Origin"), type_variable("Item")),
-                result_type: type_record_empty,
+                result_type: type_empty,
             },
             CoreFnInfo {
                 name: "buf-insert",
@@ -10131,7 +10136,7 @@ To just switch out an item, use `buf-replace`",
                     ),
                     ("span", type_span(type_variable("Origin"))),
                 ]),
-                result_type: type_record_empty,
+                result_type: type_buf(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-opt-span-reverse",
@@ -10144,7 +10149,7 @@ To just switch out an item, use `buf-replace`",
                     ),
                     ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
-                result_type: type_record_empty,
+                result_type: type_buf(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-span-sort",
@@ -10168,7 +10173,7 @@ Do no rely on a specific order of when items are compared."#,
                         )
                     )
                 ]),
-                result_type: type_record_empty,
+                result_type: type_buf(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-opt-span-sort",
@@ -10192,7 +10197,7 @@ Do no rely on a specific order of when items are compared."#,
                         )
                     )
                 ]),
-                result_type: type_record_empty,
+                result_type: type_buf(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-span-alter",
@@ -10207,7 +10212,7 @@ If your change function needs extra context from the outside, use `buf-span-step
                     ("span", type_span(type_variable("Origin"))),
                     ("item-alter", type_fn(vec![type_variable("Item")], type_variable("Item"))),
                 ]),
-                result_type: type_record_empty,
+                result_type: type_buf(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-opt-span-alter",
@@ -10222,7 +10227,7 @@ If your change function needs extra context from the outside, use `buf-opt-span-
                     ("span", type_opt(type_span(type_variable("Origin")))),
                     ("item-alter", type_fn(vec![type_variable("Item")], type_variable("Item"))),
                 ]),
-                result_type: type_record_empty,
+                result_type: type_buf(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-span-step",
@@ -10238,7 +10243,7 @@ To change every item without any state, use `buf-span-alter`",
                         type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
                     ("span", type_span(type_variable("Origin"))),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -10254,7 +10259,10 @@ To change every item without any state, use `buf-span-alter`",
                         )
                     ),
                 ]),
-                result_type: type_variable("State"),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_variable("State")
+                ]),
             },
             CoreFnInfo {
                 name: "buf-opt-span-step",
@@ -10270,7 +10278,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                         type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
                     ("span", type_opt(type_span(type_variable("Origin")))),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -10286,7 +10294,10 @@ To change every item without any state, use `buf-opt-span-alter`",
                         )
                     ),
                 ]),
-                result_type: type_variable("State"),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_variable("State")
+                ]),
             },
             CoreFnInfo {
                 name: "buf-span-step-while",
@@ -10302,19 +10313,19 @@ fn buf-span-last-negative-i32(
         buf-span-step-while(
             buf
             span
-            [down<[up {}]> {}]
+            [down<[up *]> *]
             {},
             fn({} i i32)
             { item i
               state (
                 if i32-order(i 0 i32) {
-                [less {}] [done<[going {}]> i]
-                [equal {}] [going<[done i32]> {}]
-                [greater {}] [going<[done i32]> {}]
+                [less *] [done<[going *]> i]
+                [equal *] [going<[done i32]> *]
+                [greater *] [going<[done i32]> *]
                 }
             }
         )
-    [going {}] [no<opt(i32)> {}]
+    [going *] [no<opt(i32)> *]
     [done i] [yes<opt(i32)> i]
 ```
 If you want to step through all items instead, use `buf-span-step`.
@@ -10327,7 +10338,7 @@ To change every item without any state, use `buf-span-alter`",
                         type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
                     ("span", type_span(type_variable("Origin"))),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -10349,19 +10360,12 @@ To change every item without any state, use `buf-span-alter`",
                         )
                     ),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
-                    (
-                        "state",
-                        type_choice([
-                            ("going", type_variable("State")),
-                            ("done", type_variable("done")),
-                        ])
-                    )
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_choice([
+                        ("going", type_variable("State")),
+                        ("done", type_variable("done")),
+                    ])
                 ]),
             },
             CoreFnInfo {
@@ -10378,7 +10382,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                         type_buf(type_variable("Origin"), type_variable("Item")),
                     ),
                     ("span", type_opt(type_span(type_variable("Origin")))),
-                    ("direction", type_choice([("up", type_record_empty), ("down", type_record_empty)])),
+                    ("direction", type_choice([("up", type_empty), ("down", type_empty)])),
                     ("state", type_variable("State")),
                     (
                         "step",
@@ -10400,19 +10404,12 @@ To change every item without any state, use `buf-opt-span-alter`",
                         )
                     ),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("Origin")))),
-                    (
-                        "state",
-                        type_choice([
-                            ("going", type_variable("State")),
-                            ("done", type_variable("done")),
-                        ])
-                    )
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_choice([
+                        ("going", type_variable("State")),
+                        ("done", type_variable("done")),
+                    ])
                 ]),
             },
             CoreFnInfo {
@@ -10427,12 +10424,9 @@ To change every item without any state, use `buf-opt-span-alter`",
                     ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_variable("Item")),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin")))
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10447,54 +10441,9 @@ To change every item without any state, use `buf-opt-span-alter`",
                     ("span", type_span(type_variable("Origin"))),
                     ("new", type_variable("Item")),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin")))
-                ]),
-            },
-            CoreFnInfo {
-                name: "buf-span-add-array",
-                documentation: "Attach a given `Array` of items at the end of the span.
-This can remove a bunch of noise compared to chaining `buf-span-add` operations",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
-                    ("new", type_array(type_variable("Item"), type_variable("record"))),
-                ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin")))
-                ]),
-            },
-            CoreFnInfo {
-                name: "buf-opt-span-add-array",
-                documentation: "Attach a given `Array` of items at the end of the span.
-This can remove a bunch of noise compared to chaining `buf-span-add` operations",
-                type_parameters: vec![],
-                parameter_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("Origin")))),
-                    ("new", type_array(type_variable("Item"), type_variable("record"))),
-                ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin")))
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10509,12 +10458,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_str),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin")))
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10529,12 +10475,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_span(type_variable("Origin"))),
                     ("new", type_str),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10549,12 +10492,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_span(type_variable("Origin"))),
                     ("new", type_u32),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10569,12 +10509,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_u32),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10589,12 +10526,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_span(type_variable("Origin"))),
                     ("new", type_i32),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10609,12 +10543,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_i32),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10629,12 +10560,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_span(type_variable("Origin"))),
                     ("new", type_f32),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10649,12 +10577,9 @@ This can remove a bunch of noise compared to chaining `buf-span-add` operations"
                     ("span", type_opt(type_span(type_variable("Origin")))),
                     ("new", type_f32),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_char),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_char),
+                    type_span(type_variable("Origin"))
                 ]),
             },
             CoreFnInfo {
@@ -10669,12 +10594,9 @@ Try to use sparingly",
                     ),
                     ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("Origin")))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_opt(type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
@@ -10688,12 +10610,9 @@ Try to use sparingly",
                     ),
                     ("span", type_span(type_variable("Origin"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin")),
                 ]),
             },
             CoreFnInfo {
@@ -10707,12 +10626,9 @@ Try to use sparingly",
                     ),
                     ("span", type_span(type_variable("Origin"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin")),
                 ]),
             },
             CoreFnInfo {
@@ -10726,12 +10642,9 @@ Try to use sparingly",
                     ),
                     ("span", type_opt(type_span(type_variable("Origin")))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("Origin")))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_opt(type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
@@ -10766,12 +10679,9 @@ fn Buf-span-add
                     ("start", type_span(type_variable("Origin"))),
                     ("end", type_span(type_variable("Origin"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin")),
                 ]),
             },
             CoreFnInfo {
@@ -10788,12 +10698,9 @@ The most common use case is re-combining spans that have been split up with e.g.
                     ("start", type_span(type_variable("Origin"))),
                     ("end", type_opt(type_span(type_variable("Origin")))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin")),
                 ]),
             },
             CoreFnInfo {
@@ -10810,12 +10717,9 @@ The most common use case is re-combining spans that have been split up with e.g.
                     ("start", type_opt(type_span(type_variable("Origin")))),
                     ("end", type_span(type_variable("Origin"))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_span(type_variable("Origin"))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin")),
                 ]),
             },
             CoreFnInfo {
@@ -10831,12 +10735,9 @@ If start and end spans are not already connected, both are appended at the end a
                     ("start", type_opt(type_span(type_variable("Origin")))),
                     ("end", type_opt(type_span(type_variable("Origin")))),
                 ]),
-                result_type: type_record([
-                    (
-                        "buf",
-                        type_buf(type_variable("Origin"), type_variable("Item")),
-                    ),
-                    ("span", type_opt(type_span(type_variable("Origin")))),
+                result_type: type_tuple([
+                    type_buf(type_variable("Origin"), type_variable("Item")),
+                    type_opt(type_span(type_variable("Origin"))),
                 ]),
             },
             CoreFnInfo {
@@ -11006,13 +10907,13 @@ When building new strings at runtime, use functions like `buf-opt-span-add-str-c
                     "Result of a binary comparison.
 ```slug
 u32-order(12 u32 20 u32)
-# = [less<order> {}]
+# = [less<order> *]
 
 fn u32-max(a u32 b u32) u32
     if u32-order(a b) {
-    [less {}] b
-    [equal {}] b
-    [greater {}] a
+    [less *] b
+    [equal *] b
+    [greater *] a
     }
 ```",
                 )),
