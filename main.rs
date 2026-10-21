@@ -12,7 +12,7 @@ struct ProjectState<Expressions, Patterns> {
     syntax: slug::SyntaxProject<Expressions, Patterns>,
     type_aliases: std::collections::HashMap<slug::Name, slug::CheckedTypeAlias>,
     fns: std::collections::HashMap<slug::Name, slug::CheckedProjectFn>,
-    ifs: std::collections::HashMap<lsp_types::Position, slug::CheckedIf>,
+    queries: std::collections::HashMap<lsp_types::Position, slug::CheckedQuery>,
     spread_records: std::collections::HashMap<lsp_types::Position, Vec<slug::Name>>,
 }
 fn main() {
@@ -930,7 +930,7 @@ fn initialize_project_state_from_source<Expressions, Patterns>(
         source: source,
         type_aliases: checked_project.checked_type_aliases,
         fns: checked_project.checked_project_fns,
-        ifs: checked_project.checked_ifs,
+        queries: checked_project.checked_queries,
         spread_records: checked_project.checked_spread_records,
         syntax: parsed_project,
     }
@@ -966,7 +966,7 @@ fn respond_to_hover<Expressions, Patterns>(
     let Some(symbol) = slug::project_symbol_at_position(
         &project_state.syntax,
         &project_state.type_aliases,
-        &project_state.ifs,
+        &project_state.queries,
         &project_state.spread_records,
         hover_arguments.text_document_position_params.position,
         &state.syntax_expressions,
@@ -1069,7 +1069,7 @@ fn respond_to_goto_definition<Expressions, Patterns>(
     let Some(symbol) = slug::project_symbol_at_position(
         &project_state.syntax,
         &project_state.type_aliases,
-        &project_state.ifs,
+        &project_state.queries,
         &project_state.spread_records,
         goto_definition_arguments
             .text_document_position_params
@@ -1110,7 +1110,7 @@ fn respond_to_prepare_rename<Expressions, Patterns>(
     let Some(symbol) = slug::project_symbol_at_position(
         &project_state.syntax,
         &project_state.type_aliases,
-        &project_state.ifs,
+        &project_state.queries,
         &project_state.spread_records,
         prepare_rename_arguments
             .text_document_position_params
@@ -1174,7 +1174,7 @@ fn respond_to_rename<Expressions, Patterns>(
     let Some(symbol) = slug::project_symbol_at_position(
         &project_state.syntax,
         &project_state.type_aliases,
-        &project_state.ifs,
+        &project_state.queries,
         &project_state.spread_records,
         rename_arguments.text_document_position_params.position,
         &state.syntax_expressions,
@@ -1232,7 +1232,7 @@ fn respond_to_references<Expressions, Patterns>(
     let Some(symbol) = slug::project_symbol_at_position(
         &project_state.syntax,
         &project_state.type_aliases,
-        &project_state.ifs,
+        &project_state.queries,
         &project_state.spread_records,
         references_arguments.text_document_position_params.position,
         &state.syntax_expressions,
@@ -1321,7 +1321,7 @@ fn respond_to_completion<Expressions, Patterns>(
     let Some(symbol) = slug::project_symbol_at_position(
         &project_state.syntax,
         &project_state.type_aliases,
-        &project_state.ifs,
+        &project_state.queries,
         &project_state.spread_records,
         completion_arguments.text_document_position_params.position,
         &state.syntax_expressions,

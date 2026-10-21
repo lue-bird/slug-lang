@@ -130,7 +130,6 @@ pub struct SyntaxAngledTypeArguments {
 }
 #[derive(Debug)]
 pub enum SyntaxExpression<Expressions, Patterns> {
-    // TODO add Deconstruct
     Number {
         value: WithStartPosition<Box<str>>,
         type_: Option<SyntaxType>,
@@ -176,6 +175,12 @@ pub enum SyntaxExpression<Expressions, Patterns> {
     Commented {
         comments: SyntaxComments,
         expression: Option<core::Slot<Expressions>>,
+    },
+    Destruct {
+        equals_start: lsp_types::Position,
+        pattern: Option<SyntaxPattern<Patterns>>,
+        queried: Option<core::Slot<Expressions>>,
+        result: Option<core::Slot<Expressions>>,
     },
     If {
         if_keyword_start: lsp_types::Position,
@@ -544,10 +549,10 @@ pub fn expression_start<Expressions, Patterns>(
             comments,
             expression: _,
         } => comments.line0.start,
+        SyntaxExpression::Destruct { equals_start, .. } => *equals_start,
         SyntaxExpression::If {
-            if_keyword_start: question_mark_start,
-            ..
-        } => *question_mark_start,
+            if_keyword_start, ..
+        } => *if_keyword_start,
     }
 }
 pub fn expression_end<Expressions, Patterns>(
@@ -656,6 +661,25 @@ pub fn expression_end<Expressions, Patterns>(
             .as_ref()
             .map(|inner| expression_end(expressions.item(inner), expressions, patterns))
             .unwrap_or_else(|| comments_end(comments)),
+        SyntaxExpression::Destruct {
+            equals_start,
+            pattern,
+            queried,
+            result,
+        } => result
+            .as_ref()
+            .map(|result| expression_end(expressions.item(result), expressions, patterns))
+            .or_else(|| {
+                queried
+                    .as_ref()
+                    .map(|queried| expression_end(expressions.item(queried), expressions, patterns))
+            })
+            .or_else(|| {
+                pattern
+                    .as_ref()
+                    .map(|pattern| pattern_end(pattern, patterns))
+            })
+            .unwrap_or_else(|| symbol_end(*equals_start, "=")),
         SyntaxExpression::If {
             if_keyword_start,
             queried,
@@ -1443,6 +1467,7 @@ pub fn parse_expression<Expressions, Patterns>(
         .or_else(|| parse_expression_variant(state, expressions, patterns))
         .or_else(|| parse_expression_commented(state, expressions, patterns))
         .or_else(|| parse_expression_record(state, expressions, patterns))
+        .or_else(|| parse_expression_destruct(state, expressions, patterns))
         .or_else(|| parse_expression_if(state, expressions, patterns))
 }
 fn parse_expression_record<Expressions, Patterns>(
@@ -1717,12 +1742,33 @@ fn parse_expression_fn<Expressions, Patterns>(
         result: result.map(|result| expressions.insert(result)),
     })
 }
+fn parse_expression_destruct<Expressions, Patterns>(
+    state: &mut ParseState,
+    expressions: &mut core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
+    patterns: &mut core::Buf<Patterns, SyntaxPattern<Patterns>>,
+) -> Option<SyntaxExpression<Expressions, Patterns>> {
+    let Some(equals_start) = parse_symbol_as_start(state, "=") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    let pattern = parse_if_pattern(state, patterns);
+    parse_slug_whitespace(state);
+    let queried = parse_expression(state, expressions, patterns);
+    parse_slug_whitespace(state);
+    let result = parse_expression(state, expressions, patterns);
+    Some(SyntaxExpression::Destruct {
+        equals_start,
+        pattern,
+        queried: queried.map(|queried| expressions.insert(queried)),
+        result: result.map(|queried| expressions.insert(queried)),
+    })
+}
 fn parse_expression_if<Expressions, Patterns>(
     state: &mut ParseState,
     expressions: &mut core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &mut core::Buf<Patterns, SyntaxPattern<Patterns>>,
 ) -> Option<SyntaxExpression<Expressions, Patterns>> {
-    let Some(question_mark_start) = parse_symbol_as_start(state, "?") else {
+    let Some(if_keyword_start) = parse_symbol_as_start(state, "if") else {
         return None;
     };
     parse_slug_whitespace(state);
@@ -1737,7 +1783,7 @@ fn parse_expression_if<Expressions, Patterns>(
     }
     let closed_curly_start = parse_symbol_as_start(state, "}");
     Some(SyntaxExpression::If {
-        if_keyword_start: question_mark_start,
+        if_keyword_start,
         queried: queried.map(|queried| expressions.insert(queried)),
         open_curly_start,
         cases: cases,
@@ -2084,7 +2130,7 @@ Choose a different ty name.",
         std::collections::HashMap::new();
     let mut checked_local_fns: std::collections::HashMap<lsp_types::Position, CheckedLocalFn> =
         std::collections::HashMap::new();
-    let mut checked_ifs: std::collections::HashMap<lsp_types::Position, CheckedIf> =
+    let mut checked_queries: std::collections::HashMap<lsp_types::Position, CheckedQuery> =
         std::collections::HashMap::new();
     let mut checked_spread_records: std::collections::HashMap<lsp_types::Position, Vec<Name>> =
         std::collections::HashMap::new();
@@ -2127,7 +2173,7 @@ Choose a different ty name.",
                     project_fn,
                     &mut checked_calls,
                     &mut checked_local_fns,
-                    &mut checked_ifs,
+                    &mut checked_queries,
                     &mut checked_spread_records,
                     &mut records_used,
                     &mut choices_used,
@@ -2147,7 +2193,7 @@ Choose a different ty name.",
         checked_project_fns: checked_project_fns,
         checked_calls: checked_calls,
         checked_local_fns: checked_local_fns,
-        checked_ifs: checked_ifs,
+        checked_queries: checked_queries,
         checked_spread_records: checked_spread_records,
     }
 }
@@ -2168,7 +2214,7 @@ pub struct CheckedSyntaxProject<'a, Expressions, Patterns> {
     pub checked_project_fns: std::collections::HashMap<Name, CheckedProjectFn>,
     pub checked_calls: std::collections::HashMap<lsp_types::Position, CheckedCall>,
     pub checked_local_fns: std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
-    pub checked_ifs: std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    pub checked_queries: std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     pub checked_spread_records: std::collections::HashMap<lsp_types::Position, Vec<Name>>,
 }
 fn syntax_type_connect_type_names_in_graph_from(
@@ -2349,6 +2395,29 @@ fn syntax_expression_connect_fns_in_graph_from<Expressions, Patterns>(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(expression),
+                    project_fn_graph,
+                );
+            }
+        }
+        SyntaxExpression::Destruct {
+            equals_start: _,
+            pattern: _,
+            queried,
+            result,
+        } => {
+            if let Some(queried) = queried {
+                syntax_expression_connect_fns_in_graph_from(
+                    project_fn_graph_node_by_name,
+                    expressions,
+                    expressions.item(queried),
+                    project_fn_graph,
+                );
+            }
+            if let Some(result) = result {
+                syntax_expression_connect_fns_in_graph_from(
+                    project_fn_graph_node_by_name,
+                    expressions,
+                    expressions.item(result),
                     project_fn_graph,
                 );
             }
@@ -2626,11 +2695,10 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
     project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
-
     project_fn: SyntaxProjectFnInfo<'a, Expressions, Patterns>,
     checked_calls: &mut std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &mut std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
-    checked_ifs: &mut std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &mut std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
@@ -2685,7 +2753,7 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
     };
     let mut parameter_introduced_variables = std::collections::HashMap::new();
     for syntax_parameter in project_fn.parameters {
-        syntax_if_pattern_variables_fold(
+        syntax_parameter_pattern_variables_fold(
             syntax_parameter,
             (),
             &mut |(), name, type_| {
@@ -2710,7 +2778,7 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
         syntax_result,
         checked_calls,
         checked_local_fns,
-        checked_ifs,
+        checked_queries,
         checked_spread_records,
         records_used,
         choices_used,
@@ -3774,7 +3842,7 @@ pub fn checked_project_to_zig<Expressions, Patterns>(
         checked_project_fns,
         checked_calls,
         checked_local_fns,
-        checked_ifs,
+        checked_queries,
         checked_spread_records,
     }: &CheckedSyntaxProject<Expressions, Patterns>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
@@ -3819,7 +3887,7 @@ pub fn checked_project_to_zig<Expressions, Patterns>(
                 checked_project_fns,
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 expressions,
                 patterns,
@@ -3910,7 +3978,7 @@ fn syntax_project_fn_to_zig<Expressions, Patterns>(
     project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
-    checked_ifs: &std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
@@ -3986,7 +4054,7 @@ fn syntax_project_fn_to_zig<Expressions, Patterns>(
             patterns,
             checked_calls,
             checked_local_fns,
-            checked_ifs,
+            checked_queries,
             checked_spread_records,
             &mut parameter_introduced_variables,
             syntax_result,
@@ -4137,7 +4205,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
 
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
-    checked_ifs: &std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
 
@@ -4347,7 +4415,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                     patterns,
                     checked_calls,
                     checked_local_fns,
-                    checked_ifs,
+                    checked_queries,
                     checked_spread_records,
                     local_variables,
                     argument,
@@ -4420,7 +4488,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                 patterns,
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 local_variables,
                 value,
@@ -4553,7 +4621,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                         patterns,
                         checked_calls,
                         checked_local_fns,
-                        checked_ifs,
+                        checked_queries,
                         checked_spread_records,
                         &mut parameter_introduced_variables,
                         expressions.item(result),
@@ -4610,7 +4678,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                             patterns,
                             checked_calls,
                             checked_local_fns,
-                            checked_ifs,
+                            checked_queries,
                             checked_spread_records,
                             local_variables,
                             value,
@@ -4650,7 +4718,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                 patterns,
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 local_variables,
                 expressions.item(expression),
@@ -4658,31 +4726,27 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                 return_context,
             );
         }
-        SyntaxExpression::If {
-            if_keyword_start: question_mark_start,
+
+        SyntaxExpression::Destruct {
+            equals_start,
+            pattern,
             queried,
-            open_curly_start: _,
-            cases,
-            closed_curly_start: _,
+            result,
         } => {
-            let Some(checked_if) = checked_ifs.get(question_mark_start) else {
-                zig_incomplete_expression(output);
-                return;
-            };
             let queried_variable_name = {
                 let mut queried_variable_name = String::new();
                 use std::fmt::Write as _;
                 queried_variable_name.push_str("@\"%queried:");
-                _ = write!(queried_variable_name, "{}", question_mark_start.line);
+                _ = write!(queried_variable_name, "{}", equals_start.line);
                 queried_variable_name.push(':');
-                _ = write!(queried_variable_name, "{}", question_mark_start.character);
+                _ = write!(queried_variable_name, "{}", equals_start.character);
                 queried_variable_name.push('"');
                 queried_variable_name
             };
             let label = match return_context {
                 ZigReturnContext::Expression => {
-                    zig_block_start(output, *question_mark_start);
-                    *question_mark_start
+                    zig_block_start(output, *equals_start);
+                    *equals_start
                 }
                 ZigReturnContext::StatementsFollowedByBreak(label) => label,
             };
@@ -4702,7 +4766,97 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                         patterns,
                         checked_calls,
                         checked_local_fns,
-                        checked_ifs,
+                        checked_queries,
+                        checked_spread_records,
+                        local_variables,
+                        expressions.item(queried),
+                        function_scope_start,
+                        ZigReturnContext::Expression,
+                    );
+                }
+            }
+            output.push_str(";\n");
+            if let Some(pattern) = pattern {
+                syntax_pattern_to_zig_destructuring(
+                    output,
+                    pattern,
+                    &queried_variable_name,
+                    local_variables,
+                    checked_spread_records,
+                    patterns,
+                );
+            }
+            match result {
+                None => {
+                    zig_incomplete_expression(output);
+                }
+                Some(result) => {
+                    syntax_expression_to_zig(
+                        output,
+                        type_aliases,
+                        project_fns,
+                        expressions,
+                        patterns,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
+                        checked_spread_records,
+                        local_variables,
+                        expressions.item(result),
+                        function_scope_start,
+                        ZigReturnContext::StatementsFollowedByBreak(label),
+                    );
+                }
+            }
+            if let ZigReturnContext::Expression = return_context {
+                zig_block_end(output);
+            }
+        }
+        SyntaxExpression::If {
+            if_keyword_start,
+            queried,
+            open_curly_start: _,
+            cases,
+            closed_curly_start: _,
+        } => {
+            let Some(checked_query) = checked_queries.get(if_keyword_start) else {
+                zig_incomplete_expression(output);
+                return;
+            };
+            let queried_variable_name = {
+                let mut queried_variable_name = String::new();
+                use std::fmt::Write as _;
+                queried_variable_name.push_str("@\"%queried:");
+                _ = write!(queried_variable_name, "{}", if_keyword_start.line);
+                queried_variable_name.push(':');
+                _ = write!(queried_variable_name, "{}", if_keyword_start.character);
+                queried_variable_name.push('"');
+                queried_variable_name
+            };
+            let label = match return_context {
+                ZigReturnContext::Expression => {
+                    zig_block_start(output, *if_keyword_start);
+                    *if_keyword_start
+                }
+                ZigReturnContext::StatementsFollowedByBreak(label) => label,
+            };
+            output.push_str("const ");
+            output.push_str(&queried_variable_name);
+            output.push_str(" = ");
+            match queried {
+                None => {
+                    zig_incomplete_expression(output);
+                }
+                Some(queried) => {
+                    syntax_expression_to_zig(
+                        output,
+                        type_aliases,
+                        project_fns,
+                        expressions,
+                        patterns,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
                         checked_spread_records,
                         local_variables,
                         expressions.item(queried),
@@ -4713,7 +4867,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             }
             output.push_str(";\n");
             for (case_index, case) in cases.iter().enumerate() {
-                if !checked_if.invalid_case_indexes.contains(&case_index) {
+                if !checked_query.invalid_case_indexes.contains(&case_index) {
                     if cases.len() >= 2 {
                         output.push_str("if (");
                         syntax_pattern_to_zig_matches_condition(
@@ -4747,7 +4901,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                                 patterns,
                                 checked_calls,
                                 checked_local_fns,
-                                checked_ifs,
+                                checked_queries,
                                 checked_spread_records,
                                 &mut case_local_variables,
                                 case_result,
@@ -5001,7 +5155,7 @@ pub fn checked_project_to_js<Expressions, Patterns>(
         checked_project_fns,
         checked_calls: _,
         checked_local_fns: _,
-        checked_ifs,
+        checked_queries,
         checked_spread_records,
     }: &CheckedSyntaxProject<Expressions, Patterns>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
@@ -5043,7 +5197,7 @@ pub fn checked_project_to_js<Expressions, Patterns>(
             syntax_project_fn_to_js(
                 &mut output,
                 checked_type_aliases,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 expressions,
                 patterns,
@@ -5084,7 +5238,7 @@ fn project_type_alias_to_js(
 fn syntax_project_fn_to_js<Expressions, Patterns>(
     output: &mut String,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-    checked_ifs: &std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
@@ -5155,7 +5309,7 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
             type_aliases,
             expressions,
             patterns,
-            checked_ifs,
+            checked_queries,
             checked_spread_records,
             &mut parameter_introduced_variables,
             syntax_result,
@@ -5352,7 +5506,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
 
-    checked_ifs: &std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
 
@@ -5470,7 +5624,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     type_aliases,
                     expressions,
                     patterns,
-                    checked_ifs,
+                    checked_queries,
                     checked_spread_records,
                     local_variables,
                     argument,
@@ -5511,7 +5665,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 type_aliases,
                 expressions,
                 patterns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 local_variables,
                 value,
@@ -5559,7 +5713,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     type_aliases,
                     expressions,
                     patterns,
-                    checked_ifs,
+                    checked_queries,
                     checked_spread_records,
                     &mut parameter_introduced_variables,
                     result,
@@ -5585,7 +5739,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                         type_aliases,
                         expressions,
                         patterns,
-                        checked_ifs,
+                        checked_queries,
                         checked_spread_records,
                         local_variables,
                         value,
@@ -5625,7 +5779,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                         type_aliases,
                         expressions,
                         patterns,
-                        checked_ifs,
+                        checked_queries,
                         checked_spread_records,
                         local_variables,
                         expressions.item(expression),
@@ -5634,14 +5788,74 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 }
             }
         }
+
+        SyntaxExpression::Destruct {
+            equals_start: _,
+            pattern,
+            queried,
+            result,
+        } => {
+            if let Some(queried) = queried {
+                let queried = expressions.item(queried);
+                let queried_scope_start = expression_start(queried);
+                let queried_variable_name = {
+                    let mut queried_variable_name = String::new();
+                    js_scope_result_variable(&mut queried_variable_name, queried_scope_start);
+                    queried_variable_name
+                };
+                output.push_str("let ");
+                output.push_str(&queried_variable_name);
+                output.push_str(";\n");
+                syntax_expression_to_js(
+                    output,
+                    type_aliases,
+                    expressions,
+                    patterns,
+                    checked_queries,
+                    checked_spread_records,
+                    local_variables,
+                    queried,
+                    queried_scope_start,
+                );
+                output.push_str(";\n");
+                if let Some(pattern) = pattern {
+                    syntax_pattern_to_js_destructuring(
+                        output,
+                        pattern,
+                        &queried_variable_name,
+                        local_variables,
+                        checked_spread_records,
+                        patterns,
+                    );
+                }
+            }
+            match result {
+                None => {
+                    js_incomplete_statement();
+                }
+                Some(result) => {
+                    syntax_expression_to_js(
+                        output,
+                        type_aliases,
+                        expressions,
+                        patterns,
+                        checked_queries,
+                        checked_spread_records,
+                        local_variables,
+                        expressions.item(result),
+                        scope_start,
+                    );
+                }
+            }
+        }
         SyntaxExpression::If {
-            if_keyword_start: question_mark_start,
+            if_keyword_start,
             queried,
             open_curly_start: _,
             cases,
             closed_curly_start: _,
         } => {
-            let Some(checked_if) = checked_ifs.get(question_mark_start) else {
+            let Some(checked_query) = checked_queries.get(if_keyword_start) else {
                 js_incomplete_statement();
                 return;
             };
@@ -5664,7 +5878,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 type_aliases,
                 expressions,
                 patterns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 local_variables,
                 queried,
@@ -5672,7 +5886,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             );
             output.push_str(";\n");
             for (case_index, case) in cases.iter().enumerate() {
-                if !checked_if.invalid_case_indexes.contains(&case_index) {
+                if !checked_query.invalid_case_indexes.contains(&case_index) {
                     if cases.len() >= 2 {
                         output.push_str("if (");
                         syntax_pattern_to_js_matches_condition(
@@ -5703,7 +5917,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                                 type_aliases,
                                 expressions,
                                 patterns,
-                                checked_ifs,
+                                checked_queries,
                                 checked_spread_records,
                                 &mut case_local_variables,
                                 case_result,
@@ -5884,7 +6098,7 @@ fn syntax_expression_check<'a, Expressions, Patterns>(
     expression: &'a SyntaxExpression<Expressions, Patterns>,
     checked_calls: &mut std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &mut std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
-    checked_ifs: &mut std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &mut std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
@@ -6189,7 +6403,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     syntax_argument,
                     checked_calls,
                     checked_local_fns,
-                    checked_ifs,
+                    checked_queries,
                     checked_spread_records,
                     records_used,
                     choices_used,
@@ -6354,7 +6568,7 @@ If there should only ever by one variant, using a record with a single field is 
                 value,
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 records_used,
                 choices_used,
@@ -6459,7 +6673,7 @@ If there should only ever by one variant, using a record with a single field is 
                 expressions.item(result),
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 records_used,
                 choices_used,
@@ -6513,7 +6727,7 @@ If there should only ever by one variant, using a record with a single field is 
                                 field_value,
                                 checked_calls,
                                 checked_local_fns,
-                                checked_ifs,
+                                checked_queries,
                                 checked_spread_records,
                                 records_used,
                                 choices_used,
@@ -6562,14 +6776,148 @@ If there should only ever by one variant, using a record with a single field is 
                 expressions.item(expression),
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 records_used,
                 choices_used,
             ),
         },
+        SyntaxExpression::Destruct {
+            equals_start,
+            pattern,
+            queried,
+            result,
+        } => {
+            let Some(queried) = queried else {
+                errors.push(ErrorNode {
+                    range: symbol_range(*equals_start, "="),
+                    message: Box::from("missing queried expression after this if keyword. An example of a destruct is = { some x field y } function(z)  result-expression")
+                });
+                return None;
+            };
+            let queried = expressions.item(queried);
+            let Some(checked_queried_type) = syntax_expression_check(
+                errors,
+                type_aliases,
+                project_fns,
+                expressions,
+                patterns,
+                local_variables,
+                queried,
+                checked_calls,
+                checked_local_fns,
+                checked_queries,
+                checked_spread_records,
+                records_used,
+                choices_used,
+            ) else {
+                return None;
+            };
+            let Some(pattern) = pattern else {
+                errors.push(ErrorNode {
+                    range: symbol_range(*equals_start, "="),
+                    message: Box::from("missing pattern after this destruct =. An example of a destruct is = { some x field y } function(z)  result-expression")
+                });
+                return None;
+            };
+            let Some(result) = result else {
+                errors.push(ErrorNode {
+                    range: pattern_range(pattern, patterns),
+                    message: Box::from("missing result expression after this destruct. An example of a destruct is = { some x field y } function(z)  result-expression")
+                });
+                return None;
+            };
+            let mut pattern_introduced_variables: std::collections::HashMap<
+                &Name,
+                CheckedLocalVariable,
+            > = std::collections::HashMap::new();
+            syntax_if_case_pattern_check(
+                pattern,
+                &checked_queried_type,
+                errors,
+                &mut pattern_introduced_variables,
+                patterns,
+                local_variables,
+                checked_spread_records,
+            );
+            let mut remaining_specific_pattern_catch_possibilities = Vec::new();
+            type_to_possible_specific_pattern_catches(
+                &checked_queried_type,
+                &mut remaining_specific_pattern_catch_possibilities,
+            );
+            specific_pattern_catches_remove_those_matched_by_pattern(
+                &mut remaining_specific_pattern_catch_possibilities,
+                pattern,
+                patterns,
+                checked_spread_records,
+            );
+            local_variables.extend(
+                pattern_introduced_variables
+                    .iter()
+                    .map(|(binding, info)| (*binding, info.clone())),
+            );
+            let Some(checked_result_type) = syntax_expression_check(
+                errors,
+                type_aliases,
+                project_fns,
+                expressions,
+                patterns,
+                local_variables,
+                expressions.item(result),
+                checked_calls,
+                checked_local_fns,
+                checked_queries,
+                checked_spread_records,
+                records_used,
+                choices_used,
+            ) else {
+                return None;
+            };
+            for (case0_pattern_introduced_variable, case0_pattern_introduced_variable_origin) in
+                pattern_introduced_variables
+            {
+                if local_variables
+                    .remove(case0_pattern_introduced_variable)
+                    .is_some()
+                {
+                    errors.push(error_introduced_pattern_variable_is_unused(
+                        case0_pattern_introduced_variable_origin.origin_start,
+                        case0_pattern_introduced_variable,
+                    ));
+                }
+            }
+            if !remaining_specific_pattern_catch_possibilities.is_empty() {
+                let mut error_message = "inexhaustive destruct pattern. Missing cases:".to_string();
+                for remaining_specific_pattern_catch_possibility in
+                    &remaining_specific_pattern_catch_possibilities
+                {
+                    error_message.push_str("\n    - ");
+                    specific_pattern_catch_format(
+                        remaining_specific_pattern_catch_possibility,
+                        &mut error_message,
+                    );
+                }
+                errors.push(ErrorNode {
+                    range: symbol_range(*equals_start, "="),
+                    message: (error_message + "
+
+A destruct pattern must cover all possible cases, otherwise the program would need to crash if such a value was matched on.
+If you want to handle cases in separate branches, use an if like  if option { [yes n] n [no {}] 0 u32 }"
+                        ).into_boxed_str(),
+                });
+            }
+            checked_queries.insert(
+                *equals_start,
+                CheckedQuery {
+                    is_exhaustive: remaining_specific_pattern_catch_possibilities.is_empty(),
+                    queried_type: checked_queried_type,
+                    invalid_case_indexes: Vec::new(),
+                },
+            );
+            Some(checked_result_type)
+        }
         SyntaxExpression::If {
-            if_keyword_start: question_mark_start,
+            if_keyword_start,
             queried,
             open_curly_start: _,
             cases,
@@ -6577,7 +6925,7 @@ If there should only ever by one variant, using a record with a single field is 
         } => {
             let Some(queried) = queried else {
                 errors.push(ErrorNode {
-                    range: symbol_range(*question_mark_start, "if"),
+                    range: symbol_range(*if_keyword_start, "if"),
                     message: Box::from("missing queried expression after this if keyword. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
                 });
                 return None;
@@ -6585,7 +6933,7 @@ If there should only ever by one variant, using a record with a single field is 
             let queried = expressions.item(queried);
             let Some((case0, case1_up)) = cases.split_first() else {
                 errors.push(ErrorNode {
-                    range: symbol_range(*question_mark_start, "?"),
+                    range: symbol_range(*if_keyword_start, "if"),
                     message: Box::from("missing case(s) after the queried expression. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no {}] 0 u32 }")
                 });
                 return None;
@@ -6600,7 +6948,7 @@ If there should only ever by one variant, using a record with a single field is 
                 queried,
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 records_used,
                 choices_used,
@@ -6639,14 +6987,13 @@ If there should only ever by one variant, using a record with a single field is 
                 checked_spread_records,
             );
 
-            // can be optimized: when only 1 case exists (very common), don't clone
             let mut case0_result_local_variables = local_variables.clone();
             case0_result_local_variables.extend(
                 case0_pattern_introduced_variables
                     .iter()
                     .map(|(binding, info)| (*binding, info.clone())),
             );
-            let Some(checked_if_result_type) = syntax_expression_check(
+            let Some(checked_query_result_type) = syntax_expression_check(
                 errors,
                 type_aliases,
                 project_fns,
@@ -6656,7 +7003,7 @@ If there should only ever by one variant, using a record with a single field is 
                 case0_result,
                 checked_calls,
                 checked_local_fns,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 records_used,
                 choices_used,
@@ -6736,7 +7083,7 @@ If there should only ever by one variant, using a record with a single field is 
                     case_result,
                     checked_calls,
                     checked_local_fns,
-                    checked_ifs,
+                    checked_queries,
                     checked_spread_records,
                     records_used,
                     choices_used,
@@ -6798,7 +7145,7 @@ If you do not need to use this variable in that case, use any of the -rid functi
                     }
                 }
                 if let Some(match_result_case_result_type_diff) =
-                    type_diff(&checked_if_result_type, &checked_case_result_type)
+                    type_diff(&checked_query_result_type, &checked_case_result_type)
                 {
                     place_expression_type_diff_errors(
                         errors,
@@ -6826,7 +7173,7 @@ If you do not need to use this variable in that case, use any of the -rid functi
                     error_message.push(']');
                 }
                 errors.push(ErrorNode {
-                    range: symbol_range(*question_mark_start, "?"),
+                    range: symbol_range(*if_keyword_start, "?"),
                     message: (error_message + "
 
 A pattern match must cover all possible cases, otherwise the program would need to crash if such a value was matched on.
@@ -6836,15 +7183,15 @@ If not, add patterns for the cases above"
                 });
             }
             *local_variables = case0_result_local_variables;
-            checked_ifs.insert(
-                *question_mark_start,
-                CheckedIf {
+            checked_queries.insert(
+                *if_keyword_start,
+                CheckedQuery {
                     is_exhaustive: remaining_specific_pattern_catch_possibilities.is_empty(),
                     queried_type: checked_queried_type,
                     invalid_case_indexes: invalid_case_indexes,
                 },
             );
-            Some(checked_if_result_type)
+            Some(checked_query_result_type)
         }
     }
 }
@@ -6869,7 +7216,7 @@ pub struct CheckedLocalFn {
     pub parameter_types: Vec<Type>,
     pub result_type: Type,
 }
-pub struct CheckedIf {
+pub struct CheckedQuery {
     pub is_exhaustive: bool,
     pub queried_type: Type,
     pub invalid_case_indexes: Vec<usize>,
@@ -7736,6 +8083,23 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                 place_expression_type_diff_errors(
                     errors,
                     expressions.item(after_comments),
+                    type_diff,
+                    expressions,
+                    patterns,
+                    checked_spread_records,
+                );
+            }
+        }
+        SyntaxExpression::Destruct {
+            equals_start: _,
+            pattern: _,
+            queried: _,
+            result,
+        } => {
+            if let Some(result) = result {
+                place_expression_type_diff_errors(
+                    errors,
+                    expressions.item(result),
                     type_diff,
                     expressions,
                     patterns,
@@ -10271,7 +10635,7 @@ pub fn syntax_project_format<Expressions, Patterns>(
                     },
                 }
                 if let Some(type_) = type_ {
-                    syntax_type_unparenthesized_format(&mut formatted, next_indent(0), type_);
+                    syntax_type_format(&mut formatted, next_indent(0), type_);
                 }
                 formatted.push('\n');
             }
@@ -10320,12 +10684,7 @@ pub fn syntax_project_format<Expressions, Patterns>(
                 space_or_linebreak_indented_into(&mut formatted, header_line_span, next_indent(0));
                 formatted.push('(');
                 for parameter in parameters {
-                    syntax_pattern_unparenthesized_format(
-                        &mut formatted,
-                        next_indent(0),
-                        patterns,
-                        parameter,
-                    );
+                    syntax_pattern_format(&mut formatted, next_indent(0), patterns, parameter);
                     space_or_linebreak_indented_into(
                         &mut formatted,
                         header_line_span,
@@ -10342,11 +10701,7 @@ pub fn syntax_project_format<Expressions, Patterns>(
                             result_type_lne_span,
                             next_indent(0),
                         );
-                        syntax_type_unparenthesized_format(
-                            &mut formatted,
-                            next_indent(0),
-                            result_type,
-                        );
+                        syntax_type_format(&mut formatted, next_indent(0), result_type);
                         space_or_linebreak_indented_into(&mut formatted, result_type_lne_span, 0);
                     }
                     None => {
@@ -10359,7 +10714,7 @@ pub fn syntax_project_format<Expressions, Patterns>(
                 formatted.push('=');
                 linebreak_indented_into(&mut formatted, next_indent(0));
                 if let Some(result) = result {
-                    syntax_expression_unparenthesized_format(
+                    syntax_expression_format(
                         &mut formatted,
                         next_indent(0),
                         expressions,
@@ -10430,7 +10785,7 @@ fn syntax_string_format(formatted: &mut String, content: &str) {
     }
     formatted.push('"');
 }
-fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
+fn syntax_expression_format<Expressions, Patterns>(
     formatted: &mut String,
     indent: usize,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
@@ -10455,7 +10810,7 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
             }
             formatted.push(' ');
             if let Some(type_) = type_ {
-                syntax_type_unparenthesized_format(formatted, next_indent(indent), type_);
+                syntax_type_format(formatted, next_indent(indent), type_);
             }
         }
         SyntaxExpression::Text {
@@ -10468,7 +10823,7 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
             syntax_string_format(formatted, content);
             formatted.push(' ');
             if let Some(type_) = type_ {
-                syntax_type_unparenthesized_format(formatted, next_indent(indent), type_);
+                syntax_type_format(formatted, next_indent(indent), type_);
             }
         }
         SyntaxExpression::Variable(name) => {
@@ -10490,18 +10845,14 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                 if type_arguments_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
-                syntax_type_unparenthesized_format(formatted, next_indent(indent), type_argument0);
+                syntax_type_format(formatted, next_indent(indent), type_argument0);
                 for type_argument in type_argument1_up {
                     space_or_linebreak_indented_into(
                         formatted,
                         type_arguments_line_span,
                         next_indent(indent),
                     );
-                    syntax_type_unparenthesized_format(
-                        formatted,
-                        next_indent(indent),
-                        type_argument,
-                    );
+                    syntax_type_format(formatted, next_indent(indent), type_argument);
                 }
                 if type_arguments_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
@@ -10531,22 +10882,14 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                     if type_arguments_line_span == LineSpan::Multiple {
                         linebreak_indented_into(formatted, next_indent(indent));
                     }
-                    syntax_type_unparenthesized_format(
-                        formatted,
-                        next_indent(indent),
-                        type_argument0,
-                    );
+                    syntax_type_format(formatted, next_indent(indent), type_argument0);
                     for type_argument in type_argument1_up {
                         space_or_linebreak_indented_into(
                             formatted,
                             type_arguments_line_span,
                             next_indent(indent),
                         );
-                        syntax_type_unparenthesized_format(
-                            formatted,
-                            next_indent(indent),
-                            type_argument,
-                        );
+                        syntax_type_format(formatted, next_indent(indent), type_argument);
                     }
                     if type_arguments_line_span == LineSpan::Multiple {
                         linebreak_indented_into(formatted, indent);
@@ -10565,22 +10908,10 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                 if arguments_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
-                syntax_expression_unparenthesized_format(
-                    formatted,
-                    indent,
-                    expressions,
-                    patterns,
-                    argument0,
-                );
+                syntax_expression_format(formatted, indent, expressions, patterns, argument0);
                 for argument in argument1_up {
                     space_or_linebreak_indented_into(formatted, arguments_line_span, indent);
-                    syntax_expression_unparenthesized_format(
-                        formatted,
-                        indent,
-                        expressions,
-                        patterns,
-                        argument,
-                    );
+                    syntax_expression_format(formatted, indent, expressions, patterns, argument);
                 }
                 if arguments_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
@@ -10622,13 +10953,7 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                     }),
                     indent,
                 );
-                syntax_expression_unparenthesized_format(
-                    formatted,
-                    indent,
-                    expressions,
-                    patterns,
-                    value,
-                );
+                syntax_expression_format(formatted, indent, expressions, patterns, value);
             }
         }
         SyntaxExpression::Fn {
@@ -10645,12 +10970,7 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                 if parameter_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
-                syntax_pattern_unparenthesized_format(
-                    formatted,
-                    next_indent(indent),
-                    patterns,
-                    parameter,
-                );
+                syntax_pattern_format(formatted, next_indent(indent), patterns, parameter);
                 if parameter_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
                 }
@@ -10665,7 +10985,7 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                     }),
                     indent,
                 );
-                syntax_expression_unparenthesized_format(
+                syntax_expression_format(
                     formatted,
                     indent,
                     expressions,
@@ -10697,12 +11017,60 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
         } => {
             syntax_comments_format(formatted, indent, comments);
             if let Some(expression) = expression {
-                syntax_expression_unparenthesized_format(
+                syntax_expression_format(
                     formatted,
                     indent,
                     expressions,
                     patterns,
                     expressions.item(expression),
+                );
+            }
+        }
+        SyntaxExpression::Destruct {
+            equals_start: _,
+            pattern,
+            queried,
+            result,
+        } => {
+            formatted.push('=');
+            match pattern {
+                None => {
+                    formatted.push_str("  ");
+                }
+                Some(pattern) => {
+                    space_or_linebreak_indented_into(
+                        formatted,
+                        range_line_span(pattern_range(pattern, patterns)),
+                        next_indent(indent),
+                    );
+                    syntax_pattern_format(formatted, next_indent(indent), patterns, pattern);
+                }
+            }
+            match queried {
+                None => {}
+                Some(queried) => {
+                    let queried = expressions.item(queried);
+                    let line_span =
+                        range_line_span(expression_range(queried, expressions, patterns));
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    syntax_expression_format(
+                        formatted,
+                        next_indent(indent),
+                        expressions,
+                        patterns,
+                        queried,
+                    );
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                }
+            }
+            linebreak_indented_into(formatted, indent);
+            if let Some(result) = result {
+                syntax_expression_format(
+                    formatted,
+                    next_indent(indent),
+                    expressions,
+                    patterns,
+                    expressions.item(result),
                 );
             }
         }
@@ -10723,7 +11091,7 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                     let line_span =
                         range_line_span(expression_range(queried, expressions, patterns));
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_expression_unparenthesized_format(
+                    syntax_expression_format(
                         formatted,
                         next_indent(indent),
                         expressions,
@@ -10734,11 +11102,11 @@ fn syntax_expression_unparenthesized_format<Expressions, Patterns>(
                 }
             }
             formatted.push('{');
-
             for case in cases {
                 linebreak_indented_into(formatted, indent);
                 syntax_expression_if_case_format(formatted, indent, expressions, patterns, case);
             }
+            formatted.push('}');
         }
     }
 }
@@ -10761,7 +11129,7 @@ fn syntax_angled_type_argument_format(
             if line_span == LineSpan::Multiple {
                 linebreak_indented_into(formatted, next_indent(indent));
             }
-            syntax_type_unparenthesized_format(formatted, next_indent(indent), type_);
+            syntax_type_format(formatted, next_indent(indent), type_);
             if line_span == LineSpan::Multiple {
                 linebreak_indented_into(formatted, indent);
             }
@@ -10787,13 +11155,7 @@ fn syntax_expression_record_field_format<Expressions, Patterns>(
                 end: expression_range(value, expressions, patterns).end,
             });
             space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            syntax_expression_unparenthesized_format(
-                formatted,
-                next_indent(indent),
-                expressions,
-                patterns,
-                value,
-            );
+            syntax_expression_format(formatted, next_indent(indent), expressions, patterns, value);
         }
     }
 }
@@ -10804,7 +11166,7 @@ fn syntax_expression_if_case_format<Expressions, Patterns>(
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
     case: &SyntaxExpressionIfCase<Expressions, Patterns>,
 ) {
-    syntax_pattern_unparenthesized_format(formatted, next_indent(indent), patterns, &case.pattern);
+    syntax_pattern_format(formatted, next_indent(indent), patterns, &case.pattern);
     match &case.result {
         None => {
             formatted.push(' ');
@@ -10819,7 +11181,7 @@ fn syntax_expression_if_case_format<Expressions, Patterns>(
                 end: expression_end(result, expressions, patterns),
             });
             space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            syntax_expression_unparenthesized_format(
+            syntax_expression_format(
                 formatted,
                 next_indent(indent),
                 expressions,
@@ -10829,7 +11191,7 @@ fn syntax_expression_if_case_format<Expressions, Patterns>(
         }
     }
 }
-fn syntax_pattern_unparenthesized_format<Patterns>(
+fn syntax_pattern_format<Patterns>(
     formatted: &mut String,
     indent: usize,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
@@ -10844,7 +11206,7 @@ fn syntax_pattern_unparenthesized_format<Patterns>(
                     range_line_span(pattern_range(pattern, patterns)),
                     indent,
                 );
-                syntax_type_unparenthesized_format(formatted, indent, type_);
+                syntax_type_format(formatted, indent, type_);
             }
         }
         SyntaxPattern::Ignored {
@@ -10858,7 +11220,7 @@ fn syntax_pattern_unparenthesized_format<Patterns>(
                     range_line_span(pattern_range(pattern, patterns)),
                     indent,
                 );
-                syntax_type_unparenthesized_format(formatted, indent, type_);
+                syntax_type_format(formatted, indent, type_);
             }
         }
         SyntaxPattern::Variant {
@@ -10877,12 +11239,7 @@ fn syntax_pattern_unparenthesized_format<Patterns>(
                 indent,
             );
             if let Some(value) = value {
-                syntax_pattern_unparenthesized_format(
-                    formatted,
-                    indent,
-                    patterns,
-                    patterns.item(value),
-                );
+                syntax_pattern_format(formatted, indent, patterns, patterns.item(value));
             }
         }
         SyntaxPattern::Record {
@@ -10895,16 +11252,14 @@ fn syntax_pattern_unparenthesized_format<Patterns>(
             let line_span = range_line_span(pattern_range(pattern, patterns));
             for field in fields {
                 space_or_linebreak_indented_into(formatted, line_span, indent);
-                syntax_pattern_record_field_unparenthesized_format(
-                    formatted, indent, patterns, field,
-                );
+                syntax_pattern_record_field_format(formatted, indent, patterns, field);
             }
             space_or_linebreak_indented_into(formatted, line_span, indent);
             formatted.push('}');
         }
     }
 }
-fn syntax_pattern_record_field_unparenthesized_format<Patterns>(
+fn syntax_pattern_record_field_format<Patterns>(
     formatted: &mut String,
     indent: usize,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
@@ -10921,11 +11276,11 @@ fn syntax_pattern_record_field_unparenthesized_format<Patterns>(
                 end: pattern_range(value, patterns).end,
             });
             space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            syntax_pattern_unparenthesized_format(formatted, next_indent(indent), patterns, value);
+            syntax_pattern_format(formatted, next_indent(indent), patterns, value);
         }
     }
 }
-fn syntax_type_unparenthesized_format(formatted: &mut String, indent: usize, type_: &SyntaxType) {
+fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType) {
     match type_ {
         SyntaxType::Variable(name) => {
             formatted.push_str(&name.value);
@@ -10955,14 +11310,10 @@ fn syntax_type_unparenthesized_format(formatted: &mut String, indent: usize, typ
                         end: type_range(argument1_up.last().unwrap_or(argument0)).end,
                     });
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_type_unparenthesized_format(formatted, next_indent(indent), argument0);
+                    syntax_type_format(formatted, next_indent(indent), argument0);
                     for argument_type in argument1_up {
                         space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                        syntax_type_unparenthesized_format(
-                            formatted,
-                            next_indent(indent),
-                            argument_type,
-                        );
+                        syntax_type_format(formatted, next_indent(indent), argument_type);
                     }
                     formatted.push(')');
                 }
@@ -10989,7 +11340,7 @@ fn syntax_type_unparenthesized_format(formatted: &mut String, indent: usize, typ
                             end: type_range(value).end,
                         });
                         space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                        syntax_type_unparenthesized_format(formatted, next_indent(indent), value);
+                        syntax_type_format(formatted, next_indent(indent), value);
                     }
                 }
             }
@@ -11015,7 +11366,7 @@ fn syntax_type_unparenthesized_format(formatted: &mut String, indent: usize, typ
                             end: type_end(value),
                         });
                         space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                        syntax_type_unparenthesized_format(formatted, next_indent(indent), value);
+                        syntax_type_format(formatted, next_indent(indent), value);
                     }
                 }
             }
@@ -11070,7 +11421,7 @@ pub struct LocalVariableSymbolOrigin<'a, Expressions, Patterns> {
 pub fn project_symbol_at_position<'a, Expressions, Patterns>(
     project: &'a SyntaxProject<Expressions, Patterns>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-    checked_ifs: &std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     position: lsp_types::Position,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
@@ -11193,7 +11544,7 @@ pub fn project_symbol_at_position<'a, Expressions, Patterns>(
                     result.as_ref().and_then(|result| {
                         let mut local_variables = std::collections::HashMap::new();
                         for parameter in parameters {
-                            syntax_if_pattern_variables_fold(
+                            syntax_parameter_pattern_variables_fold(
                                 parameter,
                                 (),
                                 &mut |(), parameter_variable_name, parameter_variable_type| {
@@ -11215,7 +11566,7 @@ pub fn project_symbol_at_position<'a, Expressions, Patterns>(
                             result,
                             position,
                             type_aliases,
-                            checked_ifs,
+                            checked_queries,
                             checked_spread_records,
                             expressions,
                             patterns,
@@ -11233,11 +11584,10 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
     expression: &'a SyntaxExpression<Expressions, Patterns>,
     position: lsp_types::Position,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-    checked_ifs: &std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
-
     scope: &'a SyntaxProjectItem<Expressions, Patterns>,
     local_variables: &mut std::collections::HashMap<
         &'a Name,
@@ -11313,7 +11663,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             argument,
                             position,
                             type_aliases,
-                            checked_ifs,
+                            checked_queries,
                             checked_spread_records,
                             expressions,
                             patterns,
@@ -11348,7 +11698,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             expressions.item(value),
                             position,
                             type_aliases,
-                            checked_ifs,
+                            checked_queries,
                             checked_spread_records,
                             expressions,
                             patterns,
@@ -11384,7 +11734,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                 .or_else(|| {
                     result.as_ref().and_then(|result| {
                         for parameter in parameters {
-                            syntax_if_pattern_variables_fold(
+                            syntax_parameter_pattern_variables_fold(
                                 parameter,
                                 (),
                                 &mut |(), name, type_| {
@@ -11406,7 +11756,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             result,
                             position,
                             type_aliases,
-                            checked_ifs,
+                            checked_queries,
                             checked_spread_records,
                             expressions,
                             patterns,
@@ -11426,7 +11776,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     value,
                     position,
                     type_aliases,
-                    checked_ifs,
+                    checked_queries,
                     checked_spread_records,
                     expressions,
                     patterns,
@@ -11443,7 +11793,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                 expressions.item(expression),
                 position,
                 type_aliases,
-                checked_ifs,
+                checked_queries,
                 checked_spread_records,
                 expressions,
                 patterns,
@@ -11451,8 +11801,82 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                 local_variables,
             )
         }),
+        SyntaxExpression::Destruct {
+            equals_start,
+            pattern,
+            queried,
+            result,
+        } => queried
+            .as_ref()
+            .and_then(|queried| {
+                expression_symbol_at_position(
+                    expressions.item(queried),
+                    position,
+                    type_aliases,
+                    checked_queries,
+                    checked_spread_records,
+                    expressions,
+                    patterns,
+                    scope,
+                    local_variables,
+                )
+            })
+            .or_else(|| {
+                let result = result.as_ref().map(|result| expressions.item(result));
+                let expected_pattern_type = checked_queries
+                    .get(equals_start)
+                    .map(|checked_query| &checked_query.queried_type);
+                pattern
+                    .as_ref()
+                    .and_then(|pattern| {
+                        pattern_symbol_at_position(
+                            pattern,
+                            expected_pattern_type,
+                            position,
+                            type_aliases,
+                            checked_spread_records,
+                            patterns,
+                            scope,
+                            result,
+                        )
+                    })
+                    .or_else(|| {
+                        let Some(result) = result else {
+                            return None;
+                        };
+                        if let Some(pattern) = pattern {
+                            syntax_if_pattern_variables_fold(
+                                pattern,
+                                expected_pattern_type,
+                                (),
+                                &mut |(), name, type_| {
+                                    local_variables.insert(
+                                        name.value,
+                                        LocalVariableSymbolOrigin {
+                                            start: name.start,
+                                            scope: Some(result),
+                                            type_: type_,
+                                        },
+                                    );
+                                },
+                                patterns,
+                            );
+                        }
+                        expression_symbol_at_position(
+                            result,
+                            position,
+                            type_aliases,
+                            checked_queries,
+                            checked_spread_records,
+                            expressions,
+                            patterns,
+                            scope,
+                            local_variables,
+                        )
+                    })
+            }),
         SyntaxExpression::If {
-            if_keyword_start: question_mark_start,
+            if_keyword_start,
             queried,
             open_curly_start: _,
             cases,
@@ -11464,7 +11888,7 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     expressions.item(queried),
                     position,
                     type_aliases,
-                    checked_ifs,
+                    checked_queries,
                     checked_spread_records,
                     expressions,
                     patterns,
@@ -11474,13 +11898,13 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
             })
             .or_else(|| {
                 cases.iter().find_map(|case| {
-                    let checked_if = checked_ifs.get(question_mark_start);
+                    let checked_query = checked_queries.get(if_keyword_start);
                     expression_if_case_symbol_at_position(
                         case,
-                        checked_if.map(|checked_if| &checked_if.queried_type),
+                        checked_query.map(|checked_query| &checked_query.queried_type),
                         position,
                         type_aliases,
-                        checked_ifs,
+                        checked_queries,
                         checked_spread_records,
                         expressions,
                         patterns,
@@ -11496,11 +11920,10 @@ fn expression_if_case_symbol_at_position<'a, Expressions, Patterns>(
     expected_pattern_type: Option<&Type>,
     position: lsp_types::Position,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-    checked_ifs: &std::collections::HashMap<lsp_types::Position, CheckedIf>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
-
     scope: &'a SyntaxProjectItem<Expressions, Patterns>,
     local_variables: &mut std::collections::HashMap<
         &'a Name,
@@ -11525,7 +11948,7 @@ fn expression_if_case_symbol_at_position<'a, Expressions, Patterns>(
         if !range_includes_position(expression_range(result, expressions, patterns), position) {
             return None;
         }
-        syntax_parameter_pattern_variables_fold(
+        syntax_if_pattern_variables_fold(
             &case.pattern,
             expected_pattern_type,
             (),
@@ -11539,14 +11962,13 @@ fn expression_if_case_symbol_at_position<'a, Expressions, Patterns>(
                     },
                 );
             },
-            checked_spread_records,
             patterns,
         );
         expression_symbol_at_position(
             result,
             position,
             type_aliases,
-            checked_ifs,
+            checked_queries,
             checked_spread_records,
             expressions,
             patterns,
@@ -11555,7 +11977,7 @@ fn expression_if_case_symbol_at_position<'a, Expressions, Patterns>(
         )
     })
 }
-fn syntax_if_pattern_variables_fold<'a, Patterns, State>(
+fn syntax_parameter_pattern_variables_fold<'a, Patterns, State>(
     pattern: &'a SyntaxPattern<Patterns>,
     state: State,
     reduce: &mut impl FnMut(State, WithStartPosition<&'a Name>, Option<&'a SyntaxType>) -> State,
@@ -11576,9 +11998,12 @@ fn syntax_if_pattern_variables_fold<'a, Patterns, State>(
             closed_bracket_start: _,
         } => match value {
             None => state,
-            Some(value) => {
-                syntax_if_pattern_variables_fold(patterns.item(value), state, reduce, patterns)
-            }
+            Some(value) => syntax_parameter_pattern_variables_fold(
+                patterns.item(value),
+                state,
+                reduce,
+                patterns,
+            ),
         },
         SyntaxPattern::Record {
             open_curly_start: _,
@@ -11588,16 +12013,17 @@ fn syntax_if_pattern_variables_fold<'a, Patterns, State>(
             .iter()
             .fold(state, |state, field| match &field.value {
                 None => state,
-                Some(value) => syntax_if_pattern_variables_fold(value, state, reduce, patterns),
+                Some(value) => {
+                    syntax_parameter_pattern_variables_fold(value, state, reduce, patterns)
+                }
             }),
     }
 }
-fn syntax_parameter_pattern_variables_fold<'a, Patterns, State>(
+fn syntax_if_pattern_variables_fold<'a, Patterns, State>(
     pattern: &'a SyntaxPattern<Patterns>,
     expected_type: Option<&Type>,
     state: State,
     reduce: &mut impl FnMut(State, WithStartPosition<&'a Name>, Option<Type>) -> State,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
 ) -> State {
     match pattern {
@@ -11617,7 +12043,7 @@ fn syntax_parameter_pattern_variables_fold<'a, Patterns, State>(
             closed_bracket_start: _,
         } => match value {
             None => state,
-            Some(value) => syntax_parameter_pattern_variables_fold(
+            Some(value) => syntax_if_pattern_variables_fold(
                 patterns.item(value),
                 name.as_ref().and_then(|name| {
                     expected_type
@@ -11631,7 +12057,6 @@ fn syntax_parameter_pattern_variables_fold<'a, Patterns, State>(
                 }),
                 state,
                 reduce,
-                checked_spread_records,
                 patterns,
             ),
         },
@@ -11643,7 +12068,7 @@ fn syntax_parameter_pattern_variables_fold<'a, Patterns, State>(
             .iter()
             .fold(state, |state, field| match &field.value {
                 None => state,
-                Some(value) => syntax_parameter_pattern_variables_fold(
+                Some(value) => syntax_if_pattern_variables_fold(
                     value,
                     expected_type
                         .and_then(|expected_type| match expected_type {
@@ -11655,7 +12080,6 @@ fn syntax_parameter_pattern_variables_fold<'a, Patterns, State>(
                         .map(|field| &field.value),
                     state,
                     reduce,
-                    checked_spread_records,
                     patterns,
                 ),
             }),
@@ -12097,7 +12521,7 @@ pub fn syntax_project_symbol_uses<Expressions, Patterns>(
                             let mut parameter_introduced_variables =
                                 std::collections::HashSet::new();
                             for parameter in parameters {
-                                syntax_if_pattern_variables_fold(
+                                syntax_parameter_pattern_variables_fold(
                                     parameter,
                                     (),
                                     &mut |(), parameter_introduced_variable_name, _type_| {
@@ -12446,7 +12870,7 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                 let mut parameter_pattern_variables = std::collections::HashSet::new();
                 for parameter in parameters {
                     syntax_pattern_symbol_uses_into(uses, parameter, symbol, patterns);
-                    syntax_if_pattern_variables_fold(
+                    syntax_parameter_pattern_variables_fold(
                         parameter,
                         (),
                         &mut |(), pattern_variable_name, _type_| {
@@ -12496,6 +12920,47 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                 );
             }
         }
+        SyntaxExpression::Destruct {
+            equals_start: _,
+            pattern,
+            queried,
+            result,
+        } => {
+            if let Some(queried) = queried {
+                syntax_expression_symbol_uses_into(
+                    uses,
+                    expressions.item(queried),
+                    symbol,
+                    expressions,
+                    patterns,
+                    local_variables,
+                );
+            }
+            if let Some(pattern) = pattern {
+                syntax_pattern_symbol_uses_into(uses, pattern, symbol, patterns);
+            }
+            if let Some(result) = result {
+                let mut local_variables = std::borrow::Cow::Borrowed(local_variables);
+                if let Some(pattern) = pattern {
+                    syntax_parameter_pattern_variables_fold(
+                        pattern,
+                        (),
+                        &mut |(), pattern_variable_name, _type_| {
+                            local_variables.to_mut().insert(pattern_variable_name.value);
+                        },
+                        patterns,
+                    );
+                }
+                syntax_expression_symbol_uses_into(
+                    uses,
+                    expressions.item(result),
+                    symbol,
+                    expressions,
+                    patterns,
+                    &local_variables,
+                );
+            }
+        }
         SyntaxExpression::If {
             if_keyword_start: _,
             queried,
@@ -12519,6 +12984,7 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                     syntax_pattern_symbol_uses_into(uses, &case.pattern, symbol, patterns);
                     syntax_if_pattern_variables_fold(
                         &case.pattern,
+                        None,
                         (),
                         &mut |(), pattern_variable_name, _type_| {
                             local_variables.to_mut().insert(pattern_variable_name.value);
@@ -13012,6 +13478,28 @@ fn syntax_expression_highlight<Expressions, Patterns>(
                 );
             }
         }
+        SyntaxExpression::Destruct {
+            equals_start,
+            pattern,
+            queried,
+            result,
+        } => {
+            keyword_highlight(state, "=", *equals_start);
+            if let Some(pattern) = pattern {
+                syntax_pattern_highlight(state, patterns, pattern);
+            }
+            if let Some(queried) = queried {
+                syntax_expression_highlight(
+                    state,
+                    expressions,
+                    patterns,
+                    expressions.item(queried),
+                );
+            }
+            if let Some(result) = result {
+                syntax_expression_highlight(state, expressions, patterns, expressions.item(result));
+            }
+        }
         SyntaxExpression::If {
             if_keyword_start,
             queried,
@@ -13424,6 +13912,22 @@ fn syntax_expression_rid<Expressions, Patterns>(
         } => {
             if let Some(after_comments) = after_comments {
                 syntax_expression_rid(expressions.remove(after_comments), expressions, patterns);
+            }
+        }
+        SyntaxExpression::Destruct {
+            equals_start: _,
+            pattern,
+            queried,
+            result,
+        } => {
+            if let Some(pattern) = pattern {
+                syntax_pattern_rid(pattern, patterns);
+            }
+            if let Some(queried) = queried {
+                syntax_expression_rid(expressions.remove(queried), expressions, patterns);
+            }
+            if let Some(result) = result {
+                syntax_expression_rid(expressions.remove(result), expressions, patterns);
             }
         }
         SyntaxExpression::If {

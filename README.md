@@ -1,10 +1,10 @@
 fast programming language where indexes know their origin array. An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet(name str chars buf(Text char)) span(Text)
-    buf-add-str-chars(chars "Hello, " str)
-    .span-add-str-chars(name chars)
-    .span-add("!" char chars)
+fn greet(name str chars buf(Chars char)) *(buf(Chars char) span(Chars))
+    buf-add-str-chars("Hello, " str)
+    .buf-span-add-str-chars(name)
+    .buf-span-add("!" char)
 ```
 
 Important: The compiler and tooling is not implemented, yet! Once available,
@@ -245,7 +245,11 @@ For other editors, there's usually a way to specify `slug` as the language serve
   So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
   
   Seems oof but does this actually restrict useful code?
-- implement compiler & tooling
+- add tuples
+- add dot syntax
+- fix the countless bugs
+- implement association checking
+- reimplement standard library (positional + removing redundant linear stuff)
 - website with online repl
 
 ## known design weaknesses
@@ -253,6 +257,13 @@ For other editors, there's usually a way to specify `slug` as the language serve
     This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
     
     The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
+- slots, spans and type variable-typed values can not be trivially cloned and scrapped when the necessary bufs are not in scope.
+  This is a little annoying to check (considering slot items might themselves introduce).
+  An easy and very convenient (but heartbreaking, because 3x memory usage) fix would be embedding the buffer rc pointer in each slot and span.
+- bufs are passed by rc, leading to indirection. Being able to store a buf multiple times is also very, very confusing.
+
+  Better (but also slightly confusing) semantics may be to always pass bufs "by inout", meaning they cannot be duplicated and must not be part of the result in any way.
+  Or I could just give up and require bufs to be linear at the expense of convenience but easier to analyze and more intuitive.
 
 ## potential improvements in the future
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
