@@ -45,6 +45,7 @@ export default grammar({
             $.expression_variable,
             $.expression_call,
             $.expression_variant,
+            $.expression_tuple,
             $.expression_record,
             $.expression_fn,
             $.expression_if,
@@ -81,6 +82,7 @@ export default grammar({
     keyword_if: ($) => "if",
     expression_if_case: ($) => seq($.pattern_untyped, $.expression),
     expression_record: ($) => seq("{", repeat($.expression_record_field), "}"),
+    expression_tuple: ($) => seq("*", optional(seq("(", repeat($.expression), ")"))),
     expression_record_field: ($) => seq($.field_name, $.expression),
     expression_fn: ($) =>
       seq($.keyword_fn, "(", repeat($.pattern_typed), ")", $.expression),
@@ -90,6 +92,7 @@ export default grammar({
         $.pattern_variable_typed,
         $.pattern_ignore_typed,
         $.pattern_variant_typed,
+        $.pattern_tuple_typed,
         $.pattern_record_typed,
       ),
     pattern_untyped: ($) =>
@@ -97,6 +100,7 @@ export default grammar({
         $.pattern_variable_untyped,
         $.pattern_ignore_untyped,
         $.pattern_variant_untyped,
+        $.pattern_tuple_untyped,
         $.pattern_record_untyped,
       ),
     pattern_variable_typed: ($) => seq($.pattern_variable_untyped, $.type),
@@ -105,6 +109,10 @@ export default grammar({
     pattern_ignore_untyped: ($) => "_",
     pattern_variant_typed: ($) => seq("[", $.variant_name, $.pattern_typed, "]"),
     pattern_variant_untyped: ($) => seq("[", $.variant_name, $.pattern_untyped, "]"),
+    pattern_tuple_typed: ($) =>
+      seq("*", optional(seq("(", repeat($.pattern_typed), ")"))),
+    pattern_tuple_untyped: ($) =>
+      seq("*", optional(seq("(", repeat($.pattern_untyped), ")"))),
     pattern_record_typed: ($) => seq("{", repeat($.pattern_field_typed), "}"),
     pattern_field_typed: ($) => seq($.field_name, $.pattern_typed),
     pattern_record_untyped: ($) => seq("{", repeat($.pattern_field_untyped), "}"),
@@ -117,6 +125,7 @@ export default grammar({
         $.type_fn,
         $.type_name,
         $.type_construct_with_arguments,
+        $.type_tuple,
         $.type_record,
         $.type_choice,
       ),
@@ -126,6 +135,7 @@ export default grammar({
     type_construct_with_arguments: ($) => seq($.type_name, "(", repeat($.type), ")"),
     type_choice: ($) => seq("[", repeat($.type_choice_variant), "]"),
     type_choice_variant: ($) => seq($.variant_name, $.type),
+    type_tuple: ($) => seq("*", optional(seq("(", repeat($.type), ")"))),
     type_record: ($) => seq("{", repeat($.type_record_field), "}"),
     type_record_field: ($) => seq($.field_name, $.type),
     type_name: ($) => $.lower_name,

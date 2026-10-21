@@ -40,20 +40,7 @@
       "name": "punctuation.bracket.slug"
     },
     {
-      "include": "#comma"
-    },
-    {
       "include": "#parens"
-    },
-    {
-      "include": "#record-empty"
-    },
-    {
-      "include": "#choice-empty"
-    },
-    {
-      "match": "(if)",
-      "name": "keyword.if.slug"
     },
     {
       "match": "(=)",
@@ -73,10 +60,6 @@
     }
   ],
   "repository": {
-    "comma": {
-      "match": "(,)",
-      "name": "punctuation.separator.comma.slug"
-    },
     "parens": {
       "match": "(\\(|\\))",
       "name": "punctuation.parens.slug"

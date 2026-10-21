@@ -55,6 +55,10 @@
           "named": true
         },
         {
+          "type": "expression_tuple",
+          "named": true
+        },
+        {
           "type": "expression_variable",
           "named": true
         },
@@ -272,6 +276,21 @@
     }
   },
   {
+    "type": "expression_tuple",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "expression_variable",
     "named": true,
     "fields": {},
@@ -412,6 +431,36 @@
     }
   },
   {
+    "type": "pattern_tuple_typed",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "pattern_typed",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "pattern_tuple_untyped",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "pattern_untyped",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "pattern_typed",
     "named": true,
     "fields": {},
@@ -425,6 +474,10 @@
         },
         {
           "type": "pattern_record_typed",
+          "named": true
+        },
+        {
+          "type": "pattern_tuple_typed",
           "named": true
         },
         {
@@ -452,6 +505,10 @@
         },
         {
           "type": "pattern_record_untyped",
+          "named": true
+        },
+        {
+          "type": "pattern_tuple_untyped",
           "named": true
         },
         {
@@ -664,6 +721,10 @@
           "named": true
         },
         {
+          "type": "type_tuple",
+          "named": true
+        },
+        {
           "type": "type_variable",
           "named": true
         }
@@ -842,6 +903,21 @@
     }
   },
   {
+    "type": "type_tuple",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "type_variable",
     "named": true,
     "fields": {},
@@ -881,6 +957,10 @@
   },
   {
     "type": ")",
+    "named": false
+  },
+  {
+    "type": "*",
     "named": false
   },
   {

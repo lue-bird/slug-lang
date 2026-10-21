@@ -78,6 +78,12 @@ pub enum SyntaxType {
         arguments: Vec<SyntaxType>,
         closed_paren_start: Option<lsp_types::Position>,
     },
+    Tuple {
+        star_start: lsp_types::Position,
+        open_paren_start: Option<lsp_types::Position>,
+        parts: Vec<SyntaxType>,
+        closed_paren_start: Option<lsp_types::Position>,
+    },
     Record {
         open_curly_start: lsp_types::Position,
         fields: Vec<SyntaxRecordField<SyntaxType>>,
@@ -109,6 +115,12 @@ pub enum SyntaxPattern<Patterns> {
         name: Option<WithStartPosition<Name>>,
         value: Option<core::Slot<Patterns>>,
         closed_bracket_start: Option<lsp_types::Position>,
+    },
+    Tuple {
+        star_start: lsp_types::Position,
+        open_paren_start: Option<lsp_types::Position>,
+        parts: Vec<SyntaxPattern<Patterns>>,
+        closed_paren_start: Option<lsp_types::Position>,
     },
     Record {
         open_curly_start: lsp_types::Position,
@@ -166,6 +178,12 @@ pub enum SyntaxExpression<Expressions, Patterns> {
         parameters: Vec<SyntaxPattern<Patterns>>,
         closed_paren_start: Option<lsp_types::Position>,
         result: Option<core::Slot<Expressions>>,
+    },
+    Tuple {
+        star_start: lsp_types::Position,
+        open_paren_start: Option<lsp_types::Position>,
+        parts: Vec<SyntaxExpression<Expressions, Patterns>>,
+        closed_paren_start: Option<lsp_types::Position>,
     },
     Record {
         open_curly_start: lsp_types::Position,
@@ -338,6 +356,7 @@ pub fn type_start(type_: &SyntaxType) -> lsp_types::Position {
         SyntaxType::Origin { hat_start, name: _ } => *hat_start,
         SyntaxType::ConstructWithoutArguments(name) => name.start,
         SyntaxType::ConstructWithArguments { name, .. } => name.start,
+        SyntaxType::Tuple { star_start, .. } => *star_start,
         SyntaxType::Record {
             open_curly_start, ..
         } => *open_curly_start,
@@ -367,6 +386,16 @@ pub fn type_end(type_: &SyntaxType) -> lsp_types::Position {
                     .map(|last_argument| type_end(last_argument))
             })
             .unwrap_or_else(|| symbol_end(*open_paren_start, "(")),
+        SyntaxType::Tuple {
+            star_start,
+            open_paren_start,
+            parts,
+            closed_paren_start,
+        } => closed_paren_start
+            .map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
+            .or_else(|| parts.last().map(|part| type_end(part)))
+            .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
+            .unwrap_or_else(|| symbol_end(*star_start, "*")),
         SyntaxType::Record {
             open_curly_start,
             fields,
@@ -421,6 +450,7 @@ pub fn pattern_start<Patterns>(pattern: &SyntaxPattern<Patterns>) -> lsp_types::
         SyntaxPattern::Variant {
             open_bracket_start, ..
         } => *open_bracket_start,
+        SyntaxPattern::Tuple { star_start, .. } => *star_start,
         SyntaxPattern::Record {
             open_curly_start, ..
         } => *open_curly_start,
@@ -459,6 +489,16 @@ pub fn pattern_end<Patterns>(
                     .map(|name| name_end(with_start_position_as_ref(name)))
             })
             .unwrap_or_else(|| symbol_end(*open_bracket_start, "[")),
+        SyntaxPattern::Tuple {
+            star_start,
+            open_paren_start,
+            parts,
+            closed_paren_start,
+        } => closed_paren_start
+            .map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
+            .or_else(|| parts.last().map(|part| pattern_end(part, patterns)))
+            .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
+            .unwrap_or_else(|| symbol_end(*star_start, "*")),
         SyntaxPattern::Record {
             open_curly_start,
             fields,
@@ -542,6 +582,7 @@ pub fn expression_start<Expressions, Patterns>(
         SyntaxExpression::Fn {
             fn_keyword_start, ..
         } => *fn_keyword_start,
+        SyntaxExpression::Tuple { star_start, .. } => *star_start,
         SyntaxExpression::Record {
             open_curly_start, ..
         } => *open_curly_start,
@@ -638,6 +679,20 @@ pub fn expression_end<Expressions, Patterns>(
             })
             .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
             .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
+        SyntaxExpression::Tuple {
+            star_start,
+            open_paren_start,
+            parts,
+            closed_paren_start,
+        } => closed_paren_start
+            .map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
+            .or_else(|| {
+                parts
+                    .last()
+                    .map(|part| expression_end(part, expressions, patterns))
+            })
+            .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, ")")))
+            .unwrap_or_else(|| symbol_end(*star_start, "*")),
         SyntaxExpression::Record {
             open_curly_start,
             fields,
@@ -1153,6 +1208,7 @@ pub fn parse_parameter_pattern<Patterns>(
     parse_parameter_pattern_variable(state)
         .or_else(|| parse_parameter_pattern_ignored(state))
         .or_else(|| parse_parameter_pattern_variant(state, patterns))
+        .or_else(|| parse_parameter_pattern_tuple(state, patterns))
         .or_else(|| parse_parameter_pattern_record(state, patterns))
 }
 pub fn parse_if_pattern<Patterns>(
@@ -1162,6 +1218,7 @@ pub fn parse_if_pattern<Patterns>(
     parse_if_pattern_variable(state)
         .or_else(|| parse_if_pattern_ignored(state))
         .or_else(|| parse_if_pattern_variant(state, patterns))
+        .or_else(|| parse_if_pattern_tuple(state, patterns))
         .or_else(|| parse_if_pattern_record(state, patterns))
 }
 fn parse_parameter_pattern_variable<Patterns>(
@@ -1277,6 +1334,52 @@ fn parse_angled_type_arguments(state: &mut ParseState) -> Option<SyntaxAngledTyp
         open_angle_start,
         types,
         closed_angle_start,
+    })
+}
+fn parse_parameter_pattern_tuple<Patterns>(
+    state: &mut ParseState,
+    patterns: &mut core::Buf<Patterns, SyntaxPattern<Patterns>>,
+) -> Option<SyntaxPattern<Patterns>> {
+    let Some(star_start) = parse_symbol_as_start(state, "*") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    let open_paren_start = parse_symbol_as_start(state, "(");
+    parse_slug_whitespace(state);
+    let mut parts = Vec::new();
+    while let Some(field) = parse_parameter_pattern(state, patterns) {
+        parts.push(field);
+        parse_slug_whitespace(state);
+    }
+    let closed_paren_start = parse_symbol_as_start(state, ")");
+    Some(SyntaxPattern::Tuple {
+        star_start,
+        open_paren_start,
+        parts,
+        closed_paren_start,
+    })
+}
+fn parse_if_pattern_tuple<Patterns>(
+    state: &mut ParseState,
+    patterns: &mut core::Buf<Patterns, SyntaxPattern<Patterns>>,
+) -> Option<SyntaxPattern<Patterns>> {
+    let Some(star_start) = parse_symbol_as_start(state, "*") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    let open_paren_start = parse_symbol_as_start(state, "(");
+    parse_slug_whitespace(state);
+    let mut parts = Vec::new();
+    while let Some(field) = parse_if_pattern(state, patterns) {
+        parts.push(field);
+        parse_slug_whitespace(state);
+    }
+    let closed_paren_start = parse_symbol_as_start(state, ")");
+    Some(SyntaxPattern::Tuple {
+        star_start,
+        open_paren_start,
+        parts,
+        closed_paren_start,
     })
 }
 fn parse_parameter_pattern_record<Patterns>(
@@ -1466,9 +1569,34 @@ pub fn parse_expression<Expressions, Patterns>(
         })
         .or_else(|| parse_expression_variant(state, expressions, patterns))
         .or_else(|| parse_expression_commented(state, expressions, patterns))
+        .or_else(|| parse_expression_tuple(state, expressions, patterns))
         .or_else(|| parse_expression_record(state, expressions, patterns))
         .or_else(|| parse_expression_destruct(state, expressions, patterns))
         .or_else(|| parse_expression_if(state, expressions, patterns))
+}
+fn parse_expression_tuple<Expressions, Patterns>(
+    state: &mut ParseState,
+    expressions: &mut core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
+    patterns: &mut core::Buf<Patterns, SyntaxPattern<Patterns>>,
+) -> Option<SyntaxExpression<Expressions, Patterns>> {
+    let Some(star_start) = parse_symbol_as_start(state, "*") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    let open_paren_start = parse_symbol_as_start(state, "(");
+    parse_slug_whitespace(state);
+    let mut parts = Vec::new();
+    while let Some(field) = parse_expression(state, expressions, patterns) {
+        parts.push(field);
+        parse_slug_whitespace(state);
+    }
+    let closed_paren_start = parse_symbol_as_start(state, ")");
+    Some(SyntaxExpression::Tuple {
+        star_start,
+        open_paren_start,
+        parts,
+        closed_paren_start,
+    })
 }
 fn parse_expression_record<Expressions, Patterns>(
     state: &mut ParseState,
@@ -1817,6 +1945,7 @@ pub struct CheckedTypeAlias {
 pub enum Type {
     Variable(Name),
     Origin(Name),
+    Tuple(Vec<Type>),
     Record(Vec<TypeField>),
     Choice(Vec<TypeVariant>),
     CoreConstruct {
@@ -2222,7 +2351,6 @@ fn syntax_type_connect_type_names_in_graph_from(
         &str,
         strongly_connected_components::Vertex,
     >,
-
     type_: &SyntaxType,
     type_graph: &mut std::collections::BTreeSet<strongly_connected_components::Vertex>,
 ) {
@@ -2251,6 +2379,20 @@ fn syntax_type_connect_type_names_in_graph_from(
                 syntax_type_connect_type_names_in_graph_from(
                     type_graph_node_by_name,
                     argument,
+                    type_graph,
+                );
+            }
+        }
+        SyntaxType::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_type_connect_type_names_in_graph_from(
+                    type_graph_node_by_name,
+                    part,
                     type_graph,
                 );
             }
@@ -2366,6 +2508,21 @@ fn syntax_expression_connect_fns_in_graph_from<Expressions, Patterns>(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(result),
+                    project_fn_graph,
+                );
+            }
+        }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_expression_connect_fns_in_graph_from(
+                    project_fn_graph_node_by_name,
+                    expressions,
+                    part,
                     project_fn_graph,
                 );
             }
@@ -2807,7 +2964,6 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
             &result_type_diff,
             expressions,
             patterns,
-            checked_spread_records,
         );
         return CheckedProjectFn {
             documentation: documentation,
@@ -2858,6 +3014,17 @@ pub fn syntax_type_to_type(
                 None
             }
         }
+        SyntaxType::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => Some(Type::Tuple(
+            parts
+                .iter()
+                .filter_map(|part| syntax_type_to_type(part, type_aliases))
+                .collect(),
+        )),
         SyntaxType::Record {
             open_curly_start: _,
             fields,
@@ -3003,6 +3170,16 @@ pub fn syntax_type_check(
                 None
             }
         }
+        SyntaxType::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => parts
+            .iter()
+            .map(|part| syntax_type_check(part, errors, type_aliases, records_used, choices_used))
+            .collect::<Option<Vec<_>>>()
+            .map(Type::Tuple),
         SyntaxType::Record {
             open_curly_start: _,
             fields,
@@ -3157,6 +3334,11 @@ fn type_replace_variables(
             }
             type_replace_variables(type_parameter_replacements, result.as_mut());
         }
+        Type::Tuple(parts) => {
+            for part in parts {
+                type_replace_variables(type_parameter_replacements, part);
+            }
+        }
         Type::Record(fields) => {
             for field in fields {
                 type_replace_variables(type_parameter_replacements, &mut field.value);
@@ -3182,6 +3364,11 @@ fn type_variables_into<'a>(
         Type::CoreConstruct { name: _, arguments } => {
             for argument in arguments {
                 type_variables_into(type_variables, argument);
+            }
+        }
+        Type::Tuple(parts) => {
+            for part in parts {
+                type_variables_into(type_variables, part);
             }
         }
         Type::Record(fields) => {
@@ -3252,6 +3439,7 @@ enum SpecificPatternCatch<'a> {
         name: &'a Name,
         value: Box<SpecificPatternCatch<'a>>,
     },
+    Tuple(Vec<SpecificPatternCatch<'a>>),
     Record(Vec<(&'a Name, SpecificPatternCatch<'a>)>),
 }
 /// careful. This easily goes exponential
@@ -3261,11 +3449,44 @@ fn type_to_possible_specific_pattern_catches<'a>(
 ) {
     // possible optimizations:
     // - calculate the count of possibilities in advance and pre-allocate
-    // - add SpecificPatternCatch::Mine(&'a Type) which expands only on encounter.
+    // - add SpecificPatternCatch::Unexpanded(&'a Type) which expands only on encounter.
     //   The more future-proof solution
     match type_ {
         Type::Variable(_) | Type::Origin(_) | Type::CoreConstruct { .. } | Type::Fn { .. } => {
             possibilities.push(SpecificPatternCatch::OnlyMatchableByVariable);
+        }
+        Type::Tuple(type_parts) => {
+            if type_parts.is_empty() {
+                possibilities.push(SpecificPatternCatch::Tuple(vec![]));
+            } else {
+                // can probably be optimized
+                let mut parts_possibilities = vec![Vec::new()];
+                for type_part in type_parts {
+                    let mut part_possibilities = Vec::new();
+                    type_to_possible_specific_pattern_catches(type_part, &mut part_possibilities);
+                    parts_possibilities = parts_possibilities
+                        .into_iter()
+                        .flat_map(|parts_possibility| {
+                            part_possibilities
+                                .iter()
+                                .cloned()
+                                .zip(std::iter::repeat_n(
+                                    parts_possibility,
+                                    part_possibilities.len(),
+                                ))
+                                .map(|(value_possibility, mut parts_possibility)| {
+                                    parts_possibility.push(value_possibility);
+                                    parts_possibility
+                                })
+                        })
+                        .collect();
+                }
+                possibilities.extend(
+                    parts_possibilities
+                        .into_iter()
+                        .map(SpecificPatternCatch::Tuple),
+                );
+            }
         }
         Type::Record(type_fields) => {
             if type_fields.is_empty() {
@@ -3329,29 +3550,39 @@ fn specific_pattern_catch_format(
             output.push_str("(some-variable)");
         }
         SpecificPatternCatch::Variant { name, value } => {
-            output.push('\'');
+            output.push('[');
             output.push_str(name);
             output.push(' ');
             specific_pattern_catch_format(value, output);
+            output.push(']');
         }
-        SpecificPatternCatch::Record(fields) => match fields.split_first() {
-            Some(((field0_name, field0_value), field1_up)) => {
-                output.push('.');
+        SpecificPatternCatch::Tuple(parts) => {
+            output.push('*');
+            if let Some((part0, part1_up)) = parts.split_first() {
+                output.push('(');
+                specific_pattern_catch_format(part0, output);
+                for part in part1_up {
+                    output.push(' ');
+                    specific_pattern_catch_format(part, output);
+                }
+                output.push(')');
+            }
+        }
+        SpecificPatternCatch::Record(fields) => {
+            output.push('{');
+            if let Some(((field0_name, field0_value), field1_up)) = fields.split_first() {
                 output.push_str(field0_name);
                 output.push(' ');
                 specific_pattern_catch_format(field0_value, output);
                 for (name, value) in field1_up {
                     output.push(' ');
-                    output.push('.');
                     output.push_str(name);
                     output.push(' ');
                     specific_pattern_catch_format(value, output);
                 }
             }
-            None => {
-                output.push('.');
-            }
-        },
+            output.push('}');
+        }
     }
 }
 fn specific_pattern_catches_remove_those_matched_by_pattern<Patterns>(
@@ -3413,6 +3644,25 @@ fn pattern_matches_specific_pattern_catch<Patterns>(
                     ),
                 }
             }
+            _ => false,
+        },
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => match possibility {
+            SpecificPatternCatch::Tuple(possibility_parts) => parts
+                .iter()
+                .zip(possibility_parts)
+                .all(|(part, possibility_part)| {
+                    pattern_matches_specific_pattern_catch(
+                        part,
+                        possibility_part,
+                        patterns,
+                        checked_spread_records,
+                    )
+                }),
             _ => false,
         },
         SyntaxPattern::Record {
@@ -3570,79 +3820,123 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                 checked_spread_records,
             );
         }
-        SyntaxPattern::Record {
-            open_curly_start,
-            fields,
-            closed_curly_start: _,
-        } => match expected_type {
-            Type::Record(expected_type_record_fields) => {
-                let mut remaining_expected_type_fields = expected_type_record_fields.clone();
-                for field in fields {
-                    let Some(value) = &field.value else {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(&field.name)),
-                            message: Box::from("missing field value after this field name"),
-                        });
-                        return;
-                    };
-                    let Some(expected_type_field) = remaining_expected_type_fields
-                        .iter()
-                        .position(|expected_field| expected_field.name == field.name.value)
-                        .map(|p| remaining_expected_type_fields.swap_remove(p))
-                    else {
-                        let error_message: String = format!(
-                                    "This pattern matches a record with the field .{} but the expected record type here only expects these fields
-.{}
-Are there duplicate fields?
-Otherwise, you might have intended this pattern to belong to a different if. Use parens for the if case results of ifs with multiple cases",
-                                        field.name.value,
-                                        expected_type_record_fields.iter().map(|expected_type_field| expected_type_field.name.as_str()).collect::<Vec<_>>().join(" .")
-                                );
-                        errors.push(ErrorNode {
-                            range: pattern_range(pattern, patterns),
-                            message: error_message.into_boxed_str(),
-                        });
-                        return;
-                    };
-                    syntax_if_case_pattern_check(
-                        value,
-                        &expected_type_field.value,
-                        errors,
-                        introduced_variables,
-                        patterns,
-                        existing_local_variables,
-                        checked_spread_records,
-                    );
-                }
-                {
-                    {
-                        if !remaining_expected_type_fields.is_empty() {
-                            let mut error_message = String::from("missing fields:\n");
-                            type_format(
-                                &mut error_message,
-                                0,
-                                &Type::Record(remaining_expected_type_fields),
-                            );
-                            error_message.push_str("\nAdd them to the case pattern or use a spread like .. rest to catch the remaining fields");
-                            errors.push(ErrorNode {
-                                range: symbol_range(*open_curly_start, "{"),
-                                message: error_message.into_boxed_str(),
-                            });
-                        }
-                    }
-                }
-            }
-            _ => {
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            let Type::Tuple(expected_type_parts) = expected_type else {
                 let mut error_message: String =
-                    String::from("This pattern matches a record but the expected type here is\n");
+                    String::from("This pattern matches a tuple but the expected type here is\n");
                 type_format(&mut error_message, 0, expected_type);
-                error_message.push_str("\nYou might have intended this pattern to belong to a different if. Use parens for the if case results of ifs with multiple cases");
+                error_message.push_str(
+                    "\nMaybe you intended this pattern to belong to a different if case?",
+                );
                 errors.push(ErrorNode {
                     range: pattern_range(pattern, patterns),
                     message: error_message.into_boxed_str(),
                 });
+                return;
+            };
+            if parts.len() != expected_type_parts.len() {
+                let mut error_message: String = format!(
+                    "This pattern matches a tuple with {parts_len} but the expected type here needs {expected_type_parts_len}:\n",
+                    parts_len = parts.len(),
+                    expected_type_parts_len = expected_type_parts.len()
+                );
+                type_format(&mut error_message, 0, expected_type);
+                error_message.push_str(
+                    "\nMaybe you intended this pattern to belong to a different if case?",
+                );
+                errors.push(ErrorNode {
+                    range: pattern_range(pattern, patterns),
+                    message: error_message.into_boxed_str(),
+                });
+                return;
             }
-        },
+            for (part, expected_type_part) in parts.iter().zip(expected_type_parts) {
+                syntax_if_case_pattern_check(
+                    part,
+                    expected_type_part,
+                    errors,
+                    introduced_variables,
+                    patterns,
+                    existing_local_variables,
+                    checked_spread_records,
+                );
+            }
+        }
+        SyntaxPattern::Record {
+            open_curly_start,
+            fields,
+            closed_curly_start: _,
+        } => {
+            let Type::Record(expected_type_record_fields) = expected_type else {
+                let mut error_message: String =
+                    String::from("This pattern matches a record but the expected type here is\n");
+                type_format(&mut error_message, 0, expected_type);
+                error_message.push_str(
+                    "\nMaybe you intended this pattern to belong to a different if case?",
+                );
+                errors.push(ErrorNode {
+                    range: pattern_range(pattern, patterns),
+                    message: error_message.into_boxed_str(),
+                });
+                return;
+            };
+            let mut remaining_expected_type_fields = expected_type_record_fields.clone();
+            for field in fields {
+                let Some(value) = &field.value else {
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(&field.name)),
+                        message: Box::from("missing field value after this field name"),
+                    });
+                    return;
+                };
+                let Some(expected_type_field) = remaining_expected_type_fields
+                    .iter()
+                    .position(|expected_field| expected_field.name == field.name.value)
+                    .map(|p| remaining_expected_type_fields.swap_remove(p))
+                else {
+                    let error_message: String = format!(
+                        "This pattern matches a record with the field .{} but the expected record type here only expects these fields
+.{}
+Are there duplicate fields?
+Otherwise, you might have intended this pattern to belong to a different if. Use parens for the if case results of ifs with multiple cases",
+                            field.name.value,
+                            expected_type_record_fields.iter().map(|expected_type_field| expected_type_field.name.as_str()).collect::<Vec<_>>().join(" .")
+                    );
+                    errors.push(ErrorNode {
+                        range: pattern_range(pattern, patterns),
+                        message: error_message.into_boxed_str(),
+                    });
+                    return;
+                };
+                syntax_if_case_pattern_check(
+                    value,
+                    &expected_type_field.value,
+                    errors,
+                    introduced_variables,
+                    patterns,
+                    existing_local_variables,
+                    checked_spread_records,
+                );
+            }
+            if !remaining_expected_type_fields.is_empty() {
+                let mut error_message = String::from("missing fields:\n");
+                type_format(
+                    &mut error_message,
+                    0,
+                    &Type::Record(remaining_expected_type_fields),
+                );
+                error_message.push_str("\nAdd them to the case pattern or use a spread like .. rest to catch the remaining fields");
+                errors.push(ErrorNode {
+                    range: symbol_range(*open_curly_start, "{"),
+                    message: error_message.into_boxed_str(),
+                });
+            }
+        }
     }
 }
 fn syntax_parameter_pattern_check<'a, Patterns>(
@@ -3773,6 +4067,28 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                 value: checked_value_type,
             }]))
         }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => parts
+            .iter()
+            .map(|part| {
+                syntax_parameter_pattern_check(
+                    part,
+                    errors,
+                    introduced_variables,
+                    type_aliases,
+                    patterns,
+                    existing_local_variables,
+                    checked_spread_records,
+                    records_used,
+                    choices_used,
+                )
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(Type::Tuple),
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -3780,46 +4096,42 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
         } => {
             let mut type_fields: Vec<TypeField> = Vec::with_capacity(fields.len());
             for field in fields {
+                let Some(value) = &field.value else {
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(&field.name)),
+                        message: Box::from("missing field value after this field name"),
+                    });
+                    return None;
+                };
+                if type_fields
+                    .iter()
+                    .any(|type_field| type_field.name == field.name.value)
                 {
-                    {
-                        let Some(value) = &field.value else {
-                            errors.push(ErrorNode {
-                                range: name_range(with_start_position_as_ref(&field.name)),
-                                message: Box::from("missing field value after this field name"),
-                            });
-                            return None;
-                        };
-                        if type_fields
-                            .iter()
-                            .any(|type_field| type_field.name == field.name.value)
-                        {
-                            errors.push(ErrorNode {
-                                range: name_range(with_start_position_as_ref(&field.name)),
-                                message: Box::from(
-                                    "a field with this name already exists in the record pattern",
-                                ),
-                            });
-                            return None;
-                        }
-                        let Some(checked_field_value_type) = syntax_parameter_pattern_check(
-                            value,
-                            errors,
-                            introduced_variables,
-                            type_aliases,
-                            patterns,
-                            existing_local_variables,
-                            checked_spread_records,
-                            records_used,
-                            choices_used,
-                        ) else {
-                            return None;
-                        };
-                        type_fields.push(TypeField {
-                            name: field.name.value.clone(),
-                            value: checked_field_value_type,
-                        });
-                    }
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(&field.name)),
+                        message: Box::from(
+                            "a field with this name already exists in the record pattern",
+                        ),
+                    });
+                    return None;
                 }
+                let Some(checked_field_value_type) = syntax_parameter_pattern_check(
+                    value,
+                    errors,
+                    introduced_variables,
+                    type_aliases,
+                    patterns,
+                    existing_local_variables,
+                    checked_spread_records,
+                    records_used,
+                    choices_used,
+                ) else {
+                    return None;
+                };
+                type_fields.push(TypeField {
+                    name: field.name.value.clone(),
+                    value: checked_field_value_type,
+                });
             }
             records_used.insert(sorted_field_names(
                 type_fields.iter().map(|type_field| &type_field.name),
@@ -4110,6 +4422,23 @@ fn syntax_pattern_to_zig_matches_condition<'a, Patterns>(
                 );
             }
         }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for (part_index, part) in parts.iter().enumerate() {
+                syntax_pattern_to_zig_matches_condition(
+                    output,
+                    part,
+                    &format!("{to_match}.@\"{part_index}\""),
+                    patterns,
+                );
+                output.push_str(" and ");
+            }
+            output.push_str("true");
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -4163,6 +4492,23 @@ fn syntax_pattern_to_zig_destructuring<'a, Patterns>(
                     output,
                     patterns.item(value),
                     &format!("{to_destructure}.{}", name_to_lowercase_zig(&name.value)),
+                    introduced_variables,
+                    checked_spread_records,
+                    patterns,
+                );
+            }
+        }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for (part_index, part) in parts.iter().enumerate() {
+                syntax_pattern_to_zig_destructuring(
+                    output,
+                    part,
+                    &format!("{to_destructure}.@\"{part_index}\"",),
                     introduced_variables,
                     checked_spread_records,
                     patterns,
@@ -4635,6 +4981,49 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                 zig_break_end(output);
             }
         }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            let label = match return_context {
+                ZigReturnContext::StatementsFollowedByBreak(label) => label,
+                ZigReturnContext::Expression => {
+                    let label = expression_start(expression);
+                    label
+                }
+            };
+            if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
+                zig_break_start(output, label);
+            }
+            output.push_str(".{ ");
+            for part in parts {
+                syntax_expression_to_zig(
+                    output,
+                    type_aliases,
+                    project_fns,
+                    expressions,
+                    patterns,
+                    checked_calls,
+                    checked_local_fns,
+                    checked_queries,
+                    checked_spread_records,
+                    local_variables,
+                    part,
+                    function_scope_start,
+                    ZigReturnContext::Expression,
+                );
+                output.push_str(", ");
+            }
+            output.push_str(" }");
+            match return_context {
+                ZigReturnContext::Expression => {}
+                ZigReturnContext::StatementsFollowedByBreak(_) => {
+                    zig_break_end(output);
+                }
+            }
+        }
         SyntaxExpression::Record {
             open_curly_start: _,
             fields,
@@ -4654,10 +5043,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             for field in fields {
                 sorted_field_setters.insert(&field.name.value, field.value.as_ref());
             }
-            if match return_context {
-                ZigReturnContext::Expression => false,
-                ZigReturnContext::StatementsFollowedByBreak(_) => true,
-            } {
+            if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
                 zig_break_start(output, label);
             }
             output.push_str("record(.{ ");
@@ -4954,9 +5340,21 @@ fn type_to_zig(output: &mut String, type_: &Type) {
     match type_ {
         Type::Variable(name) => name_to_uppercase_local_zig(output, name),
         Type::Origin(name) => origin_name_to_uppercase_local_zig(output, name),
+        Type::Tuple(parts) => {
+            if parts.is_empty() {
+                output.push_str(empty_zig_type_name);
+            } else {
+                output.push_str("struct { ");
+                for part in parts {
+                    type_to_zig(output, part);
+                    output.push_str(", ");
+                }
+                output.push_str("}");
+            }
+        }
         Type::Record(fields) => {
             if fields.is_empty() {
-                output.push_str(record_empty_zig_type_name);
+                output.push_str(empty_zig_type_name);
             } else {
                 let mut fields_sorted = fields.iter().collect::<Vec<_>>();
                 fields_sorted.sort_unstable_by_key(|field| &field.name);
@@ -5039,7 +5437,7 @@ fn origin_name_to_uppercase_local_zig(output: &mut String, name: &str) {
     output.push_str(&sanitized);
     output.push('"');
 }
-const record_empty_zig_type_name: &str = "void";
+const empty_zig_type_name: &str = "void";
 const choice_empty_zig_type_name: &str = "Choice";
 pub fn name_to_lowercase_zig(name: &str) -> String {
     let mut sanitized: String = name.replace("-", "_");
@@ -5083,7 +5481,7 @@ fn name_to_lowercase_local_zig_introduced_at(
 }
 const zig_unrelated_top_level_lowercase_names: [&str; 9] = [
     local_unnamed_function_name,
-    record_empty_zig_type_name,
+    empty_zig_type_name,
     "std",
     "record",
     "recordToArray",
@@ -5328,6 +5726,14 @@ fn type_to_js(output: &mut String, type_: &Type) {
         Type::Origin(name) => {
             origin_name_to_uppercase_js(output, name);
         }
+        Type::Tuple(parts) => {
+            output.push_str("[ ");
+            for part in parts {
+                type_to_js(output, part);
+                output.push_str(", ");
+            }
+            output.push(']');
+        }
         Type::Record(fields) => {
             if fields.is_empty() {
                 output.push_str(record_empty_js_type_name);
@@ -5420,6 +5826,23 @@ fn syntax_pattern_to_js_matches_condition<'a, Patterns>(
                 );
             }
         }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for (part_index, part) in parts.iter().enumerate() {
+                syntax_pattern_to_js_matches_condition(
+                    output,
+                    part,
+                    &format!("{to_match}[{part_index}]"),
+                    patterns,
+                );
+                output.push_str(" && ");
+            }
+            output.push_str("true");
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -5477,6 +5900,23 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
                 );
             }
         }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for (part_index, part) in parts.iter().enumerate() {
+                syntax_pattern_to_js_destructuring(
+                    output,
+                    part,
+                    &format!("{to_destructure}[{part_index}]"),
+                    introduced_variables,
+                    checked_spread_records,
+                    patterns,
+                );
+            }
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -5505,11 +5945,9 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
-
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
-
     expression: &'a SyntaxExpression<Expressions, Patterns>,
     scope_start: lsp_types::Position,
 ) {
@@ -5723,6 +6161,37 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 js_scope_result_variable(output, result_scope_start);
             }
             output.push_str(";\n};\n");
+        }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                output.push_str("let ");
+                js_scope_result_variable(output, expression_start(part));
+                output.push_str(";\n");
+                syntax_expression_to_js(
+                    output,
+                    type_aliases,
+                    expressions,
+                    patterns,
+                    checked_queries,
+                    checked_spread_records,
+                    local_variables,
+                    part,
+                    expression_start(part),
+                );
+                output.push('\n')
+            }
+            js_scope_result_variable(output, scope_start);
+            output.push_str(" = [ ");
+            for part in parts {
+                js_scope_result_variable(output, expression_start(part));
+                output.push_str(", ");
+            }
+            output.push_str("];\n");
         }
         SyntaxExpression::Record {
             open_curly_start: _,
@@ -6433,7 +6902,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         &argument_variable_input_type_diff,
                         expressions,
                         patterns,
-                        checked_spread_records,
                     );
                     return None;
                 }
@@ -6604,7 +7072,6 @@ If there should only ever by one variant, using a record with a single field is 
                             &variant_value_type_diff,
                             expressions,
                             patterns,
-                            checked_spread_records,
                         );
                         return None;
                     }
@@ -6697,6 +7164,34 @@ If there should only ever by one variant, using a record with a single field is 
             );
             Some(type_fn(parameter_types, checked_result_type))
         }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            let maybe_part_types: Option<Vec<Type>> = parts
+                .iter()
+                .map(|part| {
+                    syntax_expression_check(
+                        errors,
+                        type_aliases,
+                        project_fns,
+                        expressions,
+                        patterns,
+                        local_variables,
+                        part,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
+                        checked_spread_records,
+                        records_used,
+                        choices_used,
+                    )
+                })
+                .collect();
+            maybe_part_types.map(Type::Tuple)
+        }
         SyntaxExpression::Record {
             open_curly_start: _,
             fields,
@@ -6705,46 +7200,42 @@ If there should only ever by one variant, using a record with a single field is 
             let mut maybe_field_types: Option<Vec<TypeField>> =
                 Some(Vec::with_capacity(fields.len()));
             for field in fields {
-                {
-                    {
-                        let checked_field_value_type: Option<Type> = match &field.value {
-                            None => {
-                                errors.push(ErrorNode {
-                                    range: name_range(with_start_position_as_ref(&field.name)),
-                                    message: Box::from(
-                                        "missing field value expression after this field name",
-                                    ),
-                                });
-                                None
-                            }
-                            Some(field_value) => syntax_expression_check(
-                                errors,
-                                type_aliases,
-                                project_fns,
-                                expressions,
-                                patterns,
-                                local_variables,
-                                field_value,
-                                checked_calls,
-                                checked_local_fns,
-                                checked_queries,
-                                checked_spread_records,
-                                records_used,
-                                choices_used,
+                let checked_field_value_type: Option<Type> = match &field.value {
+                    None => {
+                        errors.push(ErrorNode {
+                            range: name_range(with_start_position_as_ref(&field.name)),
+                            message: Box::from(
+                                "missing field value expression after this field name",
                             ),
-                        };
-                        if let Some(field_types) = &mut maybe_field_types {
-                            match checked_field_value_type {
-                                None => {
-                                    maybe_field_types = None;
-                                }
-                                Some(checked_field_value_type) => {
-                                    field_types.push(TypeField {
-                                        name: field.name.value.clone(),
-                                        value: checked_field_value_type,
-                                    });
-                                }
-                            }
+                        });
+                        None
+                    }
+                    Some(field_value) => syntax_expression_check(
+                        errors,
+                        type_aliases,
+                        project_fns,
+                        expressions,
+                        patterns,
+                        local_variables,
+                        field_value,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
+                        checked_spread_records,
+                        records_used,
+                        choices_used,
+                    ),
+                };
+                if let Some(field_types) = &mut maybe_field_types {
+                    match checked_field_value_type {
+                        None => {
+                            maybe_field_types = None;
+                        }
+                        Some(checked_field_value_type) => {
+                            field_types.push(TypeField {
+                                name: field.name.value.clone(),
+                                value: checked_field_value_type,
+                            });
                         }
                     }
                 }
@@ -7153,7 +7644,6 @@ If you do not need to use this variable in that case, use any of the -rid functi
                         &match_result_case_result_type_diff,
                         expressions,
                         patterns,
-                        checked_spread_records,
                     );
                     invalid_case_indexes.push(case_index);
                 }
@@ -7225,6 +7715,9 @@ fn type_references_origin(type_: &Type, origin: &Name) -> bool {
     match type_ {
         Type::Variable(_) => false,
         Type::Origin(name) => name == origin,
+        Type::Tuple(parts) => parts
+            .iter()
+            .any(|part| type_references_origin(part, origin)),
         Type::Record(fields) => fields
             .iter()
             .any(|field| type_references_origin(&field.value, origin)),
@@ -7261,6 +7754,16 @@ pub fn syntax_type_variables_into<'a>(
         } => {
             for argument in arguments {
                 syntax_type_variables_into(type_variables, argument);
+            }
+        }
+        SyntaxType::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_type_variables_into(type_variables, part);
             }
         }
         SyntaxType::Record {
@@ -7316,6 +7819,16 @@ pub fn syntax_pattern_type_variables_into<'a, Patterns>(
                 syntax_pattern_type_variables_into(type_variables, patterns.item(value), patterns);
             }
         }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_pattern_type_variables_into(type_variables, part, patterns);
+            }
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -7342,6 +7855,7 @@ enum TypeDiff<'a> {
         name: &'a Name,
         arguments: Vec<Option<TypeDiff<'a>>>,
     },
+    Tuple(Vec<Option<TypeDiff<'a>>>),
     Record {
         fields: Vec<TypeDiffField<'a>>,
         actual_missing_fields: Vec<&'a Name>,
@@ -7418,6 +7932,17 @@ fn type_collect_variables_that_are_concrete_into(
                     result,
                     concrete_result,
                 );
+            }
+        }
+        Type::Tuple(parts) => {
+            if let Type::Tuple(concrete_parts) = concrete_type {
+                for (part, matching_concrete_part) in parts.iter().zip(concrete_parts) {
+                    type_collect_variables_that_are_concrete_into(
+                        type_parameter_replacements,
+                        part,
+                        matching_concrete_part,
+                    );
+                }
             }
         }
         Type::Record(fields) => {
@@ -7550,6 +8075,27 @@ fn type_diff<'a>(expected_type: &'a Type, actual_type: &'a Type) -> Option<TypeD
                     actual: actual_type,
                 })
             }
+        }
+        Type::Tuple(expected_parts) => {
+            let Type::Tuple(actual_parts) = actual_type else {
+                return Some(TypeDiff::Conflict {
+                    expected: expected_type,
+                    actual: actual_type,
+                });
+            };
+            if expected_parts.len() != actual_parts.len() {
+                return Some(TypeDiff::Conflict {
+                    expected: expected_type,
+                    actual: actual_type,
+                });
+            }
+            Some(TypeDiff::Tuple(
+                expected_parts
+                    .iter()
+                    .zip(actual_parts)
+                    .map(|(expected, actual)| type_diff(expected, actual))
+                    .collect(),
+            ))
         }
         Type::Record(expected_fields) => {
             if let Type::Record(actual_fields) = actual_type {
@@ -7721,6 +8267,25 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
                 option_type_diff_format(formatted, next_indent(indent), result.as_deref());
             }
         }
+        TypeDiff::Tuple(parts) => {
+            formatted.push('*');
+            if let Some((part0, part1_up)) = parts.split_first() {
+                formatted.push('(');
+                let line_span: LineSpan = type_diff_line_span(type_diff);
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                option_type_diff_format(formatted, next_indent(indent), part0.as_ref());
+                for part in part1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    option_type_diff_format(formatted, next_indent(indent), part.as_ref());
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                formatted.push(')');
+            }
+        }
         TypeDiff::Record {
             fields,
             actual_missing_fields,
@@ -7863,6 +8428,12 @@ fn type_diff_length_estimate(type_diff: &TypeDiff) -> usize {
                 .sum::<usize>()
                 + option_type_diff_length_estimate(result.as_deref())
         }
+        TypeDiff::Tuple(parts) => {
+            3 + parts
+                .iter()
+                .map(|part| 1 + option_type_diff_length_estimate(part.as_ref()))
+                .sum::<usize>()
+        }
         TypeDiff::Record {
             fields,
             actual_missing_fields,
@@ -7895,8 +8466,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
     type_diff: &TypeDiff,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
-    // TODO remove all checked_spread_records
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
 ) {
     match expression {
         SyntaxExpression::Number { .. } => {
@@ -7936,41 +8505,39 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
             value,
             closed_bracket_start: _,
         } => match name {
-            Some(name) => match type_diff {
-                TypeDiff::Choice(variant_type_diffs) => {
-                    match variant_type_diffs
-                        .iter()
-                        .find(|variant_type_diff| variant_type_diff.name == &name.value)
-                    {
-                        Some(variant_type_diff) => {
-                            if let Some(value) = value
-                                && let Some(variant_value_type_diff) = &variant_type_diff.value
-                            {
-                                place_expression_type_diff_errors(
-                                    errors,
-                                    expressions.item(value),
-                                    variant_value_type_diff,
-                                    expressions,
-                                    patterns,
-                                    checked_spread_records,
-                                );
-                            }
-                        }
-                        None => {
-                            errors.push(ErrorNode {
-                                range: expression_range(expression, expressions, patterns),
-                                message: type_diff_error_message(type_diff).into_boxed_str(),
-                            });
-                        }
-                    }
-                }
-                _ => {
+            Some(name) => {
+                let TypeDiff::Choice(variant_type_diffs) = type_diff else {
                     errors.push(ErrorNode {
                         range: expression_range(expression, expressions, patterns),
                         message: type_diff_error_message(type_diff).into_boxed_str(),
                     });
+                    return;
+                };
+                match variant_type_diffs
+                    .iter()
+                    .find(|variant_type_diff| variant_type_diff.name == &name.value)
+                {
+                    Some(variant_type_diff) => {
+                        if let Some(value) = value
+                            && let Some(variant_value_type_diff) = &variant_type_diff.value
+                        {
+                            place_expression_type_diff_errors(
+                                errors,
+                                expressions.item(value),
+                                variant_value_type_diff,
+                                expressions,
+                                patterns,
+                            );
+                        }
+                    }
+                    None => {
+                        errors.push(ErrorNode {
+                            range: expression_range(expression, expressions, patterns),
+                            message: type_diff_error_message(type_diff).into_boxed_str(),
+                        });
+                    }
                 }
-            },
+            }
             None => {
                 errors.push(ErrorNode {
                     range: expression_range(expression, expressions, patterns),
@@ -8009,7 +8576,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                         type_diff_result,
                         expressions,
                         patterns,
-                        checked_spread_records,
                     );
                 }
             }
@@ -8020,6 +8586,31 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                 });
             }
         },
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            let TypeDiff::Tuple(type_diff_parts) = type_diff else {
+                errors.push(ErrorNode {
+                    range: expression_range(expression, expressions, patterns),
+                    message: type_diff_error_message(type_diff).into_boxed_str(),
+                });
+                return;
+            };
+            for (part, type_diff_part) in parts.iter().zip(type_diff_parts) {
+                if let Some(type_diff_part) = type_diff_part {
+                    place_expression_type_diff_errors(
+                        errors,
+                        part,
+                        type_diff_part,
+                        expressions,
+                        patterns,
+                    );
+                }
+            }
+        }
         SyntaxExpression::Record {
             open_curly_start,
             fields,
@@ -8055,7 +8646,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                                 field_value_type_diff,
                                 expressions,
                                 patterns,
-                                checked_spread_records,
                             );
                         }
                     } else {
@@ -8086,7 +8676,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                     type_diff,
                     expressions,
                     patterns,
-                    checked_spread_records,
                 );
             }
         }
@@ -8103,7 +8692,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                     type_diff,
                     expressions,
                     patterns,
-                    checked_spread_records,
                 );
             }
         }
@@ -8126,7 +8714,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                     type_diff,
                     expressions,
                     patterns,
-                    checked_spread_records,
                 );
             }
         }
@@ -8199,6 +8786,25 @@ fn place_pattern_type_diff_errors<Patterns>(
                 });
             }
         },
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            let TypeDiff::Tuple(type_diff_parts) = type_diff else {
+                errors.push(ErrorNode {
+                    range: pattern_range(pattern, patterns),
+                    message: type_diff_error_message(type_diff).into_boxed_str(),
+                });
+                return;
+            };
+            for (part, type_diff_part) in parts.iter().zip(type_diff_parts) {
+                if let Some(type_diff_part) = type_diff_part {
+                    place_pattern_type_diff_errors(errors, part, type_diff_part, patterns);
+                }
+            }
+        }
         SyntaxPattern::Record {
             open_curly_start,
             fields,
@@ -8238,9 +8844,9 @@ fn place_pattern_type_diff_errors<Patterns>(
                     } else {
                         // actual_extraneous_fields.contains(&name_value)
                         errors.push(ErrorNode {
-                                        range: name_range(with_start_position_as_ref(&field.name)),
-                                        message: Box::from("extraneous field. This field is not included in the record type expected for this pattern. Remove it"),
-                                    });
+                            range: name_range(with_start_position_as_ref(&field.name)),
+                            message: Box::from("extraneous field. This field is not included in the record type expected for this pattern. Remove it"),
+                        });
                     }
                 }
             }
@@ -10362,6 +10968,11 @@ pub static core_records: std::sync::LazyLock<std::collections::HashSet<&'static 
         fn type_records(type_: &Type, records: &mut std::collections::HashSet<&'static [Name]>) {
             match type_ {
                 Type::Variable(_) => {}
+                Type::Tuple(parts) => {
+                    for part in parts {
+                        type_records(part, records);
+                    }
+                }
                 Type::Record(fields) => {
                     records.insert(
                         sorted_field_names(fields.iter().map(|field| &field.name))
@@ -10404,34 +11015,39 @@ pub static core_records: std::sync::LazyLock<std::collections::HashSet<&'static 
     });
 pub static core_choices: std::sync::LazyLock<std::collections::HashSet<&'static [Name]>> =
     std::sync::LazyLock::new(|| {
-        fn type_choices(type_: &Type, records: &mut std::collections::HashSet<&'static [Name]>) {
+        fn type_choices(type_: &Type, choices: &mut std::collections::HashSet<&'static [Name]>) {
             match type_ {
                 Type::Variable(_) => {}
+                Type::Tuple(parts) => {
+                    for part in parts {
+                        type_choices(part, choices);
+                    }
+                }
                 Type::Record(fields) => {
                     for field in fields {
-                        type_choices(&field.value, records);
+                        type_choices(&field.value, choices);
                     }
                 }
                 Type::Origin(_) => {}
                 Type::Choice(variants) => {
-                    records.insert(
+                    choices.insert(
                         sorted_variant_names(variants.iter().map(|field| &field.name))
                             // static variables will only be created once and won't be dropped anyway
                             .leak(),
                     );
                     for variant in variants {
-                        type_choices(&variant.value, records);
+                        type_choices(&variant.value, choices);
                     }
                 }
                 Type::CoreConstruct { name: _, arguments } => {
                     for argument in arguments {
-                        type_choices(argument, records);
+                        type_choices(argument, choices);
                     }
                 }
                 Type::Fn { parameters, result } => {
-                    type_choices(result, records);
+                    type_choices(result, choices);
                     for parameter in parameters {
-                        type_choices(parameter, records);
+                        type_choices(parameter, choices);
                     }
                 }
             }
@@ -10994,6 +11610,43 @@ fn syntax_expression_format<Expressions, Patterns>(
                 );
             }
         }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            formatted.push('*');
+            if let Some((part0, part1_up)) = parts.split_first() {
+                formatted.push('(');
+                let line_span =
+                    range_line_span(expression_range(expression, expressions, patterns));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                syntax_expression_format(
+                    formatted,
+                    next_indent(indent),
+                    expressions,
+                    patterns,
+                    part0,
+                );
+                for part in part1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    syntax_expression_format(
+                        formatted,
+                        next_indent(indent),
+                        expressions,
+                        patterns,
+                        part,
+                    );
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                formatted.push(')');
+            }
+        }
         SyntaxExpression::Record {
             open_curly_start: _,
             fields,
@@ -11242,6 +11895,30 @@ fn syntax_pattern_format<Patterns>(
                 syntax_pattern_format(formatted, indent, patterns, patterns.item(value));
             }
         }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            formatted.push('*');
+            if let Some((part0, part1_up)) = parts.split_first() {
+                formatted.push('(');
+                let line_span = range_line_span(pattern_range(pattern, patterns));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                syntax_pattern_format(formatted, next_indent(indent), patterns, part0);
+                for part in part1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    syntax_pattern_format(formatted, next_indent(indent), patterns, part);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                formatted.push(')');
+            }
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -11251,7 +11928,7 @@ fn syntax_pattern_format<Patterns>(
             formatted.push('{');
             let line_span = range_line_span(pattern_range(pattern, patterns));
             for field in fields {
-                space_or_linebreak_indented_into(formatted, line_span, indent);
+                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
                 syntax_pattern_record_field_format(formatted, indent, patterns, field);
             }
             space_or_linebreak_indented_into(formatted, line_span, indent);
@@ -11319,6 +11996,24 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                 }
             }
         }
+        SyntaxType::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            // TODO
+            formatted.push_str("*(");
+            let line_span = range_line_span(type_range(type_));
+            for part in parts {
+                space_or_linebreak_indented_into(formatted, line_span, indent);
+                syntax_type_format(formatted, next_indent(indent), part);
+            }
+            if line_span == LineSpan::Multiple {
+                linebreak_indented_into(formatted, indent);
+            }
+            formatted.push(')');
+        }
         SyntaxType::Record {
             open_curly_start: _,
             fields,
@@ -11344,6 +12039,10 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                     }
                 }
             }
+            if line_span == LineSpan::Multiple {
+                linebreak_indented_into(formatted, indent);
+            }
+            formatted.push('}');
         }
         SyntaxType::Choice {
             open_bracket_start: _,
@@ -11766,6 +12465,24 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     })
                 })
         }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => parts.iter().find_map(|part| {
+            expression_symbol_at_position(
+                part,
+                position,
+                type_aliases,
+                checked_queries,
+                checked_spread_records,
+                expressions,
+                patterns,
+                scope,
+                local_variables,
+            )
+        }),
         SyntaxExpression::Record {
             open_curly_start: _,
             fields,
@@ -12005,6 +12722,14 @@ fn syntax_parameter_pattern_variables_fold<'a, Patterns, State>(
                 patterns,
             ),
         },
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => parts.iter().fold(state, |state, part| {
+            syntax_parameter_pattern_variables_fold(part, state, reduce, patterns)
+        }),
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -12060,6 +12785,26 @@ fn syntax_if_pattern_variables_fold<'a, Patterns, State>(
                 patterns,
             ),
         },
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => parts
+            .iter()
+            .enumerate()
+            .fold(state, |state, (part_index, part)| {
+                syntax_if_pattern_variables_fold(
+                    part,
+                    match expected_type {
+                        Some(Type::Tuple(expected_parts)) => expected_parts.get(part_index),
+                        _ => None,
+                    },
+                    state,
+                    reduce,
+                    patterns,
+                )
+            }),
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -12159,6 +12904,26 @@ fn pattern_symbol_at_position<'a, Expressions, Patterns>(
                 )
             })
         }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => parts.iter().enumerate().find_map(|(part_index, part)| {
+            pattern_symbol_at_position(
+                part,
+                match expected_type {
+                    Some(Type::Tuple(expected_parts)) => expected_parts.get(part_index),
+                    _ => None,
+                },
+                position,
+                type_aliases,
+                checked_spread_records,
+                patterns,
+                project_item_scope,
+                expression_scope,
+            )
+        }),
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -12240,6 +13005,14 @@ fn type_symbol_at_position<'a, Expressions, Patterns>(
                 .iter()
                 .find_map(|argument| type_symbol_at_position(argument, position, scope))
         }
+        SyntaxType::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => parts
+            .iter()
+            .find_map(|part| type_symbol_at_position(part, position, scope)),
         SyntaxType::Record {
             open_curly_start: _,
             fields,
@@ -12579,6 +13352,16 @@ fn syntax_type_symbol_uses_into<Expressions, Patterns>(
                 uses.push(name_range(with_start_position_as_ref(name)));
             }
         }
+        SyntaxType::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_type_symbol_uses_into(uses, part, symbol);
+            }
+        }
         SyntaxType::Record {
             open_curly_start: _,
             fields,
@@ -12668,6 +13451,16 @@ fn syntax_pattern_symbol_uses_into<Expressions, Patterns>(
             }
             if let Some(value) = value {
                 syntax_pattern_symbol_uses_into(uses, patterns.item(value), symbol, patterns);
+            }
+        }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_pattern_symbol_uses_into(uses, part, symbol, patterns);
             }
         }
         SyntaxPattern::Record {
@@ -12886,6 +13679,23 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                     expressions,
                     patterns,
                     &parameter_pattern_variables,
+                );
+            }
+        }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_expression_symbol_uses_into(
+                    uses,
+                    part,
+                    symbol,
+                    expressions,
+                    patterns,
+                    local_variables,
                 );
             }
         }
@@ -13288,6 +14098,17 @@ fn syntax_pattern_highlight<Patterns>(
                 syntax_pattern_highlight(state, patterns, patterns.item(value));
             }
         }
+        SyntaxPattern::Tuple {
+            star_start,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            keyword_highlight(state, "*", *star_start);
+            for part in parts {
+                syntax_pattern_highlight(state, patterns, part);
+            }
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
@@ -13325,6 +14146,17 @@ pub fn syntax_type_highlight(state: &mut HighlightState, type_: &SyntaxType) {
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Function);
             for argument in arguments {
                 syntax_type_highlight(state, argument);
+            }
+        }
+        SyntaxType::Tuple {
+            star_start,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            keyword_highlight(state, "*", *star_start);
+            for part in parts {
+                syntax_type_highlight(state, part);
             }
         }
         SyntaxType::Record {
@@ -13450,6 +14282,17 @@ fn syntax_expression_highlight<Expressions, Patterns>(
             }
             if let Some(result) = result {
                 syntax_expression_highlight(state, expressions, patterns, expressions.item(result));
+            }
+        }
+        SyntaxExpression::Tuple {
+            star_start,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            keyword_highlight(state, "*", *star_start);
+            for part in parts {
+                syntax_expression_highlight(state, expressions, patterns, part);
             }
         }
         SyntaxExpression::Record {
@@ -13679,36 +14522,65 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
             space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
             type_format(formatted, next_indent(indent), result);
         }
-        Type::Record(fields) => type_record_format(formatted, indent, fields),
-        Type::Choice(variants) => match variants.split_first() {
-            None => {
-                formatted.push('\'');
-            }
-            Some((variant0, variant1_up)) => {
-                type_variant_format(formatted, indent, variant0);
+        Type::Tuple(parts) => {
+            formatted.push('*');
+            if let Some((part0, part1_up)) = parts.split_first() {
+                formatted.push('(');
                 let line_span: LineSpan = type_line_span(type_);
-                for variant in variant1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, indent);
-                    type_variant_format(formatted, indent, variant);
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                type_format(formatted, next_indent(indent), part0);
+                for part in part1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    type_format(formatted, next_indent(indent), part);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                formatted.push(')');
+            }
+        }
+        Type::Record(fields) => type_record_format(formatted, indent, fields),
+        Type::Choice(variants) => {
+            formatted.push('[');
+            match variants.split_first() {
+                None => {}
+                Some((variant0, variant1_up)) => {
+                    let line_span: LineSpan = type_line_span(type_);
+                    if line_span == LineSpan::Multiple {
+                        linebreak_indented_into(formatted, next_indent(indent));
+                    }
+                    type_variant_format(formatted, indent, variant0);
+                    for variant in variant1_up {
+                        space_or_linebreak_indented_into(formatted, line_span, indent);
+                        type_variant_format(formatted, indent, variant);
+                    }
+                    if line_span == LineSpan::Multiple {
+                        linebreak_indented_into(formatted, next_indent(indent));
+                    }
                 }
             }
-        },
+            formatted.push(']');
+        }
     }
 }
 fn type_record_format(formatted: &mut String, indent: usize, fields: &[TypeField]) {
+    formatted.push('{');
     match fields.split_first() {
-        None => {
-            formatted.push('.');
-        }
+        None => {}
         Some((field0, field1_up)) => {
-            type_field_format(formatted, indent, field0);
             let line_span: LineSpan = type_record_line_span(fields);
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            type_field_format(formatted, next_indent(indent), field0);
             for field in field1_up {
-                space_or_linebreak_indented_into(formatted, line_span, indent);
-                type_field_format(formatted, indent, field);
+                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                type_field_format(formatted, next_indent(indent), field);
             }
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
         }
     }
+    formatted.push('}');
 }
 
 fn type_field_format(formatted: &mut String, indent: usize, type_field: &TypeField) {
@@ -13755,6 +14627,12 @@ fn type_length_estimate(type_: &Type) -> usize {
                 .sum::<usize>()
                 + type_length_estimate(result)
         }
+        Type::Tuple(parts) => {
+            3 + parts
+                .iter()
+                .map(|part| 1 + type_length_estimate(part))
+                .sum::<usize>()
+        }
         Type::Record(fields) => type_record_length_estimate(fields),
         Type::Choice(variants) => variants
             .iter()
@@ -13763,10 +14641,10 @@ fn type_length_estimate(type_: &Type) -> usize {
     }
 }
 fn type_record_length_estimate(fields: &[TypeField]) -> usize {
-    fields
+    4 + fields
         .iter()
-        .map(|field| 3 + field.name.len() + type_length_estimate(&field.value))
-        .sum()
+        .map(|field| 2 + field.name.len() + type_length_estimate(&field.value))
+        .sum::<usize>()
 }
 
 pub fn syntax_project_item_rid<Expressions, Patterns>(
@@ -13825,6 +14703,16 @@ fn syntax_pattern_rid<Patterns>(
         } => {
             if let Some(value) = value {
                 syntax_pattern_rid(patterns.remove(value), patterns);
+            }
+        }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_pattern_rid(part, patterns);
             }
         }
         SyntaxPattern::Record {
@@ -13893,6 +14781,16 @@ fn syntax_expression_rid<Expressions, Patterns>(
             }
             if let Some(result) = result {
                 syntax_expression_rid(expressions.remove(result), expressions, patterns);
+            }
+        }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_expression_rid(part, expressions, patterns);
             }
         }
         SyntaxExpression::Record {

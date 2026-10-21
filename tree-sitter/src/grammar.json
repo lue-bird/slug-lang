@@ -181,6 +181,10 @@
               },
               {
                 "type": "SYMBOL",
+                "name": "expression_tuple"
+              },
+              {
+                "type": "SYMBOL",
                 "name": "expression_record"
               },
               {
@@ -434,6 +438,43 @@
         }
       ]
     },
+    "expression_tuple": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "*"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "("
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "expression"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ")"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
     "expression_record_field": {
       "type": "SEQ",
       "members": [
@@ -492,6 +533,10 @@
         },
         {
           "type": "SYMBOL",
+          "name": "pattern_tuple_typed"
+        },
+        {
+          "type": "SYMBOL",
           "name": "pattern_record_typed"
         }
       ]
@@ -510,6 +555,10 @@
         {
           "type": "SYMBOL",
           "name": "pattern_variant_untyped"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "pattern_tuple_untyped"
         },
         {
           "type": "SYMBOL",
@@ -590,6 +639,80 @@
         {
           "type": "STRING",
           "value": "]"
+        }
+      ]
+    },
+    "pattern_tuple_typed": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "*"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "("
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "pattern_typed"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ")"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        }
+      ]
+    },
+    "pattern_tuple_untyped": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "*"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "("
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "pattern_untyped"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ")"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },
@@ -681,6 +804,10 @@
         {
           "type": "SYMBOL",
           "name": "type_construct_with_arguments"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "type_tuple"
         },
         {
           "type": "SYMBOL",
@@ -791,6 +918,43 @@
         {
           "type": "SYMBOL",
           "name": "type"
+        }
+      ]
+    },
+    "type_tuple": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "*"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "STRING",
+                  "value": "("
+                },
+                {
+                  "type": "REPEAT",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "type"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ")"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
         }
       ]
     },

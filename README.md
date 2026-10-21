@@ -48,7 +48,7 @@ ty project-state
       base-expression expression(^expressions ^patterns ^types)
     }
 
-fn initial-state({}) state
+fn initial-state() state
     { projects-buf projects-buf buf-empty<^projects project-state>()
       projects [yes<opt(span(^projects))> *]
     }

@@ -16,6 +16,8 @@
 
 (key_symbol_chain) @keyword
 
+(key_symbol_tuple) @keyword
+
 (pattern_ignore_untyped) @keyword
 
 (field_name) @property
