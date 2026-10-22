@@ -1,8 +1,7 @@
 fast programming language where indexes know their origin array. An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet(name str chars buf(Chars char))
-    *(buf(Chars char) span(Chars))
+fn greet<Chars>(name str) span(Chars char)
     buf-add-str-chars("Hello, " str)
     .buf-span-add-str-chars(name)
     .buf-span-add("!" char)
@@ -21,37 +20,38 @@ cargo install --git https://codeberg.org/lue-bird/slug-lang slug
 
 ```slug
 ty expression(Expressions Patterns Types)
-    [ let
-        { pattern pattern(Patterns Types)
-          value slot(Expressions)
-          result slot(Expressions)
+    [
+    let
+        {
+        pattern pattern(Patterns Types)
+        value slot(Expressions expression(Expressions Patterns Types))
+        result slot(Expressions expression(Expressions Patterns Types))
         }
-      ...
+    ...
     ]
-
-ty state
-    { projects-buf buf(^projects project-state)
-      projects opt(span(^projects))
-    }
 ```
-Note that unlike references, slots and spans themselves do _not_ store their type.
-Functions instead explicitly list the bufs as parameters.
 The rule to make it all safe: a buf must not be able to be defined with an origin that is already directly reachable (in existing slots, spans or bufs)
-
-(But a value _can_ outlive any ^origin it references and it _can_ reference an ^origin that is not yet defined.)
 
 Use nested bufs instead of one big one to operate on one chunk in a clear way, e.g. pre-allocating, altering, reusing memory, stepping, quick bulk deletion / bulk access / bulk modification without needing to reach into _all_ items of the same kind.
 ```slug
 ty project-state
-    { expressions buf(^expressions expression)
-      patterns buf(^patterns pattern)
-      types buf(^types pattern)
-      base-expression expression(^expressions ^patterns ^types)
+    {
+    base-expression expression(^expressions ^patterns ^types)
+    expressions buf(^expressions expression(^expressions ^patterns ^types))
+    patterns buf(^patterns pattern(^patterns ^types))
+    types buf(^types type(^types))
+    }
+
+ty state
+    {
+    projects opt(span(^projects))
+    projects-buf buf(^projects project-state)
     }
 
 fn initial-state() state
-    { projects-buf projects-buf buf-empty<^projects project-state>()
-      projects [yes<opt(span(^projects))> *]
+    {
+    projects [yes<opt(span(^projects))> *]
+    projects-buf projects-buf buf-empty<^projects project-state>()
     }
 ```
 
@@ -142,16 +142,17 @@ fn(first-parameter-type second) result-type
 ^concrete-origin-type
 
 # declare a shorthand for an existing type
-ty point { x i32 y i32 }
+ty point {x i32 y i32}
 
 # can also accept parameters
 ty pair(First Second-parameter) type-using-the-type-variables
 
 # a "choice type" that can come in different shapes ("variants")
 # which each have a unique name and one associated value.
-[ first-option {}
-  second-option some(u32)
-  third-option { some u32 values f32 }
+[
+first-option *
+second-option some(u32)
+third-option {some u32 values f32}
 ]
 
 # creating a variant.
@@ -212,40 +213,25 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - shadowing is allowed and encouraged
 
 ## implementation details
-- bufs are the only values passed by mutable reference! (double indirection)
-  Sadly this means it must be ref-counted.
-  Here's an example showing how simple ownership falls flat
-  ```slug
-  fn example() {}
-      = outer buf-empty<^outer buf(^inner u32)>()
-      = inner buf-empty<^inner u32>()
-      = _ outer.buf-add(inner)
-      = _ outer.buf-add(inner)
-      {}
-  ```
-  Honestly it is a little confusing that you can store multiple references to the same `buf` and modify through any of them.
-  Maybe this is also a hint that current `buf` passing semantics can be improved?
-  
 - expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
   The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
-- when a slot or span is dropped or cloned, slug must check the ssociated origin bufs are reachable and error otherwise. This means that many functions still need to return the slots and spans that are passed in, like `slot-index`, `span-start`. This screams like a small design failure but maybe it's fine.
+- once a `buf` has been "used" (e.g. explicitly passed in and out of a function) it invalidates all prior uses of the origin in the rest of the current scope. E.g. a buf of bufs + a buf of slots with the same origin means you could mix and match willy nilly
+- For functions with type variables, pass in a generic "bundle of bufs" along with drop and clone functions that take and modify that bundle
+- implicitly pass a generic "bundle of bufs" whenever a function does not itself take a buf
 - If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
 - type aliases are _not_ (!) checked for origin violations, only actual expression code is
-- type aliases are checked as if they contained any number of buf origins and slot/span origins.
+- type variables are checked as if they contained any number of buf origins and slot/span origins.
   To illustrate why this could otherwise lead to issues, look at
   ```
   fn (
-      first slot(Origin)
-      second slot(Origin)
-      buf buf(Origin { x X y Y })
-      xy-rid fn({ x X y Y }) {}
+      first slot(Origin {x X y Y})
+      second slot(Origin {x X y Y})
+      xy-rid fn({x X y Y}) *
   )
       
-      = {} xy-rid({ x first-x y second-y })
-      xy-rid({ x second-y y first-y })
-  ```
-  this tells me that is should be an error to do anything with type variable-typed values that you couldn't also do with bufs.
-  
+      = * xy-rid({x first-x y second-y})
+      xy-rid({x second-y y first-y})
+  ```  
   So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
 
 ## TODO
@@ -257,18 +243,10 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - website with online repl
 
 ## known design weaknesses
-  - it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
-    This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
-    
-    The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
-- slots, spans and type variable-typed values can not be trivially cloned and scrapped when the necessary bufs are not in scope.
-  This is a little annoying to check (considering slot items might themselves introduce).
-  An easy and very convenient (but heartbreaking, because 3x memory usage) fix would be embedding the buffer rc pointer in each slot and span.
-  Another, more difficult but faster solution could be always passing a "bundle of reachable bufs" around and somehow (?) associate the right one with slots/spans
-- bufs are passed by rc, leading to indirection. Being able to store a buf multiple times is also very, very confusing.
-
-  Better (but also slightly confusing) semantics may be to always pass bufs "by inout", meaning they cannot be duplicated and must not be part of the result in any way.
-  Or I could just give up and require bufs to be linear at the expense of convenience but easier to analyze and more intuitive.
+- it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
+  This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
+  
+  The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
 - building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
 
 ## potential improvements in the future
@@ -301,7 +279,7 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - should the underlying bufs be per-(size+align / bucket) instead of per-type? Per-type feels more reasonable but per-(size+align / bucket) could be more compact, avoid frequent smaller allocations and be leaner on the stack when passing the bufs.
   On the other hand it may (?) be worse for caches (semantically related objects are not necessarily grouped together), debugging, ffi, and memory usage (short-lived item bufs temporarily "pollute" a bigger buf and aren't freed as easily)
 
-### explicit share-able view types
+### explicit share-able view types (outdated syntax)
 All structural types (e.g. char, str, records of structural types, choice types of structural types) are directly compatible with & and can be recombined into & types (for example `&str` is the same as `str`).
 Non-structural types (e.g. buf, span, slot) can only be temporarily "borrowed" with &.
 Adding & is thus allowed in front of any type and makes it have the properties of any other &type.
