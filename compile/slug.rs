@@ -160,14 +160,10 @@ pub enum SyntaxExpression<Expressions, Patterns> {
         type_: Option<SyntaxType>,
     },
     Variable(WithStartPosition<Name>),
-    FunctionWithTypeArguments {
-        name: WithStartPosition<Name>,
-        type_arguments: SyntaxAngledTypeArguments,
-    },
     Call {
         name: WithStartPosition<Name>,
         type_arguments: Option<SyntaxAngledTypeArguments>,
-        open_paren_start: lsp_types::Position,
+        open_paren_start: Option<lsp_types::Position>,
         arguments: Vec<SyntaxExpression<Expressions, Patterns>>,
         closed_paren_start: Option<lsp_types::Position>,
     },
@@ -595,10 +591,6 @@ pub fn expression_start<Expressions, Patterns>(
             type_: _,
         } => *open_quote_start,
         SyntaxExpression::Variable(name) => name.start,
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments: _,
-        } => name.start,
         SyntaxExpression::Call { name, .. } => name.start,
         SyntaxExpression::Variant {
             open_bracket_start, ..
@@ -647,13 +639,9 @@ pub fn expression_end<Expressions, Patterns>(
                 }
             }),
         SyntaxExpression::Variable(name) => name_end(with_start_position_as_ref(name)),
-        SyntaxExpression::FunctionWithTypeArguments {
-            name: _,
-            type_arguments,
-        } => angled_type_arguments_end(type_arguments),
         SyntaxExpression::Call {
-            name: _,
-            type_arguments: _,
+            name,
+            type_arguments,
             open_paren_start,
             arguments,
             closed_paren_start,
@@ -664,7 +652,13 @@ pub fn expression_end<Expressions, Patterns>(
                     .last()
                     .map(|argument| expression_end(argument, expressions, patterns))
             })
-            .unwrap_or_else(|| symbol_end(*open_paren_start, "(")),
+            .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
+            .or_else(|| {
+                type_arguments
+                    .as_ref()
+                    .map(|type_arguments| angled_type_arguments_end(type_arguments))
+            })
+            .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
         SyntaxExpression::Variant {
             open_bracket_start,
             type_,
@@ -1840,31 +1834,24 @@ fn parse_expression_variable_or_function_with_type_arguments_or_call<Expressions
     parse_slug_whitespace(state);
     let type_arguments = parse_angled_type_arguments(state);
     parse_slug_whitespace(state);
-    match parse_symbol_as_start(state, "(") {
-        Some(open_paren_start) => {
-            parse_slug_whitespace(state);
-            let mut arguments = Vec::new();
-            while let Some(argument) = parse_expression(state, expressions, patterns) {
-                arguments.push(argument);
-                parse_slug_whitespace(state);
-            }
-            let closed_paren_start = parse_symbol_as_start(state, ")");
-            Some(SyntaxExpression::Call {
-                name: name,
-                type_arguments: type_arguments,
-                open_paren_start,
-                arguments,
-                closed_paren_start,
-            })
-        }
-        None => match type_arguments {
-            None => Some(SyntaxExpression::Variable(name)),
-            Some(type_arguments) => Some(SyntaxExpression::FunctionWithTypeArguments {
-                name: name,
-                type_arguments: type_arguments,
-            }),
-        },
+    let open_paren_start = parse_symbol_as_start(state, "(");
+    if type_arguments.is_none() || open_paren_start.is_none() {
+        return Some(SyntaxExpression::Variable(name));
     }
+    parse_slug_whitespace(state);
+    let mut arguments = Vec::new();
+    while let Some(argument) = parse_expression(state, expressions, patterns) {
+        arguments.push(argument);
+        parse_slug_whitespace(state);
+    }
+    let closed_paren_start = parse_symbol_as_start(state, ")");
+    Some(SyntaxExpression::Call {
+        name: name,
+        type_arguments: type_arguments,
+        open_paren_start,
+        arguments,
+        closed_paren_start,
+    })
 }
 
 fn parse_expression_variant<Expressions, Patterns>(
@@ -2513,16 +2500,6 @@ fn syntax_expression_connect_fns_in_graph_from<Expressions, Patterns>(
         SyntaxExpression::Number { .. } => {}
         SyntaxExpression::Text { .. } => {}
         SyntaxExpression::Variable(name) => {
-            if let Some(referenced_fn_graph_node) =
-                project_fn_graph_node_by_name.get(&name.value).copied()
-            {
-                project_fn_graph.insert(referenced_fn_graph_node);
-            }
-        }
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments: _,
-        } => {
             if let Some(referenced_fn_graph_node) =
                 project_fn_graph_node_by_name.get(&name.value).copied()
             {
@@ -4668,13 +4645,11 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
     project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
-
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
-
     expression: &'a SyntaxExpression<Expressions, Patterns>,
     function_scope_start: lsp_types::Position,
     return_context: ZigReturnContext,
@@ -4817,12 +4792,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
                 zig_break_end(output);
             }
-        }
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments,
-        } => {
-            todo!()
         }
         SyntaxExpression::Call {
             name,
@@ -6158,12 +6127,6 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             }
             output.push_str(";\n");
         }
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments: _,
-        } => {
-            output.push_str(&name_to_lowercase_js(&name.value));
-        }
         SyntaxExpression::Call {
             name,
             type_arguments: _,
@@ -7033,68 +6996,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                 },
             );
             Some(result_type)
-        }
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments: syntax_type_arguments,
-        } => {
-            // TODO handle name being local variable
-            let Some(project_fn_info) = project_fns.get(name.value.as_str()) else {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(name)),
-                    message: Box::from("unknown function name. No fn in core or in this project has this name. Note that a local fn expression can not refer to any variable from the outside. Otherwise check for typos.")
-                });
-                return None;
-            };
-            let Some(project_fn_result_type) = &project_fn_info.result_type else {
-                return None;
-            };
-            let type_argument_count = syntax_type_arguments.types.len();
-            if type_argument_count != project_fn_info.type_parameters.len() {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(name)),
-                    message: format!("incorrect number of type parameters. The project fn has {parameter_count} type {parameter_pluralized}, but you provided {type_argument_count} as arguments.
-Type arguments are provided each wrapped in curly braces after the fn name, like in Buf-empty{{u32}} origin.",
-                        parameter_count = project_fn_info.type_parameters.len(),
-                        parameter_pluralized = if project_fn_info.type_parameters.len() == 1 {
-                            "parameter"
-                        } else {
-                            "parameters"
-                        },
-                    ).into_boxed_str()
-                });
-                return None;
-            }
-            let mut type_arguments = Vec::new();
-            for syntax_type_argument in &syntax_type_arguments.types {
-                let Some(type_argument) = syntax_type_check(
-                    syntax_type_argument,
-                    errors,
-                    type_aliases,
-                    records_used,
-                    choices_used,
-                ) else {
-                    return None;
-                };
-                type_arguments.push(type_argument);
-            }
-            let mut result_function_type = type_fn(
-                project_fn_info
-                    .parameter_types
-                    .iter()
-                    .flatten()
-                    .cloned()
-                    .collect(),
-                project_fn_result_type.clone(),
-            );
-            let type_variable_replacements = project_fn_info
-                .type_parameters
-                .iter()
-                .zip(type_arguments)
-                .map(|(type_parameter, type_argument)| (type_parameter.clone(), type_argument))
-                .collect();
-            type_replace_variables(&type_variable_replacements, &mut result_function_type);
-            Some(result_function_type)
         }
         SyntaxExpression::Variant {
             open_bracket_start: tick_start,
@@ -8620,12 +8521,6 @@ fn place_expression_type_diff_errors<Expressions, Patterns>(
                 message: type_diff_error_message(type_diff).into_boxed_str(),
             });
         }
-        SyntaxExpression::FunctionWithTypeArguments { .. } => {
-            errors.push(ErrorNode {
-                range: expression_range(expression, expressions, patterns),
-                message: type_diff_error_message(type_diff).into_boxed_str(),
-            });
-        }
         SyntaxExpression::Call { .. } => {
             errors.push(ErrorNode {
                 range: expression_range(expression, expressions, patterns),
@@ -9887,12 +9782,9 @@ To modify it, use `buf-pre-allocate-at-least`, `buf-add`, `buf-add-unset` etc.",
                 documentation: "Initialize a `buf` with 0 items and spare allocated memory from an `Unset-slice`.
 This can be used to recycle `buf` memory from one `buf` with one origin into another `buf` with a different origin.
 ```slug
-fn Buf-recycle-empty
-    .new-origin new-origin Origin _new-origin, _new-part
-    .old old Buf _old-origin, _item
-: Buf (Origin _new-origin, _new-part), _item =
-    ? Buf-to-unset old [unset-slice]
-    Buf-reuse .origin new-origin .slice unset-slice
+fn buf-recycle(old buf(OldOrigin Item))
+    buf(New-origin Item)
+    buf-reuse<NewOrigin>(buf-to-unset(old))
 ```",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_unset_slice(type_variable("Item"))],
@@ -11167,37 +11059,6 @@ fn syntax_expression_format<Expressions, Patterns>(
         SyntaxExpression::Variable(name) => {
             formatted.push_str(&name.value);
         }
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments,
-        } => {
-            formatted.push_str(&name.value);
-            formatted.push('<');
-            if let Some((type_argument0, type_argument1_up)) = type_arguments.types.split_first() {
-                let type_arguments_line_span = range_line_span(lsp_types::Range {
-                    start: type_arguments.open_angle_start,
-                    end: type_arguments.closed_angle_start.unwrap_or_else(|| {
-                        type_end(type_arguments.types.last().unwrap_or(type_argument0))
-                    }),
-                });
-                if type_arguments_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_type_format(formatted, next_indent(indent), type_argument0);
-                for type_argument in type_argument1_up {
-                    space_or_linebreak_indented_into(
-                        formatted,
-                        type_arguments_line_span,
-                        next_indent(indent),
-                    );
-                    syntax_type_format(formatted, next_indent(indent), type_argument);
-                }
-                if type_arguments_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push('>');
-        }
         SyntaxExpression::Call {
             name,
             type_arguments,
@@ -11238,7 +11099,13 @@ fn syntax_expression_format<Expressions, Patterns>(
             formatted.push('(');
             if let Some((argument0, argument1_up)) = arguments.split_first() {
                 let arguments_line_span = range_line_span(lsp_types::Range {
-                    start: *open_paren_start,
+                    start: open_paren_start
+                        .or_else(|| {
+                            type_arguments
+                                .as_ref()
+                                .map(|type_arguments| angled_type_arguments_end(type_arguments))
+                        })
+                        .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
                     end: closed_paren_start.unwrap_or_else(|| {
                         expression_end(arguments.last().unwrap_or(argument0), expressions, patterns)
                     }),
@@ -12088,21 +11955,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     local_variables: std::mem::take(local_variables),
                 }),
         ),
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments,
-        } => {
-            if range_includes_position(name_range(with_start_position_as_ref(name)), position) {
-                return Some(SyntaxSymbol::ProjectFnOrUnknown {
-                    name: with_start_position_as_ref(name),
-                    construct_info: ConstructInfo::NotExpectingArgument,
-                });
-            }
-            type_arguments
-                .types
-                .iter()
-                .find_map(|type_argument| type_symbol_at_position(type_argument, position, scope))
-        }
         SyntaxExpression::Call {
             name,
             type_arguments,
@@ -12931,13 +12783,6 @@ pub fn syntax_project_symbol_uses<Expressions, Patterns>(
 ) -> Vec<lsp_types::Range> {
     let mut uses = Vec::with_capacity(2);
     match symbol {
-        SyntaxSymbol::Origin {
-            name: _,
-            use_start: _,
-        } => {
-            // TODO
-            todo!()
-        }
         SyntaxSymbol::TypeVariable {
             name: _,
             use_start: _,
@@ -12999,6 +12844,56 @@ pub fn syntax_project_symbol_uses<Expressions, Patterns>(
                     patterns,
                     &std::collections::HashSet::new(),
                 );
+            }
+        }
+        SyntaxSymbol::Origin {
+            name: _,
+            use_start: _,
+        } => {
+            for item in &project.items {
+                match item {
+                    SyntaxProjectItem::Fn {
+                        fn_keyword_start: _,
+                        name: _,
+                        type_parameters: _,
+                        open_paren_start: _,
+                        parameters,
+                        closed_paren_start: _,
+                        result_type,
+                        documentation: _,
+                        result,
+                    } => {
+                        for parameter in parameters {
+                            syntax_pattern_symbol_uses_into(&mut uses, parameter, symbol, patterns);
+                        }
+                        if let Some(result_type) = result_type {
+                            syntax_type_symbol_uses_into(&mut uses, result_type, symbol);
+                        }
+                        if let Some(result) = result {
+                            syntax_expression_symbol_uses_into(
+                                &mut uses,
+                                result,
+                                symbol,
+                                expressions,
+                                patterns,
+                                &std::collections::HashSet::new(),
+                            );
+                        }
+                    }
+                    SyntaxProjectItem::TypeAlias {
+                        ty_keyword_start: _,
+                        name: _,
+                        parameters: _,
+                        documentation: _,
+                        type_,
+                    } => {
+                        if let Some(type_) = type_ {
+                            syntax_type_symbol_uses_into(&mut uses, type_, symbol);
+                        }
+                    }
+                    SyntaxProjectItem::Comments(_) => {}
+                    SyntaxProjectItem::Unrecognized { .. } => {}
+                }
             }
         }
         SyntaxSymbol::ProjectTypeOrUnknown { .. } => {
@@ -13322,40 +13217,6 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                 }
             }
         },
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments,
-        } => {
-            match symbol {
-                SyntaxSymbol::TypeVariable { .. }
-                | SyntaxSymbol::Origin { .. }
-                | SyntaxSymbol::ProjectTypeOrUnknown { .. }
-                | SyntaxSymbol::VariantOrUnknown(_)
-                | SyntaxSymbol::VariableUnknown { .. } => {}
-                SyntaxSymbol::LocalVariable {
-                    name: symbol_name, ..
-                } => {
-                    if *symbol_name == &name.value {
-                        uses.push(name_range(with_start_position_as_ref(name)));
-                    }
-                }
-                SyntaxSymbol::ProjectFnOrUnknown {
-                    name:
-                        WithStartPosition {
-                            start: _,
-                            value: symbol_name,
-                        },
-                    construct_info: _,
-                } => {
-                    if *symbol_name == &name.value && !local_variables.contains(&name.value) {
-                        uses.push(name_range(with_start_position_as_ref(name)));
-                    }
-                }
-            }
-            for type_argument in &type_arguments.types {
-                syntax_type_symbol_uses_into(uses, type_argument, symbol);
-            }
-        }
         SyntaxExpression::Call {
             name,
             type_arguments,
@@ -14031,15 +13892,6 @@ fn syntax_expression_highlight<Expressions, Patterns>(
         SyntaxExpression::Variable(name) => {
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Variable);
         }
-        SyntaxExpression::FunctionWithTypeArguments {
-            name,
-            type_arguments,
-        } => {
-            syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Function);
-            for type_ in &type_arguments.types {
-                syntax_type_highlight(state, type_);
-            }
-        }
         SyntaxExpression::Call {
             name,
             type_arguments,
@@ -14555,10 +14407,6 @@ fn syntax_expression_rid<Expressions, Patterns>(
             type_: _,
         } => {}
         SyntaxExpression::Variable(_) => {}
-        SyntaxExpression::FunctionWithTypeArguments {
-            name: _,
-            type_arguments: _,
-        } => {}
         SyntaxExpression::Call {
             name: _,
             type_arguments: _,

@@ -219,7 +219,8 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - For functions with type variables, pass in a generic "bundle of bufs" along with drop and clone functions that take and modify that bundle
 - implicitly pass a generic "bundle of bufs" whenever a function does not itself take a buf
 - If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
-- type aliases are _not_ (!) checked for origin violations, only actual expression code is
+- type signatures and type aliases are _not_ (!) checked for origin violations, only actual expression+pattern code is
+- passing bufs is allowed but marks it as "unusable" for implicit passing (which includes clone and drop), which is basically identical to invalidating slots and spans with the same origin
 - type variables are checked as if they contained any number of buf origins and slot/span origins.
   To illustrate why this could otherwise lead to issues, look at
   ```
