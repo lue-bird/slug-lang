@@ -236,9 +236,30 @@ For other editors, there's usually a way to specify `slug` as the language serve
   So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
 
 ## TODO
-- add dot syntax
 - fix the countless bugs
-- implement association checking
+- allow recursive type aliases through slot and span (probably buf as well)
+  and do not expand those arguments once recursion is hit
+- change core types of slot and span to include the item type
+- implement association checking:
+    - implicit arguments are as follows:
+        - a bundle of bufs, each passed by (noalias) *mut.
+          The bundle contains bufs for at least all reachable slot/span origins,
+          minus reachable buf origins
+        - for each type variable a drop fn and clone fn, each taking the bundle of bufs as a *mut
+        - these rules also apply to standard library functions
+    - for validity:
+        - at the beginning of a scope, the implicit bufs are tracked as reachable.
+          introducing or passing bufs modifies the list of bufs tracked as reachable
+        - attempting to use a function which has an implicit buf prameter that is not part of the reachable bufs list
+          is a compile error
+        - destruct, if and function calll results may introduce new bufs.
+          If a buf with the same origin already exists, report an error.
+          If slots/spans with the same origin are reachable, report an error (only possible after the original buf is not reachable anymore).
+        - function call results may introduce slots/spans.
+          If slots/spans with the same origin are reachable, report an error
+    - "reachable origin" is defined as:
+        - available via implicit parameters
+        - any chained result value or pattern variable has a type which in any part but outside of buf items mentions this origin (the first parameter in slot/span)
 - reimplement standard library (positional + removing redundant linear stuff)
 - switch away from rust-implementation internal Slot stuff to get rid of core.rs
 - website with online repl
