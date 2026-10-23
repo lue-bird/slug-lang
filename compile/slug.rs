@@ -1095,15 +1095,9 @@ fn parse_project_ty<Expressions, Patterns>(
         return None;
     };
     parse_slug_whitespace(state);
-    let (name, parameters) = match parse_slug_lowercase_name_with_start(state) {
-        Some(name) => (Some(name), None),
-        None => {
-            let name = parse_slug_uppercase_name_with_start(state);
-            parse_slug_whitespace(state);
-            let parameters = parse_ty_parameters(state);
-            (name, parameters)
-        }
-    };
+    let name = parse_slug_lowercase_name_with_start(state);
+    parse_slug_whitespace(state);
+    let parameters = parse_ty_parameters(state);
     parse_slug_whitespace(state);
     let documentation = parse_slug_comments(state);
     parse_slug_whitespace(state);
@@ -1121,7 +1115,7 @@ fn parse_ty_parameters(state: &mut ParseState) -> Option<SyntaxTyParameters> {
         return None;
     };
     let mut parameters = Vec::new();
-    while let Some(parameter) = parse_slug_lowercase_name_with_start(state) {
+    while let Some(parameter) = parse_slug_uppercase_name_with_start(state) {
         parameters.push(parameter);
         parse_slug_whitespace(state);
     }
@@ -1138,7 +1132,7 @@ fn parse_angled_type_parameters(state: &mut ParseState) -> Option<SyntaxAngledTy
     };
     parse_slug_whitespace(state);
     let mut names = Vec::with_capacity(1);
-    while let Some(name) = parse_slug_lowercase_name_with_start(state) {
+    while let Some(name) = parse_slug_uppercase_name_with_start(state) {
         names.push(name);
         parse_slug_whitespace(state);
     }
@@ -1158,7 +1152,7 @@ fn parse_project_fn<Expressions, Patterns>(
         return None;
     };
     parse_slug_whitespace(state);
-    let name = parse_slug_uppercase_name_with_start(state);
+    let name = parse_slug_lowercase_name_with_start(state);
     parse_slug_whitespace(state);
     let type_parameters = parse_angled_type_parameters(state);
     parse_slug_whitespace(state);
@@ -1204,7 +1198,7 @@ pub fn parse_project_fn_signature(state: &mut ParseState) -> Option<ProjectFnSig
         return None;
     };
     parse_slug_whitespace(state);
-    let name = parse_slug_uppercase_name_with_start(state);
+    let name = parse_slug_lowercase_name_with_start(state);
     parse_slug_whitespace(state);
     let type_parameters = parse_angled_type_parameters(state);
     parse_slug_whitespace(state);
@@ -1557,7 +1551,7 @@ fn parse_type_variant(state: &mut ParseState) -> Option<SyntaxTypeVariant> {
     })
 }
 fn parse_type_construct(state: &mut ParseState) -> Option<SyntaxType> {
-    let Some(name) = parse_slug_uppercase_name_with_start(state) else {
+    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
         return None;
     };
     parse_slug_whitespace(state);
@@ -1621,7 +1615,8 @@ pub fn parse_expression<Expressions, Patterns>(
     else {
         return None;
     };
-    while let Some(dot_start) = parse_symbol_as_start(state, ".")
+    while let () = parse_slug_whitespace(state)
+        && let Some(dot_start) = parse_symbol_as_start(state, ".")
         && let () = parse_slug_whitespace(state)
         // this returning None means parsing it as a call would be pointless
         // so we consume the dot and pretend it wasn't there
@@ -1879,7 +1874,7 @@ fn parse_expression_variable_or_call_after_first_argument_dot_name<Expressions, 
     let type_arguments = parse_angled_type_arguments(state);
     parse_slug_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
-    if type_arguments.is_none() || open_paren_start.is_none() {
+    if type_arguments.is_none() && open_paren_start.is_none() {
         return match first_argument_dot {
             None => SyntaxExpression::Variable(name),
             Some(first_argument_dot) => SyntaxExpression::Call {
@@ -4064,7 +4059,7 @@ Otherwise, you might have intended this pattern to belong to a different if. Use
                     0,
                     &Type::Record(remaining_expected_type_fields),
                 );
-                error_message.push_str("\nAdd them to the case pattern or use a spread like .. rest to catch the remaining fields");
+                error_message.push_str("\nAdd them to the remaining fields to the query pattern");
                 errors.push(ErrorNode {
                     range: symbol_range(*open_curly_start, "{"),
                     message: error_message.into_boxed_str(),
@@ -4079,7 +4074,6 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
     introduced_variables: &mut std::collections::HashMap<&'a Name, CheckedLocalVariable>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
-
     existing_local_variables: &std::collections::HashMap<&Name, CheckedLocalVariable>,
     checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
@@ -7073,18 +7067,18 @@ If there should only ever by one variant, using a record with a single field is 
             };
             let Some(syntax_type) = &syntax_type_argument.type_ else {
                 errors.push(ErrorNode {
-                    range: symbol_range(syntax_type_argument.open_angle_start, "{"),
-                    message: Box::from("missing type argument in curly braces. Examples of valid variants are 'yes{'no .} \"hi c:\" str and 'yes{Opt str} \"c:\" str"),
+                    range: symbol_range(syntax_type_argument.open_angle_start, "<"),
+                    message: Box::from("missing type argument in angle brackets. Examples of valid variants are [yes<[no *]> \"hi c:\" str] and [yes<opt(str)> \"c:\" str]"),
                 });
                 return None;
             };
             let Some(value) = value else {
                 errors.push(ErrorNode {
                     range: syntax_type_argument.closed_angle_start
-                        .map(|closed_brace_start|symbol_range(closed_brace_start, "}"))
+                        .map(|closed_angle_start|symbol_range(closed_angle_start, ">"))
                         .unwrap_or_else(|| type_range(syntax_type)),
                     message: Box::from(
-                        "this variant is missing an associated value after these curly braces. Every variant has a value, even if it's just . (an empy record).",
+                        "this variant is missing an associated value after these angle brackets. Every variant has a value, even if it's just * (an empy tuple).",
                     ),
                 });
                 return None;
@@ -9876,7 +9870,7 @@ Can be faster than `buf-insert` when you expect no unset space or when all the s
 Convenient equivalent to `buf-opt-span-add-str-chars` with an empty span.",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_str],
-                result: type_span(type_variable("Origin"), type_variable("Item")),
+                result: type_span(type_variable("Origin"), type_char),
             },
             CoreFnInfo {
                 name: "buf-remove",
@@ -10171,80 +10165,80 @@ To change every item without any state, use `buf-opt-span-alter`",
                 documentation: "Attach a given `str` at the end of the span",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_opt(type_span(type_variable("Origin"), type_char)),
                     type_str,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-span-add-str-chars",
                 documentation: "Attach a given `str` to the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin"), type_char),
                     type_str,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin"), type_char),
                     type_u32,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_opt(type_span(type_variable("Origin"), type_char)),
                     type_u32,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin"), type_char),
                     type_i32,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_opt(type_span(type_variable("Origin"), type_char)),
                     type_i32,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin"), type_char),
                     type_f32,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_opt(type_span(type_variable("Origin"), type_char)),
                     type_f32,
                 ],
-                result: type_span(type_variable("Origin"), type_variable("Item"))
+                result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
                 name: "buf-opt-span-move-to-unset",

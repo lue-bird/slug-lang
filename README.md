@@ -2,7 +2,7 @@ fast programming language where indexes know their origin array. An earlier atte
 
 ```slug
 fn greet<Chars>(name str) span(Chars char)
-    buf-add-str-chars("Hello, " str)
+    buf-add-str-chars<Chars>("Hello, " str)
     .buf-span-add-str-chars(name)
     .buf-span-add("!" char)
 ```
@@ -202,6 +202,12 @@ For other editors, there's usually a way to specify `slug` as the language serve
 
 
 > As a user of slug you can stop reading here. The rest is for developers and those interested in language design
+
+## dev setup
+to recompile, run
+```bash
+cargo install --offline --debug --path . slug
+```
 
 
 ## ergonomic improvements over sloe
