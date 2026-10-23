@@ -76,13 +76,9 @@ pub enum SyntaxType {
         closed_paren_start: Option<lsp_types::Position>,
         result: Option<Box<SyntaxType>>,
     },
-    // TODO combine into one Construct { arguments: Option<SyntaxTypeConstructArguments> }
-    ConstructWithoutArguments(WithStartPosition<Name>),
     ConstructWithArguments {
         name: WithStartPosition<Name>,
-        open_paren_start: lsp_types::Position,
-        arguments: Vec<SyntaxType>,
-        closed_paren_start: Option<lsp_types::Position>,
+        arguments: Option<SyntaxTypeConstructParenthesizedArguments>,
     },
     Tuple {
         star_start: lsp_types::Position,
@@ -105,6 +101,12 @@ pub enum SyntaxType {
 pub struct SyntaxTypeVariant {
     pub name: WithStartPosition<Name>,
     pub value: Option<SyntaxType>,
+}
+#[derive(Debug)]
+pub struct SyntaxTypeConstructParenthesizedArguments {
+    pub open_paren_start: lsp_types::Position,
+    pub arguments: Vec<SyntaxType>,
+    pub closed_paren_start: Option<lsp_types::Position>,
 }
 #[derive(Debug)]
 pub enum SyntaxPattern<Patterns> {
@@ -365,7 +367,6 @@ pub fn type_start(type_: &SyntaxType) -> lsp_types::Position {
         SyntaxType::Fn {
             fn_keyword_start, ..
         } => *fn_keyword_start,
-        SyntaxType::ConstructWithoutArguments(name) => name.start,
         SyntaxType::ConstructWithArguments { name, .. } => name.start,
         SyntaxType::Tuple { star_start, .. } => *star_start,
         SyntaxType::Record {
@@ -398,20 +399,21 @@ pub fn type_end(type_: &SyntaxType) -> lsp_types::Position {
                 closed_paren_start.map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
             })
             .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
-        SyntaxType::ConstructWithoutArguments(name) => name_end(with_start_position_as_ref(name)),
-        SyntaxType::ConstructWithArguments {
-            name: _,
-            open_paren_start,
-            arguments,
-            closed_paren_start,
-        } => closed_paren_start
-            .map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
-            .or_else(|| {
-                arguments
-                    .last()
-                    .map(|last_argument| type_end(last_argument))
-            })
-            .unwrap_or_else(|| symbol_end(*open_paren_start, "(")),
+        SyntaxType::ConstructWithArguments { name, arguments } => match arguments {
+            None => name_end(with_start_position_as_ref(name)),
+            Some(SyntaxTypeConstructParenthesizedArguments {
+                open_paren_start,
+                arguments,
+                closed_paren_start,
+            }) => closed_paren_start
+                .map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
+                .or_else(|| {
+                    arguments
+                        .last()
+                        .map(|last_argument| type_end(last_argument))
+                })
+                .unwrap_or_else(|| symbol_end(*open_paren_start, "(")),
+        },
         SyntaxType::Tuple {
             star_start,
             open_paren_start,
@@ -1559,8 +1561,8 @@ fn parse_type_construct(state: &mut ParseState) -> Option<SyntaxType> {
         return None;
     };
     parse_slug_whitespace(state);
-    match parse_symbol_as_start(state, "(") {
-        None => Some(SyntaxType::ConstructWithoutArguments(name)),
+    let arguments = match parse_symbol_as_start(state, "(") {
+        None => None,
         Some(open_paren_start) => {
             parse_slug_whitespace(state);
             let mut arguments = Vec::new();
@@ -1569,14 +1571,14 @@ fn parse_type_construct(state: &mut ParseState) -> Option<SyntaxType> {
                 parse_slug_whitespace(state);
             }
             let closed_paren_start = parse_symbol_as_start(state, ")");
-            Some(SyntaxType::ConstructWithArguments {
-                name: name,
+            Some(SyntaxTypeConstructParenthesizedArguments {
                 open_paren_start,
                 arguments,
                 closed_paren_start,
             })
         }
-    }
+    };
+    Some(SyntaxType::ConstructWithArguments { name, arguments })
 }
 fn parse_type_fn(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(fn_keyword_start) = parse_symbol_as_start(state, "fn") else {
@@ -2467,30 +2469,25 @@ fn syntax_type_connect_type_names_in_graph_from(
                 );
             }
         }
-        SyntaxType::ConstructWithoutArguments(name) => {
+        SyntaxType::ConstructWithArguments { name, arguments } => {
             if let Some(referenced_type_graph_node) =
                 type_graph_node_by_name.get(name.value.as_str()).copied()
             {
                 type_graph.insert(referenced_type_graph_node);
             }
-        }
-        SyntaxType::ConstructWithArguments {
-            name,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
-            if let Some(referenced_type_graph_node) =
-                type_graph_node_by_name.get(name.value.as_str()).copied()
+            if let Some(SyntaxTypeConstructParenthesizedArguments {
+                open_paren_start: _,
+                arguments,
+                closed_paren_start: _,
+            }) = arguments
             {
-                type_graph.insert(referenced_type_graph_node);
-            }
-            for argument in arguments {
-                syntax_type_connect_type_names_in_graph_from(
-                    type_graph_node_by_name,
-                    argument,
-                    type_graph,
-                );
+                for argument in arguments {
+                    syntax_type_connect_type_names_in_graph_from(
+                        type_graph_node_by_name,
+                        argument,
+                        type_graph,
+                    );
+                }
             }
         }
         SyntaxType::Tuple {
@@ -3125,25 +3122,23 @@ pub fn syntax_type_to_type(
                 result: Box::new(result),
             })
         }
-        SyntaxType::ConstructWithoutArguments(name) => {
+        SyntaxType::ConstructWithArguments { name, arguments } => {
             if let Some(origin_type_alias) = type_aliases.get(&name.value) {
-                origin_type_alias.type_.clone()
-            } else {
-                None
-            }
-        }
-        SyntaxType::ConstructWithArguments {
-            name,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
-            if let Some(origin_type_alias) = type_aliases.get(&name.value) {
-                let argument_types = arguments
-                    .iter()
-                    .map(|argument_type| syntax_type_to_type(argument_type, type_aliases))
-                    .collect::<Option<Vec<Type>>>()?;
-                type_construct_resolve_type_alias(origin_type_alias, argument_types)
+                if let Some(SyntaxTypeConstructParenthesizedArguments {
+                    open_paren_start: _,
+                    arguments,
+                    closed_paren_start: _,
+                }) = arguments
+                    && !arguments.is_empty()
+                {
+                    let argument_types = arguments
+                        .iter()
+                        .map(|argument_type| syntax_type_to_type(argument_type, type_aliases))
+                        .collect::<Option<Vec<Type>>>()?;
+                    type_construct_resolve_type_alias(origin_type_alias, argument_types)
+                } else {
+                    origin_type_alias.type_.clone()
+                }
             } else {
                 None
             }
@@ -3253,85 +3248,61 @@ pub fn syntax_type_check(
                 result: Box::new(result),
             })
         }
-        SyntaxType::ConstructWithoutArguments(name) => {
-            if let Some(project_type_alias) = type_aliases.get(&name.value) {
-                if !project_type_alias.parameters.is_empty() {
+        SyntaxType::ConstructWithArguments { name, arguments } => {
+            let Some(origin_type_alias) = type_aliases.get(&name.value) else {
+                errors.push(ErrorNode {
+                    range: name_range(with_start_position_as_ref(name)),
+                    message: Box::from("no type alias or origin exists with this name"),
+                });
+                return None;
+            };
+            let Some(argument_types) = arguments
+                .iter()
+                .flat_map(|arguments| &arguments.arguments)
+                .map(|argument_type| {
+                    syntax_type_check(
+                        argument_type,
+                        errors,
+                        type_aliases,
+                        records_used,
+                        choices_used,
+                    )
+                })
+                .collect::<Option<Vec<Type>>>()
+            else {
+                return None;
+            };
+            let argument_count = argument_types.len();
+            match origin_type_alias.parameters.len().cmp(&argument_count) {
+                std::cmp::Ordering::Equal => {}
+                std::cmp::Ordering::Less => {
                     errors.push(ErrorNode {
                         range: name_range(with_start_position_as_ref(name)),
                         message: format!(
-                            "this type alias has {} parameters but there aren't any arguments provided after this name. The expected parameters are called {}",
-                            project_type_alias.parameters.len(),
-                            project_type_alias.parameters.iter().map(|parameter| parameter.as_str()).collect::<Vec<_>>().join(", ")
+                            "this type alias has {} less parameters than arguments are provided here.",
+                            argument_count - origin_type_alias.parameters.len(),
                         ).into_boxed_str()
                     });
                     return None;
                 }
-                project_type_alias.type_.clone()
-            } else {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(name)),
-                    message: Box::from("no type alias or origin exists with this name"),
-                });
-                None
-            }
-        }
-        SyntaxType::ConstructWithArguments {
-            name,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
-            if let Some(origin_type_alias) = type_aliases.get(&name.value) {
-                let argument_types = arguments
-                    .iter()
-                    .map(|argument_type| {
-                        syntax_type_check(
-                            argument_type,
-                            errors,
-                            type_aliases,
-                            records_used,
-                            choices_used,
-                        )
-                    })
-                    .collect::<Option<Vec<Type>>>()?;
-                let argument_count = argument_types.len();
-                match origin_type_alias.parameters.len().cmp(&argument_count) {
-                    std::cmp::Ordering::Equal => {}
-                    std::cmp::Ordering::Less => {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(name)),
-                            message: format!(
-                                "this type alias has {} less parameters than arguments are provided here.",
-                                argument_count - origin_type_alias.parameters.len(),
-                            ).into_boxed_str()
-                        });
-                        return None;
-                    }
-                    std::cmp::Ordering::Greater => {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(name)),
-                            message: format!(
-                                "this type alias has {} more parameters than arguments are provided here. Maybe you forgot a comma between the arguments? The additional {} called {}",
-                                origin_type_alias.parameters.len() - argument_count,
-                                if origin_type_alias.parameters.len() - argument_count == 1 {
-                                    "parameter is"
-                                } else {
-                                    "parameters are"
-                                },
-                                origin_type_alias.parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
-                            ).into_boxed_str()
-                        });
-                        return None;
-                    }
+                std::cmp::Ordering::Greater => {
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: format!(
+                            "this type alias has {} more parameters than arguments are provided here. The additional {} called {}",
+                            origin_type_alias.parameters.len() - argument_count,
+                            if origin_type_alias.parameters.len() - argument_count == 1 {
+                                "parameter is"
+                            } else {
+                                "parameters are"
+                            },
+                            origin_type_alias.parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
+                        ).into_boxed_str()
+                    });
+                    return None;
                 }
-                type_construct_resolve_type_alias(origin_type_alias, argument_types)
-            } else {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(name)),
-                    message: Box::from("no type alias or origin exists with this name"),
-                });
-                None
             }
+            type_construct_resolve_type_alias(origin_type_alias, argument_types)
         }
         SyntaxType::Tuple {
             star_start: _,
@@ -7837,15 +7808,16 @@ pub fn syntax_type_variables_into<'a>(
                 syntax_type_variables_into(type_variables, result);
             }
         }
-        SyntaxType::ConstructWithoutArguments(_) => {}
-        SyntaxType::ConstructWithArguments {
-            name: _,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
-            for argument in arguments {
-                syntax_type_variables_into(type_variables, argument);
+        SyntaxType::ConstructWithArguments { name: _, arguments } => {
+            if let Some(SyntaxTypeConstructParenthesizedArguments {
+                open_paren_start: _,
+                arguments,
+                closed_paren_start: _,
+            }) = arguments
+            {
+                for argument in arguments {
+                    syntax_type_variables_into(type_variables, argument);
+                }
             }
         }
         SyntaxType::Tuple {
@@ -11665,17 +11637,15 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                 syntax_type_format(formatted, next_indent(indent), result);
             }
         }
-        SyntaxType::ConstructWithoutArguments(name) => {
+        SyntaxType::ConstructWithArguments { name, arguments } => {
             formatted.push_str(&name.value);
-        }
-        SyntaxType::ConstructWithArguments {
-            name,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
-            formatted.push_str(&name.value);
-            if let Some((argument0, argument1_up)) = arguments.split_first() {
+            if let Some(SyntaxTypeConstructParenthesizedArguments {
+                open_paren_start: _,
+                arguments,
+                closed_paren_start: _,
+            }) = arguments
+                && let Some((argument0, argument1_up)) = arguments.split_first()
+            {
                 formatted.push('(');
                 let line_span = range_line_span(lsp_types::Range {
                     start: name.start,
@@ -12700,24 +12670,19 @@ fn type_symbol_at_position<'a, Expressions, Patterns>(
                     .as_ref()
                     .and_then(|result| type_symbol_at_position(result, position, scope))
             }),
-        SyntaxType::ConstructWithoutArguments(name) => Some(SyntaxSymbol::ProjectTypeOrUnknown {
-            name: with_start_position_as_ref(name),
-            construct_info: ConstructInfo::NotExpectingArgument,
-        }),
-        SyntaxType::ConstructWithArguments {
-            name,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
+        SyntaxType::ConstructWithArguments { name, arguments } => {
             if range_includes_position(name_range(with_start_position_as_ref(name)), position) {
                 return Some(SyntaxSymbol::ProjectTypeOrUnknown {
                     name: with_start_position_as_ref(name),
-                    construct_info: ConstructInfo::ArgumentExists,
+                    construct_info: match arguments {
+                        None => ConstructInfo::ArgumentMissing,
+                        Some(_) => ConstructInfo::ArgumentExists,
+                    },
                 });
             }
             arguments
                 .iter()
+                .flat_map(|arguments| &arguments.arguments)
                 .find_map(|argument| type_symbol_at_position(argument, position, scope))
         }
         SyntaxType::Tuple {
@@ -13152,29 +13117,7 @@ fn syntax_type_symbol_uses_into<Expressions, Patterns>(
                 syntax_type_symbol_uses_into(uses, variant_value, symbol);
             }
         }
-        SyntaxType::ConstructWithoutArguments(name) => {
-            if let &SyntaxSymbol::Origin {
-                name: symbol_name,
-                use_start: _,
-            } = symbol
-                && &name.value == symbol_name
-            {
-                uses.push(name_range(with_start_position_as_ref(name)));
-            } else if let &SyntaxSymbol::ProjectTypeOrUnknown {
-                name: symbol_name,
-                construct_info: _,
-            } = symbol
-                && &name.value == symbol_name.value
-            {
-                uses.push(name_range(with_start_position_as_ref(name)));
-            }
-        }
-        SyntaxType::ConstructWithArguments {
-            name,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
+        SyntaxType::ConstructWithArguments { name, arguments } => {
             if let SyntaxSymbol::ProjectTypeOrUnknown {
                 name: symbol_name,
                 construct_info: _,
@@ -13183,8 +13126,15 @@ fn syntax_type_symbol_uses_into<Expressions, Patterns>(
             {
                 uses.push(name_range(with_start_position_as_ref(name)));
             }
-            for argument in arguments {
-                syntax_type_symbol_uses_into(uses, argument, symbol);
+            if let Some(SyntaxTypeConstructParenthesizedArguments {
+                open_paren_start: _,
+                arguments,
+                closed_paren_start: _,
+            }) = arguments
+            {
+                for argument in arguments {
+                    syntax_type_symbol_uses_into(uses, argument, symbol);
+                }
             }
         }
     }
@@ -13898,18 +13848,17 @@ pub fn syntax_type_highlight(state: &mut HighlightState, type_: &SyntaxType) {
                 syntax_type_highlight(state, result);
             }
         }
-        SyntaxType::ConstructWithoutArguments(name) => {
-            syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Type);
-        }
-        SyntaxType::ConstructWithArguments {
-            name,
-            open_paren_start: _,
-            arguments,
-            closed_paren_start: _,
-        } => {
+        SyntaxType::ConstructWithArguments { name, arguments } => {
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Function);
-            for argument in arguments {
-                syntax_type_highlight(state, argument);
+            if let Some(SyntaxTypeConstructParenthesizedArguments {
+                open_paren_start: _,
+                arguments,
+                closed_paren_start: _,
+            }) = arguments
+            {
+                for argument in arguments {
+                    syntax_type_highlight(state, argument);
+                }
             }
         }
         SyntaxType::Tuple {

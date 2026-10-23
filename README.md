@@ -245,7 +245,7 @@ For other editors, there's usually a way to specify `slug` as the language serve
         - a bundle of bufs, each passed by (noalias) *mut.
           The bundle contains bufs for at least all reachable slot/span origins,
           minus reachable buf origins
-        - for each type variable a drop fn and clone fn, each taking the bundle of bufs as a *mut
+        - for each type variable a drop fn (but not a clone fn), each taking the bundle of bufs as a *mut
         - these rules also apply to standard library functions
     - for validity:
         - at the beginning of a scope, the implicit bufs are tracked as reachable.
@@ -254,10 +254,14 @@ For other editors, there's usually a way to specify `slug` as the language serve
           is a compile error
         - destruct, if and function calll results may introduce new bufs.
           If a buf with the same origin already exists, report an error.
-          If slots/spans with the same origin are reachable, report an error (only possible after the original buf is not reachable anymore).
+          If existing slots/spans with the same origin are reachable, report an error (only possible after the original buf is not reachable anymore).
         - function call results may introduce slots/spans.
-          If slots/spans with the same origin are reachable, report an error
-    - "reachable origin" is defined as:
+          If existing slots/spans with the same origin are reachable, report an error
+        - in addition to reachable origins, reachable type variables are tracked.
+          Once the set of reachable type variables is non-empty,
+          no more type variables may get introduced (not even the same type variable).
+          This also means 2 same type variables should not be reachable at the same time, which means cloning is _never_ valid.
+    - "reachable origin" (more or less analog for type variables) is defined as:
         - available via implicit parameters
         - any chained result value or pattern variable has a type which in any part but outside of buf items mentions this origin (the first parameter in slot/span)
 - reimplement standard library (positional + removing redundant linear stuff)
