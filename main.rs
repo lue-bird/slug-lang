@@ -1496,7 +1496,7 @@ fn respond_to_completion<Expressions, Patterns>(
                 available_existing_variables
                     .into_iter()
                     .map(|available_existing_variable| lsp_types::CompletionItem {
-                        label: format!("_{}", available_existing_variable),
+                        label: available_existing_variable.to_string(),
                         kind: Some(lsp_types::CompletionItemKind::TypeParameter),
                         documentation: Some(lsp_documentation_markdown(
                             "type variable".to_string(),

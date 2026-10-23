@@ -582,12 +582,13 @@ pub fn expression_range<Expressions, Patterns>(
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
 ) -> lsp_types::Range {
     lsp_types::Range {
-        start: expression_start(expression),
+        start: expression_start(expression, expressions),
         end: expression_end(expression, expressions, patterns),
     }
 }
 pub fn expression_start<Expressions, Patterns>(
     expression: &SyntaxExpression<Expressions, Patterns>,
+    expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
 ) -> lsp_types::Position {
     match expression {
         SyntaxExpression::Number { value, type_: _ } => value.start,
@@ -599,7 +600,19 @@ pub fn expression_start<Expressions, Patterns>(
             type_: _,
         } => *open_quote_start,
         SyntaxExpression::Variable(name) => name.start,
-        SyntaxExpression::Call { name, .. } => name.start,
+        SyntaxExpression::Call {
+            first_argument_dot,
+            name,
+            ..
+        } => first_argument_dot
+            .as_ref()
+            .map(
+                |SyntaxExpressionArgumentDot {
+                     argument,
+                     dot_start: _,
+                 }| expression_start(expressions.item(argument), expressions),
+            )
+            .unwrap_or(name.start),
         SyntaxExpression::Variant {
             open_bracket_start, ..
         } => *open_bracket_start,
@@ -4437,7 +4450,7 @@ fn syntax_project_fn_to_zig<Expressions, Patterns>(
             output.push('\n');
         }
     }
-    let function_scope_start = expression_start(syntax_result);
+    let function_scope_start = expression_start(syntax_result, expressions);
     output.push_str("pub fn ");
     output.push_str(&name_to_lowercase_zig(name));
     output.push('(');
@@ -4932,7 +4945,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             let label = match return_context {
                 ZigReturnContext::StatementsFollowedByBreak(label) => label,
                 ZigReturnContext::Expression => {
-                    let label = expression_start(expression);
+                    let label = expression_start(expression, expressions);
                     zig_block_start(output, label);
                     label
                 }
@@ -4946,7 +4959,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                 _ = write!(output, "{}", start.character);
                 output.push('"');
             }
-            let value_start = expression_start(value);
+            let value_start = expression_start(value, expressions);
             output.push_str("const ");
             value_variable_name(output, value_start);
             output.push_str(" = ");
@@ -5114,7 +5127,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             let label = match return_context {
                 ZigReturnContext::StatementsFollowedByBreak(label) => label,
                 ZigReturnContext::Expression => {
-                    let label = expression_start(expression);
+                    let label = expression_start(expression, expressions);
                     label
                 }
             };
@@ -5156,7 +5169,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             let label = match return_context {
                 ZigReturnContext::StatementsFollowedByBreak(label) => label,
                 ZigReturnContext::Expression => {
-                    let label = expression_start(expression);
+                    let label = expression_start(expression, expressions);
                     label
                 }
             };
@@ -5799,7 +5812,7 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
     output.push_str("@returns {");
     type_to_js(output, result_type);
     output.push_str("}\n*/\n");
-    let function_scope_start = expression_start(syntax_result);
+    let function_scope_start = expression_start(syntax_result, expressions);
     output.push_str("export function ");
     output.push_str(&name_to_lowercase_js(name));
     output.push_str("($) {");
@@ -6175,7 +6188,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 .as_ref()
                 .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
             for argument in maybe_first_argument.into_iter().chain(rest_arguments) {
-                let argument_scope_start = expression_start(argument);
+                let argument_scope_start = expression_start(argument, expressions);
                 output.push_str("let ");
                 js_scope_result_variable(output, argument_scope_start);
                 output.push_str(";\n");
@@ -6196,7 +6209,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             output.push_str(&name_to_lowercase_js(&name.value));
             output.push('(');
             for argument in rest_arguments {
-                js_scope_result_variable(output, expression_start(argument));
+                js_scope_result_variable(output, expression_start(argument, expressions));
             }
             output.push_str(");\n");
         }
@@ -6216,7 +6229,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 return;
             };
             let value = expressions.item(value);
-            let value_scope_start = expression_start(value);
+            let value_scope_start = expression_start(value, expressions);
             output.push_str("let ");
             js_scope_result_variable(output, value_scope_start);
             output.push_str(";\n");
@@ -6264,7 +6277,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     break 'in_function;
                 };
                 let result = expressions.item(result);
-                let result_scope_start = expression_start(result);
+                let result_scope_start = expression_start(result, expressions);
                 output.push_str("let ");
                 js_scope_result_variable(output, result_scope_start);
                 output.push_str(";\n");
@@ -6292,7 +6305,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
         } => {
             for part in parts {
                 output.push_str("let ");
-                js_scope_result_variable(output, expression_start(part));
+                js_scope_result_variable(output, expression_start(part, expressions));
                 output.push_str(";\n");
                 syntax_expression_to_js(
                     output,
@@ -6303,14 +6316,14 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     checked_spread_records,
                     local_variables,
                     part,
-                    expression_start(part),
+                    expression_start(part, expressions),
                 );
                 output.push('\n')
             }
             js_scope_result_variable(output, scope_start);
             output.push_str(" = [ ");
             for part in parts {
-                js_scope_result_variable(output, expression_start(part));
+                js_scope_result_variable(output, expression_start(part, expressions));
                 output.push_str(", ");
             }
             output.push_str("];\n");
@@ -6323,7 +6336,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             for field in fields {
                 if let Some(value) = &field.value {
                     output.push_str("let ");
-                    js_scope_result_variable(output, expression_start(value));
+                    js_scope_result_variable(output, expression_start(value, expressions));
                     output.push_str(";\n");
                     syntax_expression_to_js(
                         output,
@@ -6334,7 +6347,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                         checked_spread_records,
                         local_variables,
                         value,
-                        expression_start(value),
+                        expression_start(value, expressions),
                     );
                     output.push('\n')
                 }
@@ -6345,7 +6358,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 if let Some(value) = &field.value {
                     output.push_str(&name_to_lowercase_js(&field.name.value));
                     output.push_str(": ");
-                    js_scope_result_variable(output, expression_start(value));
+                    js_scope_result_variable(output, expression_start(value, expressions));
                     output.push_str(", ");
                 }
             }
@@ -6388,7 +6401,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
         } => {
             if let Some(queried) = queried {
                 let queried = expressions.item(queried);
-                let queried_scope_start = expression_start(queried);
+                let queried_scope_start = expression_start(queried, expressions);
                 let queried_variable_name = {
                     let mut queried_variable_name = String::new();
                     js_scope_result_variable(&mut queried_variable_name, queried_scope_start);
@@ -6455,7 +6468,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 return;
             };
             let queried = expressions.item(queried);
-            let queried_scope_start = expression_start(queried);
+            let queried_scope_start = expression_start(queried, expressions);
             let queried_variable_name = {
                 let mut queried_variable_name = String::new();
                 js_scope_result_variable(&mut queried_variable_name, queried_scope_start);
@@ -7680,7 +7693,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                                 message: format!("this pattern variable is not used in the result of the first case starting at {}.
 This is problematic because accidentally not handling a value in one branch could lead to leaked memory (or worse).
 If you do not need to use this variable in that case, use any of the -rid functions to scrap it, like ? U32-rid your-variable [.] ..your existing case result..",
-                                    position_to_string(expression_start(case0_result))
+                                    position_to_string(expression_start(case0_result, expressions))
                                 ).into_boxed_str()
                             });
                             // pretend the first case does use this pattern variable
@@ -7696,7 +7709,7 @@ If you do not need to use this variable in that case, use any of the -rid functi
 This is problematic because accidentally not handling a value in one branch could lead to leaked memory (or worse).
 If you do not need to use this variable in that case, use any of the -rid functions to scrap it, like ? U32-rid your-variable [.] ..your existing case result..",
                                     index_to_th(case_index),
-                                    position_to_string(expression_start(case_result))
+                                    position_to_string(expression_start(case_result, expressions))
                                 ).into_boxed_str()
                             });
                         }
@@ -9465,7 +9478,7 @@ fn Age . : f32 =
             CoreFnInfo {
                 name: "str-utf8-length",
                 documentation: "Its number of bytes when encoded as UTF-8.
-You usually want to use the slower Str-char-count.",
+You usually want to use the slower strr-char-count.",
                 type_parameters: vec![],
                 parameters: vec![type_str],
                 result: type_p32,
@@ -9519,7 +9532,7 @@ Another nice use case: Creating a value whose only purpose is transporting type 
 ty type-only(Type)
     # enables what is often called "phantom types"
     [a *]
-    [unconstructible *(_type [])]
+    [unconstructible *(Type [])]
 
 # usage example
 
@@ -9546,7 +9559,7 @@ please limit your creativity for the rest of us mortals."#,
             CoreFnInfo {
                 name: "slot-index",
                 documentation: "At what offset the referenced item is located.
-For example, the second item in a Buf is at index 1",
+For example, the second item in a buf is at index 1",
                 type_parameters: vec![],
                 parameters: vec![type_slot(type_variable("Origin"), type_variable("Item"))],
                 result: type_u32
@@ -9561,7 +9574,7 @@ For example, the second item in a Buf is at index 1",
             CoreFnInfo {
                 name: "span-start-index",
                 documentation: "At what offset the first contained slot is located.
-For example, the second item in a Buf is at index 1",
+For example, the second item in a buf is at index 1",
                 type_parameters: vec![],
                 parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
                 result: type_u32,
@@ -9647,7 +9660,7 @@ See also `span-start-of-length-positive`, `span-end`.",
             CoreFnInfo {
                 name: "span-step",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line.
-A less powerful version that preserves the Span is `buf-span-step`",
+A less powerful version that preserves the span is `buf-span-step`",
                 type_parameters: vec![],
                 parameters: vec![
                     type_span(type_variable("Origin"), type_variable("Item")),
@@ -9666,7 +9679,7 @@ A less powerful version that preserves the Span is `buf-span-step`",
             CoreFnInfo {
                 name: "opt-span-step",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line.
-A less powerful version that preserves the Span is `buf-opt-span-step`",
+A less powerful version that preserves the span is `buf-opt-span-step`",
                 type_parameters: vec![],
                 parameters: vec![
                     type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
@@ -9950,7 +9963,7 @@ To just switch out an item, use `buf-replace`",
             CoreFnInfo {
                 name: "buf-span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
-Items whose comparison returns `'equal .` are ordered according to their original position in the Span ("stable sort").
+Items whose comparison returns `'equal .` are ordered according to their original position in the span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
 as for example the new altered items may violate the expected ordering at that point.
 Do no rely on a specific order of when items are compared."#,
@@ -9967,7 +9980,7 @@ Do no rely on a specific order of when items are compared."#,
             CoreFnInfo {
                 name: "buf-opt-span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
-Items whose comparison returns `'equal .` are ordered according to their original position in the Span ("stable sort").
+Items whose comparison returns `'equal .` are ordered according to their original position in the span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
 as for example the new altered items may violate the expected ordering at that point.
 Do no rely on a specific order of when items are compared."#,
@@ -9983,7 +9996,7 @@ Do no rely on a specific order of when items are compared."#,
             },
             CoreFnInfo {
                 name: "buf-span-alter",
-                documentation: "Change every item referenced by the given Span with a given function to a new item of the same type.
+                documentation: "Change every item referenced by the given span with a given function to a new item of the same type.
 If your change function needs extra context from the outside, use `buf-span-step` instead",
                 type_parameters: vec![],
                 parameters: vec![
@@ -9994,7 +10007,7 @@ If your change function needs extra context from the outside, use `buf-span-step
             },
             CoreFnInfo {
                 name: "buf-opt-span-alter",
-                documentation: "Change every item referenced by the given Span with a given function to a new item of the same type.
+                documentation: "Change every item referenced by the given span with a given function to a new item of the same type.
 If your change function needs extra context from the outside, use `buf-opt-span-step` instead",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10008,7 +10021,7 @@ If your change function needs extra context from the outside, use `buf-opt-span-
                 documentation: "Step through each item for a given Span,
 change it to a new item of the same type and update the given initial state.
 If you want to be able to exit anytime, use `buf-span-step-while` instead.
-If you need more control (for example accessing the given Buf during a step), use `span-step` instead.
+If you need more control (for example accessing the given buf during a step), use `span-step` instead.
 To change every item without any state, use `buf-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10033,7 +10046,7 @@ To change every item without any state, use `buf-span-alter`",
                 documentation: "Step through each item for a given Opt Span,
 change it to a new item of the same type and update the given initial state.
 If you want to be able to exit anytime, use `buf-opt-span-step-while` instead.
-If you need more control (for example accessing the given Buf during a step), use `opt-span-step` instead.
+If you need more control (for example accessing the given buf during a step), use `opt-span-step` instead.
 To change every item without any state, use `buf-opt-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10079,11 +10092,13 @@ fn buf-span-last-negative-i32(
                 }
             }
         )
+    {
     [going *] [no<opt(i32)> *]
     [done i] [yes<opt(i32)> i]
+    }
 ```
 If you want to step through all items instead, use `buf-span-step`.
-If you need more control (for example accessing the given Buf during a step), use `span-step-while` instead.
+If you need more control (for example accessing the given buf during a step), use `span-step-while` instead.
 To change every item without any state, use `buf-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10114,7 +10129,7 @@ To change every item without any state, use `buf-span-alter`",
                 documentation: "Step through each item for a given Span,
 change it to a new item of the same type and update the given initial state with the possibility to exit early.
 If you want to step through all items instead, use `buf-opt-span-step`.
-If you need more control (for example accessing the given Buf during a step), use `opt-span-step-while` instead.
+If you need more control (for example accessing the given buf during a step), use `opt-span-step-while` instead.
 To change every item without any state, use `buf-opt-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10275,22 +10290,16 @@ Try to use sparingly",
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
 As an example, you could implement `buf-span-add` in slug itself as
 ```slug
-fn Buf-span-add
-    .buf buf buf(Origin _item)
-    .span span Span _origin
-    .new new _item
-:
-    .buf buf(Origin _item)
-    .span Span _origin
-=
+fn Buf-span-add(
+    span span(Origin Item)
+    new Item
+)
+    span(Origin Item)
     # the first line is optional: it ensures that the new slot will actually be connected,
     # meaning the new item can stay at its position
-    ? Buf-span-move-to-end .buf buf .span span [.buf buf .span .span]
-    ? Buf-add .buf buf .new new [.buf buf .slot new-slot]
-    Buf-span-add-own-span
-    .buf buf
-    .start span
-    .end Slot-to-span new-slot
+    = span buf-span-move-to-end(span)
+    = new-slot buf-add(new)
+    buf-span-add-own-span(span slot-to-span(new-slot))
 ```",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10463,9 +10472,13 @@ fn Answer . : f32 =
                     r#"A unicode scalar like `"a" char` or `"👀" char` or `"\(2665)" char` (hex code for ♥).
 Keep in mind that a human-readable visual symbol can be composed of multiple such unicode scalars (forming a grapheme cluster), For example:
 ```slug
-Str-start "🇺🇸" str
-# = .start "\(1F1FA)" char .after 'yes "\(1F1F8)" str
-# Indicator U followed by Indicator S
+str-start("🇳🇿" str)
+# = {
+# start "\(1F1FA)" char
+#        Indicator N
+# after [yes<opt(str)> "\(1F1F8)" str]
+#        Indicator Z
+# }
 ```
 Read if interested: [swift's grapheme cluster docs](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/stringsandcharacters/#Extended-Grapheme-Clusters)"#,
                 )),
@@ -10544,7 +10557,6 @@ Has constant time access, remove, step and add."
                 name_range: None,
                 documentation: Some(Box::from(
                     "A valid position of an item in a collection.
-This works because each collection has a unique origin and only gives out one slot for each position.
 For consecutive `slot`s, check out `span`."
                 )),
                 parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
@@ -10557,8 +10569,7 @@ For consecutive `slot`s, check out `span`."
                 name_range: None,
                 documentation: Some(Box::from(
                     "A range of ≥1 consecutive valid slots in a collection.
-This works because each collection has a unique origin and only gives out one span for each range.
-For potentially 0-length spans, use `opt Span`"
+For potentially 0-length spans, use `opt(span(...))`"
                 )),
                 parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
                 type_: Some(type_span(type_variable("Origin"), type_variable("Item"))),
@@ -11980,7 +11991,11 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
             if range_includes_position(name_range(with_start_position_as_ref(name)), position) {
                 return Some(SyntaxSymbol::ProjectFnOrUnknown {
                     name: with_start_position_as_ref(name),
-                    construct_info: ConstructInfo::ArgumentExists,
+                    construct_info: if first_argument_dot.is_some() || !arguments.is_empty() {
+                        ConstructInfo::ArgumentExists
+                    } else {
+                        ConstructInfo::ArgumentMissing
+                    },
                 });
             }
             type_arguments
@@ -11988,19 +12003,24 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                 .flat_map(|type_argument| &type_argument.types)
                 .find_map(|type_argument| type_symbol_at_position(type_argument, position, scope))
                 .or_else(|| {
-                    first_argument_dot.as_ref().and_then(|first_argument_dot| {
-                        expression_symbol_at_position(
-                            expressions.item(&first_argument_dot.argument),
-                            position,
-                            type_aliases,
-                            checked_queries,
-                            checked_spread_records,
-                            expressions,
-                            patterns,
-                            scope,
-                            local_variables,
-                        )
-                    })
+                    first_argument_dot.as_ref().and_then(
+                        |SyntaxExpressionArgumentDot {
+                             argument,
+                             dot_start: _,
+                         }| {
+                            expression_symbol_at_position(
+                                expressions.item(argument),
+                                position,
+                                type_aliases,
+                                checked_queries,
+                                checked_spread_records,
+                                expressions,
+                                patterns,
+                                scope,
+                                local_variables,
+                            )
+                        },
+                    )
                 })
                 .or_else(|| {
                     arguments.iter().find_map(|argument| {
@@ -14140,16 +14160,16 @@ pub fn checked_project_fn_format(
     }
 }
 pub fn angled_type_parameters_format(formatted: &mut String, type_parameters: &[Name]) {
-    formatted.push('<');
     if let Some((angled_type_parameter0, angled_type_parameter1_up)) = type_parameters.split_first()
     {
+        formatted.push('<');
         formatted.push_str(angled_type_parameter0);
         for angled_type_parameter in angled_type_parameter1_up {
             formatted.push_str(angled_type_parameter);
             formatted.push(' ');
         }
+        formatted.push('>');
     }
-    formatted.push('>');
 }
 pub fn checked_type_alias_format(
     formatted: &mut String,
@@ -14159,10 +14179,9 @@ pub fn checked_type_alias_format(
     formatted.push_str("ty ");
     formatted.push_str(name);
     if let Some((parameter0, parameter1_up)) = type_alias.parameters.split_first() {
-        formatted.push_str(" _");
         formatted.push_str(parameter0);
         for parameter in parameter1_up {
-            formatted.push_str(", _");
+            formatted.push(' ');
             formatted.push_str(parameter);
         }
     }
