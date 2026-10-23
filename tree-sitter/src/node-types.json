@@ -281,10 +281,14 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "expression",
+          "named": true
+        },
+        {
+          "type": "key_symbol_tuple",
           "named": true
         }
       ]
@@ -436,8 +440,12 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
+        {
+          "type": "key_symbol_tuple",
+          "named": true
+        },
         {
           "type": "pattern_typed",
           "named": true
@@ -451,8 +459,12 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
+        {
+          "type": "key_symbol_tuple",
+          "named": true
+        },
         {
           "type": "pattern_untyped",
           "named": true
@@ -908,8 +920,12 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
+        {
+          "type": "key_symbol_tuple",
+          "named": true
+        },
         {
           "type": "type",
           "named": true
@@ -960,10 +976,6 @@
     "named": false
   },
   {
-    "type": "*",
-    "named": false
-  },
-  {
     "type": "<",
     "named": false
   },
@@ -1001,6 +1013,10 @@
   },
   {
     "type": "key_symbol_origin",
+    "named": true
+  },
+  {
+    "type": "key_symbol_tuple",
     "named": true
   },
   {

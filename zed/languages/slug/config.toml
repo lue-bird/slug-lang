@@ -1,6 +1,6 @@
-name = "sloe"
-grammar = "sloe"
-path_suffixes = ["sloe"]
+name = "slug"
+grammar = "slug"
+path_suffixes = ["slug"]
 line_comments = ["# "]
 word_characters = ["-"]
 completion_query_characters = ["-"]
