@@ -9034,16 +9034,16 @@ fn type_buf(origin: Type, item: Type) -> Type {
         arguments: vec![origin, item],
     }
 }
-fn type_slot(origin: Type) -> Type {
+fn type_slot(origin: Type, item: Type) -> Type {
     Type::CoreConstruct {
         name: Name::from_static("slot"),
-        arguments: vec![origin],
+        arguments: vec![origin, item],
     }
 }
-fn type_span(origin: Type) -> Type {
+fn type_span(origin: Type, item: Type) -> Type {
     Type::CoreConstruct {
         name: Name::from_static("span"),
-        arguments: vec![origin],
+        arguments: vec![origin, item],
     }
 }
 fn type_unset_slice(item: Type) -> Type {
@@ -9498,7 +9498,7 @@ You usually want to use the slower Str-char-count.",
                 result: type_record([("end", type_char), ("before", type_opt(type_str))]),
             },
             CoreFnInfo {
-                name: "Choice-empty-to",
+                name: "choice-empty-to",
                 documentation: r#"The empty choice type (`'`) is a weird one.
 No value of this type can ever exist and it's only use is some type trickery.
 You may already know it under one of these names:
@@ -9514,55 +9514,36 @@ a success and failure variant to be possible.
 But the interesting thing about having a value of this type is that since the type knows
 the failure variant could never have been created, we can safely unwrap it!
 ```slug
-fn Tried-unwrap tried 'success _ok 'failure ' : _ok =
-    ? tried
-    ['success ok] ok
-    ['failure impossible] Choice-empty-to{_ok} impossible
+fn tried-unwrap(tried [success Ok failure []]) Ok
+    if tried {
+    [success ok] ok
+    [failure impossible] choice-empty-to<Ok>(impossible)
+    }
 ```
-You really can ask for any type of data, like emulating a dup or rid operation
+Another nice use case: Creating a value whose only purpose is transporting type info:
 ```slug
-fn Choice-empty-rid choice-empty ' : . =
-    Choice-empty-to{.} choice-empty
-fn Choice-empty-dup choice-empty ' : .a ' .b ' =
-    Choice-empty-to{.a ' .b '} choice-empty
-```
-Another nice example: Creating a value whose only purpose is transporting type info:
-```slug
-ty Type-only _type
+ty type-only(Type)
     # enables what is often called "phantom types"
-    'a .
-    'unconstructable .type _type .impossible '
-
-fn Type-only-rid type-only Type-only _type : . =
-    ? type-only
-    ['a .] .
-    ['unconstructable .type type .impossible imp]
-        # quite funny: To get rid of the type value
-        # which can never exist here, we use the imp value
-        # to pull us a generic _type rid function from the ether
-        Call .fn Choice-empty-to{Fn _type, .} imp .in type
+    [a *]
+    [unconstructible *(_type [])]
 
 # usage example
 
-ty Weak-slot _origin
+ty weak-slot(Origin)
     # Alternative to using a plain u32 which is tiny bit harder to abuse.
     # Can still point out of bounds,
-    # alias another Weak-slot or be used for the wrong span.
-    # As a result, access will always return Opt and should be checked with care
-    .origin Type-only _origin
-    .index u32
+    # alias another weak-slot or be used for the wrong span.
+    # As a result, access will always return opt and should be checked with care
+    { origin type-only(Origin) index u32 }
 
-fn Index-to-weak-slot{_origin} index u32 : Weak-slot _origin =
-    .index index .origin 'of{Type-only _origin} .
+fn index-to-weak-slot<Origin>(index u32) weak-slot(Origin)
+    { index index origin [a<type-only(Origin)> *] }
 
-fn Span-start-weak
-    span Span _origin
-: .weak Weak-slot _origin .slot Slot _origin =
-    ? Span-start-index slot [.span span .index index]
-    .span span
-    .weak Index-to-weak-slot{_origin} index
+fn span-start-weak(span span(Origin)) weak-slot(Origin)
+    = index span-start-index(span)
+    index-to-weak-slot<Origin>(index)
 ```
-This `Type-only` pattern is very easy to overuse,
+This `type-only` pattern is very easy to overuse,
 please limit your creativity for the rest of us mortals."#,
                 type_parameters: vec![Name::from_static("result")],
                 parameters: vec![type_choice_empty],
@@ -9573,37 +9554,37 @@ please limit your creativity for the rest of us mortals."#,
                 documentation: "At what offset the referenced item is located.
 For example, the second item in a Buf is at index 1",
                 type_parameters: vec![],
-                parameters: vec![type_slot(type_variable("Origin"))],
-                result: type_tuple([type_slot(type_variable("Origin")), type_u32])
+                parameters: vec![type_slot(type_variable("Origin"), type_variable("Item"))],
+                result: type_u32
             },
             CoreFnInfo {
                 name: "slot-to-span",
                 documentation: "Create a span covering just the one given slot",
                 type_parameters: vec![],
-                parameters: vec![type_slot(type_variable("Origin"))],
-                result: type_span(type_variable("Origin")),
+                parameters: vec![type_slot(type_variable("Origin"), type_variable("Item"))],
+                result: type_span(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "span-start-index",
                 documentation: "At what offset the first contained slot is located.
 For example, the second item in a Buf is at index 1",
                 type_parameters: vec![],
-                parameters: vec![type_span(type_variable("Origin"))],
-                result: type_tuple([type_span(type_variable("Origin")), type_u32]),
+                parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
+                result: type_u32,
             },
             CoreFnInfo {
                 name: "span-length",
                 documentation: "How many slots it spans",
                 type_parameters: vec![],
-                parameters: vec![type_span(type_variable("Origin"))],
-                result: type_tuple([type_span(type_variable("Origin")), type_p32])
+                parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
+                result: type_p32
             },
             CoreFnInfo {
                 name: "opt-span-length",
                 documentation: "How many slots it spans",
                 type_parameters: vec![],
-                parameters: vec![type_opt(type_span(type_variable("Origin")))],
-                result: type_tuple([type_opt(type_span(type_variable("Origin"))), type_u32])
+                parameters: vec![type_opt(type_span(type_variable("Origin"), type_variable("Item")))],
+                result: type_u32
             },
             CoreFnInfo {
                 name: "span-start",
@@ -9611,20 +9592,20 @@ For example, the second item in a Buf is at index 1",
 To join disconnected slots and spans back together, use helpers like `buf-span-add-own-opt-span`.
 Note that to only read the start index you can directly call `span-start-index`",
                 type_parameters: vec![],
-                parameters: vec![type_span(type_variable("Origin"))],
+                parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
                 result: type_tuple([
-                    type_slot(type_variable("Origin")),
-                    type_opt(type_span(type_variable("Origin")))
+                    type_slot(type_variable("Origin"), type_variable("Item")),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item")))
                 ]),
             },
             CoreFnInfo {
                 name: "span-end",
                 documentation: "Split into the last slot and span before",
                 type_parameters: vec![],
-                parameters: vec![type_span(type_variable("Origin"))],
+                parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
                 result: type_tuple([
-                    type_opt(type_span(type_variable("Origin"))),
-                    type_slot(type_variable("Origin")),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_slot(type_variable("Origin"), type_variable("Item")),
                 ]),
             },
             CoreFnInfo {
@@ -9646,12 +9627,12 @@ fn Span-slot-at(span span(Origin) index u32)
 See also `span-end-of-length-positive`, `span-start`.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_p32,
                 ],
                 result: type_tuple([
-                    type_span(type_variable("Origin")),
-                    type_opt(type_span(type_variable("Origin")))
+                    type_span(type_variable("Origin"), type_variable("Item")),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item")))
                 ]),
             },
             CoreFnInfo {
@@ -9661,12 +9642,12 @@ If the length is greater than the given span's length, .end will be the existing
 See also `span-start-of-length-positive`, `span-end`.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_p32,
                 ],
                 result: type_tuple([
-                    type_opt(type_span(type_variable("Origin"))),
-                    type_span(type_variable("Origin")),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                 ]),
             },
             CoreFnInfo {
@@ -9675,13 +9656,13 @@ See also `span-start-of-length-positive`, `span-end`.",
 A less powerful version that preserves the Span is `buf-span-step`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
                         vec![
                             type_variable("State"),
-                            type_slot(type_variable("Origin")),
+                            type_slot(type_variable("Origin"), type_variable("Item")),
                         ],
                         type_variable("State")
                     )
@@ -9694,13 +9675,13 @@ A less powerful version that preserves the Span is `buf-span-step`",
 A less powerful version that preserves the Span is `buf-opt-span-step`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
                         vec![
                             type_variable("State"),
-                            type_slot(type_variable("Origin")),
+                            type_slot(type_variable("Origin"), type_variable("Item")),
                         ],
                         type_variable("State")
                     )
@@ -9714,13 +9695,13 @@ by returning `'going` or exiting early with `'done` (like calling `break` in oth
 An example can be found in `opt-span-step-while`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
                         vec![
                             type_variable("State"),
-                            type_slot(type_variable("Origin")),
+                            type_slot(type_variable("Origin"), type_variable("Item")),
                         ],
                         type_choice([("done", type_variable("done")), ("going", type_variable("State"))])
                     )
@@ -9730,7 +9711,7 @@ An example can be found in `opt-span-step-while`",
                         "done",
                         type_record([
                             ("done", type_variable("done")),
-                            ("rest", type_opt(type_span(type_variable("Origin"))))
+                            ("rest", type_opt(type_span(type_variable("Origin"), type_variable("Item"))))
                         ])
                     ),
                     ("going", type_variable("State"))
@@ -9776,13 +9757,13 @@ Note that `.rest` does not include any slot given to the step function, even the
 (This example looks convoluted. If you introduce helpers like char-equal it gets more resonable)",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
                         vec![
                             type_variable("State"),
-                            type_slot(type_variable("Origin")),
+                            type_slot(type_variable("Origin"), type_variable("Item")),
                         ],
                         type_choice([("done", type_variable("done")), ("going", type_variable("State"))])
                     )
@@ -9792,7 +9773,7 @@ Note that `.rest` does not include any slot given to the step function, even the
                         "done",
                         type_record([
                             ("done", type_variable("done")),
-                            ("rest", type_opt(type_span(type_variable("Origin"))))
+                            ("rest", type_opt(type_span(type_variable("Origin"), type_variable("Item"))))
                         ])
                     ),
                     ("going", type_variable("State"))
@@ -9860,8 +9841,8 @@ reusing unset space closest to the start of the `buf` when available.
 Use `buf-add` if you don't care about reuse.
 Use `buf-set-or-insert` if you already know of an index that's likely unset",
                 type_parameters: vec![Name::from_static("Origin")],
-                parameters: vec![type_variable("Item") ],
-                result: type_slot(type_variable("Origin")),
+                parameters: vec![type_variable("Item")],
+                result: type_slot(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-set-or-insert",
@@ -9879,7 +9860,7 @@ Use `buf-add` if you don't care about reuse.",
                     type_u32,
                     type_variable("Item"),
                 ],
-                result: type_slot(type_variable("Origin")),
+                result: type_slot(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-add",
@@ -9887,7 +9868,7 @@ Use `buf-add` if you don't care about reuse.",
 Can be faster than `buf-insert` when you expect no unset space or when all the storage gets scrapped soon anyway.",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_variable("Item")],
-                result: type_slot(type_variable("Origin"))
+                result: type_slot(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-add-str-chars",
@@ -9895,13 +9876,13 @@ Can be faster than `buf-insert` when you expect no unset space or when all the s
 Convenient equivalent to `buf-opt-span-add-str-chars` with an empty span.",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_str],
-                result: type_span(type_variable("Origin")),
+                result: type_span(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
                 name: "buf-remove",
                 documentation: "Unset and retrieve an item from the `buf` at a given slot (the inverse of `buf-insert`/`buf-add`)",
                 type_parameters: vec![],
-                parameters: vec![type_slot(type_variable("Origin"))],
+                parameters: vec![type_slot(type_variable("Origin"), type_variable("Item"))],
                 result: type_variable("Item"),
             },
             CoreFnInfo {
@@ -9918,12 +9899,12 @@ then remove the last slot with the item from the original certain index.
 (Drectly removing the last item and replacing the item at the specific index with the last item also works)",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_slot(type_variable("Origin")),
-                    type_slot(type_variable("Origin")),
+                    type_slot(type_variable("Origin"), type_variable("Item")),
+                    type_slot(type_variable("Origin"), type_variable("Item")),
                 ],
                 result: type_tuple([
-                    type_slot(type_variable("Origin")),
-                    type_slot(type_variable("Origin")),
+                    type_slot(type_variable("Origin"), type_variable("Item")),
+                    type_slot(type_variable("Origin"), type_variable("Item")),
                 ]),
             },
             CoreFnInfo {
@@ -9932,7 +9913,7 @@ then remove the last slot with the item from the original certain index.
 A more versatile version is `buf-item-step`.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_slot(type_variable("Origin")),
+                    type_slot(type_variable("Origin"), type_variable("Item")),
                     type_variable("Item")
                 ],
                 result: type_variable("Item"),
@@ -9945,7 +9926,7 @@ It's common to create simple helpers using `buf-item-step`, for example
 To just switch out an item, use `buf-replace`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_slot(type_variable("Origin")),
+                    type_slot(type_variable("Origin"), type_variable("Item")),
                     type_variable("In"),
                     type_fn(
                         vec![type_variable("In"), type_variable("Item")],
@@ -9959,7 +9940,7 @@ To just switch out an item, use `buf-replace`",
                 documentation: "Order the referenced items such that the previously last is now first, second last is second etc.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                 ],
                 result: type_empty,
             },
@@ -9968,7 +9949,7 @@ To just switch out an item, use `buf-replace`",
                 documentation: "Order the referenced items such that the previously last is now first, second last is second etc.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                 ],
                 result: type_empty,
             },
@@ -9981,7 +9962,7 @@ as for example the new altered items may violate the expected ordering at that p
 Do no rely on a specific order of when items are compared."#,
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_fn(
                         vec![type_variable("Item"), type_variable("Item")],
                         type_order()
@@ -9998,7 +9979,7 @@ as for example the new altered items may violate the expected ordering at that p
 Do no rely on a specific order of when items are compared."#,
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_fn(
                         vec![type_variable("Item"), type_variable("Item")],
                         type_order()
@@ -10012,7 +9993,7 @@ Do no rely on a specific order of when items are compared."#,
 If your change function needs extra context from the outside, use `buf-span-step` instead",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_fn(vec![type_variable("Item")], type_variable("Item")),
                 ],
                 result: type_empty,
@@ -10023,7 +10004,7 @@ If your change function needs extra context from the outside, use `buf-span-step
 If your change function needs extra context from the outside, use `buf-opt-span-step` instead",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_fn(vec![type_variable("Item")], type_variable("Item")),
                 ],
                 result: type_empty,
@@ -10037,7 +10018,7 @@ If you need more control (for example accessing the given Buf during a step), us
 To change every item without any state, use `buf-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
@@ -10062,7 +10043,7 @@ If you need more control (for example accessing the given Buf during a step), us
 To change every item without any state, use `buf-opt-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
@@ -10112,7 +10093,7 @@ If you need more control (for example accessing the given Buf during a step), us
 To change every item without any state, use `buf-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
@@ -10143,7 +10124,7 @@ If you need more control (for example accessing the given Buf during a step), us
 To change every item without any state, use `buf-opt-span-alter`",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_choice([("up", type_empty), ("down", type_empty)]),
                     type_variable("State"),
                     type_fn(
@@ -10170,129 +10151,129 @@ To change every item without any state, use `buf-opt-span-alter`",
                 documentation: "Attach a given item at the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_variable("Item"),
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-span-add",
                 documentation: "Attach a given item at the end of the span",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_variable("Item"),
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-str-chars",
                 documentation: "Attach a given `str` at the end of the span",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_str,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-span-add-str-chars",
                 documentation: "Attach a given `str` to the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_str,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_u32,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_u32,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_i32,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_i32,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                     type_f32,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_f32,
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-move-to-unset",
                 documentation: "Move the given span to a unset range if there is unset space available where moving the given span to would reduce the amount of unset space.
 Try to use sparingly",
                 type_parameters: vec![],
-                parameters: vec![type_opt(type_span(type_variable("Origin")))],
-                result: type_opt(type_span(type_variable("Origin")))
+                parameters: vec![type_opt(type_span(type_variable("Origin"), type_variable("Item")))],
+                result: type_opt(type_span(type_variable("Origin"), type_variable("Item")))
             },
             CoreFnInfo {
                 name: "buf-span-move-to-unset",
                 documentation: "Move the given span to a unset range if there is unset space available where moving the given span to would reduce the amount of unset space.",
                 type_parameters: vec![],
-                parameters: vec![type_span(type_variable("Origin"))],
-                result: type_span(type_variable("Origin"))
+                parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-span-move-to-end",
                 documentation: "Move the given span to after all existing items if necessary.",
                 type_parameters: vec![],
-                parameters: vec![type_span(type_variable("Origin"))],
-                result: type_span(type_variable("Origin"))
+                parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-move-to-end",
                 documentation: "Move the given span to after all existing items if necessary.",
                 type_parameters: vec![],
-                parameters: vec![type_opt(type_span(type_variable("Origin")))],
-                result: type_opt(type_span(type_variable("Origin")))
+                parameters: vec![type_opt(type_span(type_variable("Origin"), type_variable("Item")))],
+                result: type_opt(type_span(type_variable("Origin"), type_variable("Item")))
             },
             CoreFnInfo {
                 name: "buf-span-add-own-span",
@@ -10319,10 +10300,10 @@ fn Buf-span-add
 ```",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
-                    type_span(type_variable("Origin")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-span-add-own-opt-span",
@@ -10331,10 +10312,10 @@ If start and end spans are not already connected, both are appended at the end a
 The most common use case is re-combining spans that have been split up with e.g. `span-start` (see also `slot-to-span`)",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_span(type_variable("Origin")),
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_span(type_variable("Origin"), type_variable("Item")),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-own-span",
@@ -10343,10 +10324,10 @@ If start and end spans are not already connected, both are appended at the end a
 The most common use case is re-combining spans that have been split up with e.g. `span-end` (see also `slot-to-span`)",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
-                    type_span(type_variable("Origin")),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_span(type_variable("Origin"), type_variable("Item")),
                 ],
-                result: type_span(type_variable("Origin"))
+                result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
                 name: "buf-opt-span-add-own-opt-span",
@@ -10354,10 +10335,10 @@ The most common use case is re-combining spans that have been split up with e.g.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset",
                 type_parameters: vec![],
                 parameters: vec![
-                    type_opt(type_span(type_variable("Origin"))),
-                    type_opt(type_span(type_variable("Origin"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
+                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                 ],
-                result: type_opt(type_span(type_variable("Origin"))),
+                result: type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
             },
             CoreFnInfo {
                 name: "buf-to-unset",
@@ -10572,8 +10553,8 @@ Has constant time access, remove, step and add."
 This works because each collection has a unique origin and only gives out one slot for each position.
 For consecutive `slot`s, check out `span`."
                 )),
-                parameters: vec![Name::from_static("Origin")],
-                type_: Some(type_slot(type_variable("Origin"))),
+                parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
+                type_: Some(type_slot(type_variable("Origin"), type_variable("Item"))),
             },
         ),
         (
@@ -10585,8 +10566,8 @@ For consecutive `slot`s, check out `span`."
 This works because each collection has a unique origin and only gives out one span for each range.
 For potentially 0-length spans, use `opt Span`"
                 )),
-                parameters: vec![Name::from_static("Origin")],
-                type_: Some(type_span(type_variable("Origin"))),
+                parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
+                type_: Some(type_span(type_variable("Origin"), type_variable("Item"))),
             },
         ),
         (

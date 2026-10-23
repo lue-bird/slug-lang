@@ -212,34 +212,10 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - `.` syntax for piping the first argument
 - shadowing is allowed and encouraged
 
-## implementation details
-- expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
-  The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
-- once a `buf` has been "used" (e.g. explicitly passed in and out of a function) it invalidates all prior uses of the origin in the rest of the current scope. E.g. a buf of bufs + a buf of slots with the same origin means you could mix and match willy nilly
-- For functions with type variables, pass in a generic "bundle of bufs" along with drop and clone functions that take and modify that bundle
-- implicitly pass a generic "bundle of bufs" whenever a function does not itself take a buf
-- If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
-- type signatures and type aliases are _not_ (!) checked for origin violations, only actual expression+pattern code is
-- passing bufs is allowed but marks it as "unusable" for implicit passing (which includes clone and drop), which is basically identical to invalidating slots and spans with the same origin
-- type variables are checked as if they contained any number of buf origins and slot/span origins.
-  To illustrate why this could otherwise lead to issues, look at
-  ```
-  fn (
-      first slot(Origin {x X y Y})
-      second slot(Origin {x X y Y})
-      xy-rid fn({x X y Y}) *
-  )
-      
-      = * xy-rid({x first-x y second-y})
-      xy-rid({x second-y y first-y})
-  ```  
-  So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
-
 ## TODO
-- fix the countless bugs
 - allow recursive type aliases through slot and span (probably buf as well)
   and do not expand those arguments once recursion is hit
-- change core types of slot and span to include the item type
+- fix the countless bugs
 - implement association checking:
     - implicit arguments are as follows:
         - a bundle of bufs, each passed by (noalias) *mut.
@@ -267,6 +243,29 @@ For other editors, there's usually a way to specify `slug` as the language serve
 - reimplement standard library (positional + removing redundant linear stuff)
 - switch away from rust-implementation internal Slot stuff to get rid of core.rs
 - website with online repl
+
+## implementation details
+- expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
+  The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
+- once a `buf` has been "used" (e.g. explicitly passed in and out of a function) it invalidates all prior uses of the origin in the rest of the current scope. E.g. a buf of bufs + a buf of slots with the same origin means you could mix and match willy nilly
+- For functions with type variables, pass in a generic "bundle of bufs" along with drop and clone functions that take and modify that bundle
+- implicitly pass a generic "bundle of bufs" whenever a function does not itself take a buf
+- If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
+- type signatures and type aliases are _not_ (!) checked for origin violations, only actual expression+pattern code is
+- passing bufs is allowed but marks it as "unusable" for implicit passing (which includes clone and drop), which is basically identical to invalidating slots and spans with the same origin
+- type variables are checked as if they contained any number of buf origins and slot/span origins.
+  To illustrate why this could otherwise lead to issues, look at
+  ```
+  fn (
+      first slot(Origin {x X y Y})
+      second slot(Origin {x X y Y})
+      xy-rid fn({x X y Y}) *
+  )
+      
+      = * xy-rid({x first-x y second-y})
+      xy-rid({x second-y y first-y})
+  ```  
+  So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
 
 ## known design weaknesses
 - it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
