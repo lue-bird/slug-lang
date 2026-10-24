@@ -1326,8 +1326,8 @@ fn respond_to_completion<Expressions, Patterns>(
             name: _,
             construct_info,
         } => match construct_info {
-            slug_compile::ConstructInfo::Declaration => None,
-            slug_compile::ConstructInfo::NotExpectingArgument => {
+            slug::ConstructInfo::Declaration => None,
+            slug::ConstructInfo::NotExpectingArgument => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
                     project_state
                         .type_aliases
@@ -1352,7 +1352,7 @@ fn respond_to_completion<Expressions, Patterns>(
                         .collect(),
                 ))
             }
-            slug_compile::ConstructInfo::ArgumentMissing => {
+            slug::ConstructInfo::ArgumentMissing => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
                     project_state
                         .type_aliases
@@ -1362,20 +1362,20 @@ fn respond_to_completion<Expressions, Patterns>(
                                 None => None,
                                 Some((parameter0, parameter1_up)) => {
                                     let mut snippet = String::new();
-                                    snippet.push('(');
                                     snippet.push_str(type_alias_name);
-                                    snippet.push_str(" (${1:");
+                                    snippet.push('(');
+                                    snippet.push_str("${1:");
                                     snippet.push_str(parameter0);
-                                    snippet.push_str("})");
+                                    snippet.push('}');
                                     use std::fmt::Write as _;
                                     for (parameter_position, parameter) in
                                         parameter1_up.iter().enumerate().map(|(i, e)| (i + 2, e))
                                     {
-                                        snippet.push_str(", (${");
+                                        snippet.push_str(" ${");
                                         let _ = write!(snippet, "{}", parameter_position);
                                         snippet.push(':');
                                         snippet.push_str(parameter);
-                                        snippet.push_str("})");
+                                        snippet.push('}');
                                     }
                                     snippet.push(')');
                                     Some(lsp_types::CompletionItem {
@@ -1399,7 +1399,7 @@ fn respond_to_completion<Expressions, Patterns>(
                         .collect(),
                 ))
             }
-            slug_compile::ConstructInfo::ArgumentExists => {
+            slug::ConstructInfo::ArgumentExists => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
                     project_state
                         .type_aliases
@@ -1507,8 +1507,8 @@ fn respond_to_completion<Expressions, Patterns>(
             name: _,
             construct_info,
         } => match construct_info {
-            slug_compile::ConstructInfo::Declaration => None,
-            slug_compile::ConstructInfo::NotExpectingArgument => {
+            slug::ConstructInfo::Declaration => None,
+            slug::ConstructInfo::NotExpectingArgument => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
                     project_state
                         .fns
@@ -1532,7 +1532,7 @@ fn respond_to_completion<Expressions, Patterns>(
                         .collect(),
                 ))
             }
-            slug_compile::ConstructInfo::ArgumentMissing => {
+            slug::ConstructInfo::ArgumentMissing => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
                     project_state
                         .fns
@@ -1540,17 +1540,21 @@ fn respond_to_completion<Expressions, Patterns>(
                         .map(|(fn_name, fn_info)| {
                             let mut snippet = String::new();
                             snippet.push_str(fn_name);
+                            snippet.push_str("<${");
                             use std::fmt::Write as _;
                             for (type_parameter_index, type_parameter) in
                                 fn_info.type_parameters.iter().enumerate()
                             {
-                                snippet.push_str("{${");
+                                snippet.push_str("${");
                                 let _ = write!(snippet, "{}", type_parameter_index);
                                 snippet.push_str(":_");
                                 snippet.push_str(type_parameter);
-                                snippet.push_str("}}");
+                                snippet.push('}');
+                                if type_parameter_index >= 1 {
+                                    snippet.push(' ');
+                                }
                             }
-                            snippet.push_str("()");
+                            snippet.push_str(">()");
                             lsp_types::CompletionItem {
                                 label: fn_name.to_string(),
                                 kind: Some(lsp_types::CompletionItemKind::Function),
@@ -1567,7 +1571,7 @@ fn respond_to_completion<Expressions, Patterns>(
                         .collect(),
                 ))
             }
-            slug_compile::ConstructInfo::ArgumentExists => {
+            slug::ConstructInfo::ArgumentExists => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
                     project_state
                         .fns
@@ -1600,6 +1604,35 @@ fn respond_to_completion<Expressions, Patterns>(
                             ..lsp_types::CompletionItem::default()
                         },
                     )
+                    .chain(project_state.fns.iter().map(|(fn_name, fn_info)| {
+                        let mut snippet = String::new();
+                        snippet.push_str(fn_name);
+                        snippet.push_str("<${");
+                        use std::fmt::Write as _;
+                        for (type_parameter_index, type_parameter) in
+                            fn_info.type_parameters.iter().enumerate()
+                        {
+                            snippet.push_str("${");
+                            let _ = write!(snippet, "{}", type_parameter_index);
+                            snippet.push_str(":_");
+                            snippet.push_str(type_parameter);
+                            snippet.push('}');
+                            if type_parameter_index >= 1 {
+                                snippet.push(' ');
+                            }
+                        }
+                        snippet.push_str(">()");
+                        lsp_types::CompletionItem {
+                            label: fn_name.to_string(),
+                            kind: Some(lsp_types::CompletionItemKind::Function),
+                            documentation: Some(lsp_documentation_markdown(
+                                present_project_fn_with_complete_type_markdown(fn_name, fn_info),
+                            )),
+                            insert_text_format: Some(lsp_types::InsertTextFormat::Snippet),
+                            insert_text: Some(snippet),
+                            ..lsp_types::CompletionItem::default()
+                        }
+                    }))
                     .collect(),
             ))
         }
