@@ -13,7 +13,6 @@ struct ProjectState<Expressions, Patterns> {
     type_aliases: std::collections::HashMap<slug::Name, slug::CheckedTypeAlias>,
     fns: std::collections::HashMap<slug::Name, slug::CheckedProjectFn>,
     queries: std::collections::HashMap<lsp_types::Position, slug::CheckedQuery>,
-    spread_records: std::collections::HashMap<lsp_types::Position, Vec<slug::Name>>,
 }
 fn main() {
     match main_or_err() {
@@ -931,7 +930,6 @@ fn initialize_project_state_from_source<Expressions, Patterns>(
         type_aliases: checked_project.checked_type_aliases,
         fns: checked_project.checked_project_fns,
         queries: checked_project.checked_queries,
-        spread_records: checked_project.checked_spread_records,
         syntax: parsed_project,
     }
 }
@@ -967,7 +965,6 @@ fn respond_to_hover<Expressions, Patterns>(
         &project_state.syntax,
         &project_state.type_aliases,
         &project_state.queries,
-        &project_state.spread_records,
         hover_arguments.text_document_position_params.position,
         &state.syntax_expressions,
         &state.syntax_patterns,
@@ -1070,7 +1067,6 @@ fn respond_to_goto_definition<Expressions, Patterns>(
         &project_state.syntax,
         &project_state.type_aliases,
         &project_state.queries,
-        &project_state.spread_records,
         goto_definition_arguments
             .text_document_position_params
             .position,
@@ -1111,7 +1107,6 @@ fn respond_to_prepare_rename<Expressions, Patterns>(
         &project_state.syntax,
         &project_state.type_aliases,
         &project_state.queries,
-        &project_state.spread_records,
         prepare_rename_arguments
             .text_document_position_params
             .position,
@@ -1175,7 +1170,6 @@ fn respond_to_rename<Expressions, Patterns>(
         &project_state.syntax,
         &project_state.type_aliases,
         &project_state.queries,
-        &project_state.spread_records,
         rename_arguments.text_document_position_params.position,
         &state.syntax_expressions,
         &state.syntax_patterns,
@@ -1233,7 +1227,6 @@ fn respond_to_references<Expressions, Patterns>(
         &project_state.syntax,
         &project_state.type_aliases,
         &project_state.queries,
-        &project_state.spread_records,
         references_arguments.text_document_position_params.position,
         &state.syntax_expressions,
         &state.syntax_patterns,
@@ -1322,7 +1315,6 @@ fn respond_to_completion<Expressions, Patterns>(
         &project_state.syntax,
         &project_state.type_aliases,
         &project_state.queries,
-        &project_state.spread_records,
         completion_arguments.text_document_position_params.position,
         &state.syntax_expressions,
         &state.syntax_patterns,

@@ -2039,7 +2039,7 @@ pub struct CheckedTypeAlias {
     pub documentation: Option<Box<str>>,
     pub type_: Option<Type>,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
     Variable(Name),
     Origin(Name),
@@ -2055,12 +2055,12 @@ pub enum Type {
         result: Box<Type>,
     },
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TypeField {
     pub name: Name,
     pub value: Type,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TypeVariant {
     pub name: Name,
     pub value: Type,
@@ -2359,8 +2359,6 @@ Choose a different ty name.",
         std::collections::HashMap::new();
     let mut checked_queries: std::collections::HashMap<lsp_types::Position, CheckedQuery> =
         std::collections::HashMap::new();
-    let mut checked_spread_records: std::collections::HashMap<lsp_types::Position, Vec<Name>> =
-        std::collections::HashMap::new();
     for project_fn_strongly_connected_component in
         strongly_connected_components::find(&project_fn_graph)
     {
@@ -2384,7 +2382,6 @@ Choose a different ty name.",
                     project_fn,
                     &mut records_used,
                     &mut choices_used,
-                    &mut checked_spread_records,
                 ),
             );
         }
@@ -2401,7 +2398,6 @@ Choose a different ty name.",
                     &mut checked_calls,
                     &mut checked_local_fns,
                     &mut checked_queries,
-                    &mut checked_spread_records,
                     &mut records_used,
                     &mut choices_used,
                 ),
@@ -2421,7 +2417,6 @@ Choose a different ty name.",
         checked_calls: checked_calls,
         checked_local_fns: checked_local_fns,
         checked_queries: checked_queries,
-        checked_spread_records: checked_spread_records,
     }
 }
 pub struct CheckedSyntaxProject<'a, Expressions, Patterns> {
@@ -2442,7 +2437,6 @@ pub struct CheckedSyntaxProject<'a, Expressions, Patterns> {
     pub checked_calls: std::collections::HashMap<lsp_types::Position, CheckedCall>,
     pub checked_local_fns: std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     pub checked_queries: std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    pub checked_spread_records: std::collections::HashMap<lsp_types::Position, Vec<Name>>,
 }
 fn syntax_type_connect_type_names_in_graph_from(
     type_graph_node_by_name: &std::collections::HashMap<
@@ -2875,7 +2869,6 @@ fn syntax_project_fn_header_check<'a, Expressions, Patterns>(
     project_fn: SyntaxProjectFnInfo<'a, Expressions, Patterns>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
-    checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
 ) -> CheckedProjectFn {
     let parameter_types = project_fn
         .parameters
@@ -2888,7 +2881,6 @@ fn syntax_project_fn_header_check<'a, Expressions, Patterns>(
                 type_aliases,
                 patterns,
                 &std::collections::HashMap::new(),
-                checked_spread_records,
                 records_used,
                 choices_used,
             )
@@ -2974,7 +2966,6 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
     checked_calls: &mut std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &mut std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     checked_queries: &mut std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
 ) -> CheckedProjectFn {
@@ -2989,7 +2980,6 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
                 project_fn,
                 records_used,
                 choices_used,
-                checked_spread_records,
             )
         });
     let documentation = project_fn.documentation.as_ref().map(|documentation| {
@@ -3054,7 +3044,6 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
         checked_calls,
         checked_local_fns,
         checked_queries,
-        checked_spread_records,
         records_used,
         choices_used,
     ) else {
@@ -3731,7 +3720,6 @@ fn specific_pattern_catches_remove_those_matched_by_pattern<Patterns>(
     possibilities: &mut Vec<SpecificPatternCatch>,
     pattern: &SyntaxPattern<Patterns>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
 ) {
     // we do not use ::retain because one pattern usually only covers one specific pattern catch,
     // and calling retain for every pattern would thus be quadratic.
@@ -3742,12 +3730,7 @@ fn specific_pattern_catches_remove_those_matched_by_pattern<Patterns>(
         let Some(possibility) = possibilities.get(possibility_index) else {
             return;
         };
-        if pattern_matches_specific_pattern_catch(
-            pattern,
-            possibility,
-            patterns,
-            checked_spread_records,
-        ) {
+        if pattern_matches_specific_pattern_catch(pattern, possibility, patterns) {
             possibilities.swap_remove(possibility_index);
         } else {
             possibility_index += 1;
@@ -3758,7 +3741,6 @@ fn pattern_matches_specific_pattern_catch<Patterns>(
     pattern: &SyntaxPattern<Patterns>,
     possibility: &SpecificPatternCatch,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
 ) -> bool {
     match pattern {
         SyntaxPattern::Variable { .. } => true,
@@ -3782,7 +3764,6 @@ fn pattern_matches_specific_pattern_catch<Patterns>(
                         patterns.item(value),
                         possibility_value,
                         patterns,
-                        checked_spread_records,
                     ),
                 }
             }
@@ -3798,12 +3779,7 @@ fn pattern_matches_specific_pattern_catch<Patterns>(
                 .iter()
                 .zip(possibility_parts)
                 .all(|(part, possibility_part)| {
-                    pattern_matches_specific_pattern_catch(
-                        part,
-                        possibility_part,
-                        patterns,
-                        checked_spread_records,
-                    )
+                    pattern_matches_specific_pattern_catch(part, possibility_part, patterns)
                 }),
             _ => false,
         },
@@ -3825,7 +3801,6 @@ fn pattern_matches_specific_pattern_catch<Patterns>(
                                 value,
                                 value_possibility,
                                 patterns,
-                                checked_spread_records,
                             ),
                         }
                     }
@@ -3843,7 +3818,6 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
     introduced_variables: &mut std::collections::HashMap<&'a Name, CheckedLocalVariable>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
     existing_local_variables: &std::collections::HashMap<&Name, CheckedLocalVariable>,
-    checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
 ) {
     match pattern {
         SyntaxPattern::Variable { name, type_ } => {
@@ -3959,7 +3933,6 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                 introduced_variables,
                 patterns,
                 existing_local_variables,
-                checked_spread_records,
             );
         }
         SyntaxPattern::Tuple {
@@ -4005,7 +3978,6 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                     introduced_variables,
                     patterns,
                     existing_local_variables,
-                    checked_spread_records,
                 );
             }
         }
@@ -4062,7 +4034,6 @@ Otherwise, you might have intended this pattern to belong to a different if. Use
                     introduced_variables,
                     patterns,
                     existing_local_variables,
-                    checked_spread_records,
                 );
             }
             if !remaining_expected_type_fields.is_empty() {
@@ -4088,7 +4059,6 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
     existing_local_variables: &std::collections::HashMap<&Name, CheckedLocalVariable>,
-    checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
 ) -> Option<Type> {
@@ -4197,7 +4167,6 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                 type_aliases,
                 patterns,
                 existing_local_variables,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ) else {
@@ -4223,7 +4192,6 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                     type_aliases,
                     patterns,
                     existing_local_variables,
-                    checked_spread_records,
                     records_used,
                     choices_used,
                 )
@@ -4263,7 +4231,6 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                     type_aliases,
                     patterns,
                     existing_local_variables,
-                    checked_spread_records,
                     records_used,
                     choices_used,
                 ) else {
@@ -4278,6 +4245,134 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                 type_fields.iter().map(|type_field| &type_field.name),
             ));
             Some(Type::Record(type_fields))
+        }
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TypeBuf<'a> {
+    origin: &'a Type,
+    item: &'a Type,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BufReachPathSegment<'a> {
+    InVariantValue,
+    InTuplePart(usize),
+    InRecordFieldValue(&'a Name),
+}
+fn type_reachable_bufs<'a>(
+    type_: &'a Type,
+    path: Vec<BufReachPathSegment<'a>>,
+    insert_reachable_buf: &mut impl FnMut(TypeBuf<'a>, Vec<BufReachPathSegment<'a>>),
+) {
+    match type_ {
+        Type::Variable(_) => {}
+        Type::Origin(_) => {}
+        Type::Tuple(parts) => {
+            for (part_index, part) in parts.iter().enumerate() {
+                type_reachable_bufs(
+                    part,
+                    path.iter()
+                        .copied()
+                        .chain(std::iter::once(BufReachPathSegment::InTuplePart(
+                            part_index,
+                        )))
+                        .collect(),
+                    insert_reachable_buf,
+                )
+            }
+        }
+        Type::Record(fields) => {
+            for TypeField { name, value } in fields {
+                type_reachable_bufs(
+                    value,
+                    path.iter()
+                        .copied()
+                        .chain(std::iter::once(BufReachPathSegment::InRecordFieldValue(
+                            name,
+                        )))
+                        .collect(),
+                    insert_reachable_buf,
+                )
+            }
+        }
+        Type::Choice(variants) => {
+            if variants.len() == 1
+                && let Some(TypeVariant { name: _, value }) = variants.first()
+            {
+                type_reachable_bufs(
+                    value,
+                    path.iter()
+                        .copied()
+                        .chain(std::iter::once(BufReachPathSegment::InVariantValue))
+                        .collect(),
+                    insert_reachable_buf,
+                )
+            }
+        }
+        Type::CoreConstruct { name, arguments } => {
+            if name == type_buf_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                insert_reachable_buf(TypeBuf { origin, item }, path);
+            }
+        }
+        Type::Fn { .. } => {}
+    }
+}
+/// use in combination with type_reachable_bufs to filter out already passed bufs from the parameters
+fn function_signature_implicit_bufs<'a>(
+    parameters: &'a [Option<Type>],
+    result: Option<&'a Type>,
+) -> std::collections::HashSet<TypeBuf<'a>> {
+    let mut type_bufs = std::collections::HashSet::new();
+    for parameter in parameters.iter().flatten() {
+        type_implicit_bufs(parameter, &mut type_bufs)
+    }
+    if let Some(result) = result {
+        type_implicit_bufs(result, &mut type_bufs);
+    }
+    type_bufs
+}
+fn type_implicit_bufs<'a>(type_: &'a Type, type_bufs: &mut std::collections::HashSet<TypeBuf<'a>>) {
+    match type_ {
+        Type::Variable(_) => {}
+        Type::Origin(_) => {}
+        Type::Tuple(parts) => {
+            for part in parts {
+                type_implicit_bufs(part, type_bufs)
+            }
+        }
+        Type::Record(fields) => {
+            for TypeField { name: _, value } in fields {
+                type_implicit_bufs(value, type_bufs)
+            }
+        }
+        Type::Choice(variants) => {
+            for TypeVariant { name: _, value } in variants {
+                type_implicit_bufs(value, type_bufs)
+            }
+        }
+        Type::CoreConstruct { name, arguments } => {
+            if (name == type_slot_name || name == type_span_name)
+                && let [origin, item] = arguments.as_slice()
+            {
+                type_bufs.insert(TypeBuf { origin, item });
+                type_implicit_bufs(item, type_bufs)
+            } else if name == type_buf_name
+                && let [_, item] = arguments.as_slice()
+            {
+                type_implicit_bufs(item, type_bufs)
+            } else {
+                for argument in arguments {
+                    type_implicit_bufs(argument, type_bufs)
+                }
+            }
+        }
+        Type::Fn { parameters, result } => {
+            for parameter in parameters {
+                type_implicit_bufs(parameter, type_bufs)
+            }
+            type_implicit_bufs(result, type_bufs)
         }
     }
 }
@@ -4296,7 +4391,6 @@ pub fn checked_project_to_zig<Expressions, Patterns>(
         checked_calls,
         checked_local_fns,
         checked_queries,
-        checked_spread_records,
     }: &CheckedSyntaxProject<Expressions, Patterns>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
@@ -4341,7 +4435,6 @@ pub fn checked_project_to_zig<Expressions, Patterns>(
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 expressions,
                 patterns,
                 project_fn_name,
@@ -4432,7 +4525,6 @@ fn syntax_project_fn_to_zig<Expressions, Patterns>(
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
     name: &Name,
@@ -4490,7 +4582,6 @@ fn syntax_project_fn_to_zig<Expressions, Patterns>(
                 syntax_parameter,
                 &format!("@\"%{}\"", parameter_index),
                 &mut parameter_introduced_variables,
-                checked_spread_records,
                 patterns,
             );
         }
@@ -4508,7 +4599,6 @@ fn syntax_project_fn_to_zig<Expressions, Patterns>(
             checked_calls,
             checked_local_fns,
             checked_queries,
-            checked_spread_records,
             &mut parameter_introduced_variables,
             syntax_result,
             function_scope_start,
@@ -4605,7 +4695,6 @@ fn syntax_pattern_to_zig_destructuring<'a, Patterns>(
     pattern: &'a SyntaxPattern<Patterns>,
     to_destructure: &str,
     introduced_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
 ) {
     match pattern {
@@ -4634,7 +4723,6 @@ fn syntax_pattern_to_zig_destructuring<'a, Patterns>(
                     patterns.item(value),
                     &format!("{to_destructure}.{}", name_to_lowercase_zig(&name.value)),
                     introduced_variables,
-                    checked_spread_records,
                     patterns,
                 );
             }
@@ -4651,7 +4739,6 @@ fn syntax_pattern_to_zig_destructuring<'a, Patterns>(
                     part,
                     &format!("{to_destructure}.@\"{part_index}\"",),
                     introduced_variables,
-                    checked_spread_records,
                     patterns,
                 );
             }
@@ -4671,7 +4758,6 @@ fn syntax_pattern_to_zig_destructuring<'a, Patterns>(
                             name_to_lowercase_zig(&field.name.value)
                         ),
                         introduced_variables,
-                        checked_spread_records,
                         patterns,
                     );
                 }
@@ -4692,7 +4778,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
     expression: &'a SyntaxExpression<Expressions, Patterns>,
     function_scope_start: lsp_types::Position,
@@ -4899,7 +4984,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                     checked_calls,
                     checked_local_fns,
                     checked_queries,
-                    checked_spread_records,
                     local_variables,
                     argument,
                     function_scope_start,
@@ -4972,7 +5056,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 local_variables,
                 value,
                 function_scope_start,
@@ -5086,7 +5169,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                     syntax_parameter,
                     &parameter_name,
                     &mut parameter_introduced_variables,
-                    checked_spread_records,
                     patterns,
                 );
             }
@@ -5105,7 +5187,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                         checked_calls,
                         checked_local_fns,
                         checked_queries,
-                        checked_spread_records,
                         &mut parameter_introduced_variables,
                         expressions.item(result),
                         local_function_scope_start,
@@ -5145,7 +5226,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                     checked_calls,
                     checked_local_fns,
                     checked_queries,
-                    checked_spread_records,
                     local_variables,
                     part,
                     function_scope_start,
@@ -5202,7 +5282,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                             checked_calls,
                             checked_local_fns,
                             checked_queries,
-                            checked_spread_records,
                             local_variables,
                             value,
                             function_scope_start,
@@ -5242,7 +5321,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 local_variables,
                 expressions.item(expression),
                 function_scope_start,
@@ -5290,7 +5368,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                         checked_calls,
                         checked_local_fns,
                         checked_queries,
-                        checked_spread_records,
                         local_variables,
                         expressions.item(queried),
                         function_scope_start,
@@ -5305,7 +5382,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                     pattern,
                     &queried_variable_name,
                     local_variables,
-                    checked_spread_records,
                     patterns,
                 );
             }
@@ -5323,7 +5399,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                         checked_calls,
                         checked_local_fns,
                         checked_queries,
-                        checked_spread_records,
                         local_variables,
                         expressions.item(result),
                         function_scope_start,
@@ -5380,7 +5455,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                         checked_calls,
                         checked_local_fns,
                         checked_queries,
-                        checked_spread_records,
                         local_variables,
                         expressions.item(queried),
                         function_scope_start,
@@ -5408,7 +5482,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                         &case.pattern,
                         &queried_variable_name,
                         &mut case_local_variables,
-                        checked_spread_records,
                         patterns,
                     );
                     match &case.result {
@@ -5425,7 +5498,6 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
                                 checked_calls,
                                 checked_local_fns,
                                 checked_queries,
-                                checked_spread_records,
                                 &mut case_local_variables,
                                 case_result,
                                 function_scope_start,
@@ -5688,10 +5760,9 @@ pub fn checked_project_to_js<Expressions, Patterns>(
         choices_used: _,
         checked_type_aliases,
         checked_project_fns,
-        checked_calls: _,
+        checked_calls,
         checked_local_fns: _,
         checked_queries,
-        checked_spread_records,
     }: &CheckedSyntaxProject<Expressions, Patterns>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
@@ -5731,9 +5802,10 @@ pub fn checked_project_to_js<Expressions, Patterns>(
         {
             syntax_project_fn_to_js(
                 &mut output,
+                checked_project_fns,
                 checked_type_aliases,
                 checked_queries,
-                checked_spread_records,
+                checked_calls,
                 expressions,
                 patterns,
                 project_fn_name,
@@ -5772,12 +5844,12 @@ fn project_type_alias_to_js(
 }
 fn syntax_project_fn_to_js<Expressions, Patterns>(
     output: &mut String,
+    project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
+    checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &core::Buf<Patterns, SyntaxPattern<Patterns>>,
-
     name: &Name,
     maybe_documentation: Option<&str>,
     parameter_types: &[Option<Type>],
@@ -5801,21 +5873,69 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
         name_to_uppercase_local_js(output, type_parameter);
         output.push(' ');
     }
-    for (parameter_type_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
+
+    let implicit_bufs = function_signature_implicit_bufs(&parameter_types, Some(result_type));
+    let mut reachable_bufs = std::collections::HashMap::new();
+    for (parameter_index, parameter) in parameter_types.iter().flatten().enumerate() {
+        type_reachable_bufs(parameter, vec![], &mut |buf, path| {
+            reachable_bufs.insert(buf, (parameter_index, path));
+        });
+    }
+    // TODO do not include reachable bufs
+    if implicit_bufs.len() == 1
+        && let Some(&implicit_buf) = implicit_bufs.iter().next()
+    {
+        output.push_str("@param {Buf<");
+        type_to_js(output, implicit_buf.origin);
+        output.push_str(", ");
+        type_to_js(output, implicit_buf.item);
+        output.push_str(">} ");
+        type_buf_js_variable_name(output, implicit_buf);
+        output.push('\n');
+    } else if implicit_bufs.len() >= 2 {
+        output.push_str("@param {{");
+        for &implicit_buf in &implicit_bufs {
+            type_buf_js_variable_name(output, implicit_buf);
+            output.push_str(": Buf<");
+            type_to_js(output, implicit_buf.origin);
+            output.push_str(", ");
+            type_to_js(output, implicit_buf.item);
+            output.push_str(">, ");
+        }
+        output.push_str("}} $implicit_bufs$\n");
+    }
+    for (parameter_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
         output.push_str("@param {");
         type_to_js(output, parameter_type);
         output.push_str("} $");
         use std::fmt::Write as _;
-        _ = write!(output, "{}", parameter_type_index);
-        output.push(' ');
+        _ = write!(output, "{}", parameter_index);
+        output.push('\n');
     }
+
     output.push_str("@returns {");
     type_to_js(output, result_type);
     output.push_str("}\n*/\n");
     let function_scope_start = expression_start(syntax_result, expressions);
     output.push_str("export function ");
     output.push_str(&name_to_lowercase_js(name));
-    output.push_str("($) {");
+    output.push('(');
+    // TODO do not include reachable bufs
+    if implicit_bufs.len() == 1
+        && let Some(&implicit_buf) = implicit_bufs.iter().next()
+    {
+        type_buf_js_variable_name(output, implicit_buf);
+        output.push_str(", ");
+    } else if implicit_bufs.len() >= 2 {
+        output.push_str("$implicit_bufs$, ");
+    }
+    for (parameter_index, _) in parameter_types.iter().flatten().enumerate() {
+        output.push('$');
+        use std::fmt::Write as _;
+        _ = write!(output, "{}", parameter_index);
+        output.push_str(", ");
+    }
+    output.push_str(") {");
     let mut parameter_introduced_variables = std::collections::HashMap::new();
     for (syntax_parameter_index, (syntax_parameter, _)) in syntax_parameters
         .iter()
@@ -5829,7 +5949,6 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
             syntax_parameter,
             &format!("${}", syntax_parameter_index),
             &mut parameter_introduced_variables,
-            checked_spread_records,
             patterns,
         );
     }
@@ -5841,11 +5960,12 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
     } else {
         syntax_expression_to_js(
             output,
+            project_fns,
             type_aliases,
             expressions,
             patterns,
             checked_queries,
-            checked_spread_records,
+            checked_calls,
             &mut parameter_introduced_variables,
             syntax_result,
             function_scope_start,
@@ -6005,7 +6125,6 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
     pattern: &'a SyntaxPattern<Patterns>,
     to_destructure: &str,
     introduced_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
 ) {
     match pattern {
@@ -6032,7 +6151,6 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
                     patterns.item(value),
                     &format!("{to_destructure}.{}", name_to_lowercase_js(&name.value)),
                     introduced_variables,
-                    checked_spread_records,
                     patterns,
                 );
             }
@@ -6049,7 +6167,6 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
                     part,
                     &format!("{to_destructure}[{part_index}]"),
                     introduced_variables,
-                    checked_spread_records,
                     patterns,
                 );
             }
@@ -6069,7 +6186,6 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
                             name_to_lowercase_js(&field.name.value)
                         ),
                         introduced_variables,
-                        checked_spread_records,
                         patterns,
                     );
                 }
@@ -6079,11 +6195,12 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
 }
 fn syntax_expression_to_js<'a, Expressions, Patterns>(
     output: &mut String,
+    project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
+    checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
     expression: &'a SyntaxExpression<Expressions, Patterns>,
     scope_start: lsp_types::Position,
@@ -6178,7 +6295,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
         SyntaxExpression::Call {
             first_argument_dot,
             name,
-            type_arguments: _,
+            type_arguments,
             open_paren_start: _,
             arguments_rest: rest_arguments,
             closed_paren_start: _,
@@ -6188,30 +6305,91 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 .as_ref()
                 .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
             for argument in maybe_first_argument.into_iter().chain(rest_arguments) {
-                let argument_scope_start = expression_start(argument, expressions);
+                // not start because the first argument start matches the full function start
+                let argument_scope_start = expression_end(argument, expressions, patterns);
                 output.push_str("let ");
                 js_scope_result_variable(output, argument_scope_start);
                 output.push_str(";\n");
                 syntax_expression_to_js(
                     output,
+                    project_fns,
                     type_aliases,
                     expressions,
                     patterns,
                     checked_queries,
-                    checked_spread_records,
+                    checked_calls,
                     local_variables,
                     argument,
                     argument_scope_start,
                 );
+            }
+            if let Some(project_fn) = project_fns.get(&name.value)
+                && let Some(checked_call) = checked_calls.get(&name.start)
+            {
                 js_scope_result_variable(output, scope_start);
                 output.push_str(" = ");
+                output.push_str(&name_to_lowercase_js(&name.value));
+                output.push('(');
+                let mut type_variables_to_substitute =
+                    checked_call.argument_type_variable_replacements.clone();
+                type_variables_to_substitute.extend(
+                    project_fn
+                        .type_parameters
+                        .iter()
+                        .cloned()
+                        .zip(type_arguments.iter().flat_map(|type_arguments| {
+                            type_arguments.types.iter().filter_map(|type_argument| {
+                                syntax_type_to_type(type_argument, type_aliases)
+                            })
+                        })),
+                );
+                let parameters = project_fn
+                    .parameter_types
+                    .iter()
+                    .map(|parameter_type| {
+                        parameter_type.clone().map(|mut parameter_type| {
+                            type_replace_variables(
+                                &type_variables_to_substitute,
+                                &mut parameter_type,
+                            );
+                            parameter_type
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let mut result = project_fn.result_type.clone();
+                if let Some(result) = &mut result {
+                    type_replace_variables(&type_variables_to_substitute, result);
+                }
+                let implicit_bufs = function_signature_implicit_bufs(&parameters, result.as_ref());
+                let mut reachable_bufs = std::collections::HashMap::new();
+                for (parameter_index, parameter) in parameters.iter().flatten().enumerate() {
+                    type_reachable_bufs(parameter, vec![], &mut |buf, path| {
+                        reachable_bufs.insert(buf, (parameter_index, path));
+                    });
+                }
+                // TODO do not include reachable bufs
+                if implicit_bufs.len() == 1
+                    && let Some(&implicit_buf) = implicit_bufs.iter().next()
+                {
+                    type_buf_js_variable_name(output, implicit_buf);
+                    output.push_str(", ");
+                } else if implicit_bufs.len() >= 2 {
+                    output.push('{');
+                    for implicit_buf in implicit_bufs {
+                        type_buf_js_variable_name(output, implicit_buf);
+                        output.push_str(", ");
+                    }
+                    output.push_str("}, ");
+                }
+                for argument in maybe_first_argument.into_iter().chain(rest_arguments) {
+                    js_scope_result_variable(
+                        output,
+                        expression_end(argument, expressions, patterns),
+                    );
+                    output.push_str(", ");
+                }
+                output.push_str(");\n");
             }
-            output.push_str(&name_to_lowercase_js(&name.value));
-            output.push('(');
-            for argument in rest_arguments {
-                js_scope_result_variable(output, expression_start(argument, expressions));
-            }
-            output.push_str(");\n");
         }
         SyntaxExpression::Variant {
             open_bracket_start: _,
@@ -6235,11 +6413,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             output.push_str(";\n");
             syntax_expression_to_js(
                 output,
+                project_fns,
                 type_aliases,
                 expressions,
                 patterns,
                 checked_queries,
-                checked_spread_records,
+                checked_calls,
                 local_variables,
                 value,
                 value_scope_start,
@@ -6268,7 +6447,6 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                         syntax_parameter,
                         "$",
                         &mut parameter_introduced_variables,
-                        checked_spread_records,
                         patterns,
                     );
                 }
@@ -6283,11 +6461,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 output.push_str(";\n");
                 syntax_expression_to_js(
                     output,
+                    project_fns,
                     type_aliases,
                     expressions,
                     patterns,
                     checked_queries,
-                    checked_spread_records,
+                    checked_calls,
                     &mut parameter_introduced_variables,
                     result,
                     result_scope_start,
@@ -6309,11 +6488,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 output.push_str(";\n");
                 syntax_expression_to_js(
                     output,
+                    project_fns,
                     type_aliases,
                     expressions,
                     patterns,
                     checked_queries,
-                    checked_spread_records,
+                    checked_calls,
                     local_variables,
                     part,
                     expression_start(part, expressions),
@@ -6340,11 +6520,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     output.push_str(";\n");
                     syntax_expression_to_js(
                         output,
+                        project_fns,
                         type_aliases,
                         expressions,
                         patterns,
                         checked_queries,
-                        checked_spread_records,
+                        checked_calls,
                         local_variables,
                         value,
                         expression_start(value, expressions),
@@ -6380,11 +6561,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 Some(expression) => {
                     syntax_expression_to_js(
                         output,
+                        project_fns,
                         type_aliases,
                         expressions,
                         patterns,
                         checked_queries,
-                        checked_spread_records,
+                        checked_calls,
                         local_variables,
                         expressions.item(expression),
                         scope_start,
@@ -6412,11 +6594,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 output.push_str(";\n");
                 syntax_expression_to_js(
                     output,
+                    project_fns,
                     type_aliases,
                     expressions,
                     patterns,
                     checked_queries,
-                    checked_spread_records,
+                    checked_calls,
                     local_variables,
                     queried,
                     queried_scope_start,
@@ -6428,7 +6611,6 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                         pattern,
                         &queried_variable_name,
                         local_variables,
-                        checked_spread_records,
                         patterns,
                     );
                 }
@@ -6440,11 +6622,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 Some(result) => {
                     syntax_expression_to_js(
                         output,
+                        project_fns,
                         type_aliases,
                         expressions,
                         patterns,
                         checked_queries,
-                        checked_spread_records,
+                        checked_calls,
                         local_variables,
                         expressions.item(result),
                         scope_start,
@@ -6479,11 +6662,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             output.push_str(";\n");
             syntax_expression_to_js(
                 output,
+                project_fns,
                 type_aliases,
                 expressions,
                 patterns,
                 checked_queries,
-                checked_spread_records,
+                checked_calls,
                 local_variables,
                 queried,
                 queried_scope_start,
@@ -6508,7 +6692,6 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                         &case.pattern,
                         &queried_variable_name,
                         &mut case_local_variables,
-                        checked_spread_records,
                         patterns,
                     );
                     match &case.result {
@@ -6518,11 +6701,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                         Some(case_result) => {
                             syntax_expression_to_js(
                                 output,
+                                project_fns,
                                 type_aliases,
                                 expressions,
                                 patterns,
                                 checked_queries,
-                                checked_spread_records,
+                                checked_calls,
                                 &mut case_local_variables,
                                 case_result,
                                 scope_start,
@@ -6563,11 +6747,15 @@ fn name_to_uppercase_local_js(output: &mut String, name: &str) {
     output.push('$');
     output.push_str(&sanitized);
 }
-pub fn name_to_lowercase_js(name: &str) -> String {
+pub fn name_to_lowercase_js_variable_segment(name: &str) -> String {
     let mut sanitized: String = name.replace("-", "_");
     if let Some(first) = sanitized.get_mut(0..=0) {
         first.make_ascii_lowercase();
     }
+    sanitized
+}
+pub fn name_to_lowercase_js(name: &str) -> String {
+    let sanitized = name_to_lowercase_js_variable_segment(name);
     if js_lowercase_keywords.contains(&sanitized.as_str()) {
         sanitized + "ø"
     } else {
@@ -6575,10 +6763,7 @@ pub fn name_to_lowercase_js(name: &str) -> String {
     }
 }
 fn name_to_lowercase_local_js(output: &mut String, name: &str) {
-    let mut sanitized: String = name.replace("-", "_");
-    if let Some(first) = sanitized.get_mut(0..=0) {
-        first.make_ascii_lowercase();
-    }
+    let sanitized = name_to_lowercase_js_variable_segment(name);
     output.push('$');
     output.push_str(&sanitized);
 }
@@ -6595,10 +6780,7 @@ fn name_to_lowercase_local_js_introduced_at(
     introduced_start: lsp_types::Position,
 ) {
     use std::fmt::Write as _;
-    let mut sanitized: String = name.replace("-", "_");
-    if let Some(first) = sanitized.get_mut(0..=0) {
-        first.make_ascii_lowercase();
-    }
+    let sanitized = name_to_lowercase_js_variable_segment(name);
     output.push_str(&sanitized);
     output.push('$');
     _ = write!(output, "{}", introduced_start.line);
@@ -6612,6 +6794,68 @@ fn origin_name_to_uppercase_js(output: &mut String, name: &str) {
     }
     output.push_str(&sanitized);
     output.push_str("$origin");
+}
+fn type_buf_js_variable_name(output: &mut String, type_buf: TypeBuf) {
+    output.push_str("$buf$");
+    type_js_variable_name_segment(output, type_buf.origin);
+    output.push_str("$item$");
+    type_js_variable_name_segment(output, type_buf.item);
+}
+fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
+    match type_ {
+        Type::Variable(variable) => {
+            output.push_str("variable_");
+            output.push_str(&name_to_lowercase_js_variable_segment(variable));
+        }
+        Type::Origin(origin_name) => {
+            output.push_str("origin_");
+            output.push_str(&name_to_lowercase_js_variable_segment(origin_name));
+        }
+        Type::Tuple(parts) => {
+            output.push_str("tuple");
+            for part in parts {
+                output.push_str("$_");
+                type_js_variable_name_segment(output, part);
+            }
+            output.push_str("$tuple_end");
+        }
+        Type::Record(fields) => {
+            output.push_str("record");
+            for field in fields {
+                output.push_str("$_");
+                output.push_str(&name_to_lowercase_js_variable_segment(&field.name));
+                type_js_variable_name_segment(output, &field.value);
+            }
+            output.push_str("$record_end");
+        }
+        Type::Choice(variants) => {
+            output.push_str("$choice");
+            for variant in variants {
+                output.push_str("$_");
+                output.push_str(&name_to_lowercase_js_variable_segment(&variant.name));
+                type_js_variable_name_segment(output, &variant.value);
+            }
+            output.push_str("$choice_end");
+        }
+        Type::CoreConstruct { name, arguments } => {
+            output.push_str("construct_");
+            output.push_str(&name_to_lowercase_js_variable_segment(name));
+            for argument in arguments {
+                output.push_str("$_");
+                type_js_variable_name_segment(output, argument);
+            }
+            output.push_str("$construct_end");
+        }
+        Type::Fn { parameters, result } => {
+            output.push_str("fn");
+            for parameter in parameters {
+                output.push_str("$_");
+                type_js_variable_name_segment(output, parameter);
+            }
+            output.push_str("$result_");
+            type_js_variable_name_segment(output, result);
+        }
+    }
 }
 /// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#keywords
 const js_lowercase_keywords: [&str; 70] = [
@@ -6703,7 +6947,6 @@ fn syntax_expression_check<'a, Expressions, Patterns>(
     checked_calls: &mut std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &mut std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     checked_queries: &mut std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &mut std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
 ) -> Option<Type> {
@@ -7015,7 +7258,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     checked_calls,
                     checked_local_fns,
                     checked_queries,
-                    checked_spread_records,
                     records_used,
                     choices_used,
                 ) else {
@@ -7117,7 +7359,6 @@ If there should only ever by one variant, using a record with a single field is 
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ) else {
@@ -7189,7 +7430,6 @@ If there should only ever by one variant, using a record with a single field is 
                     type_aliases,
                     patterns,
                     &std::collections::HashMap::new(),
-                    checked_spread_records,
                     records_used,
                     choices_used,
                 ) else {
@@ -7221,7 +7461,6 @@ If there should only ever by one variant, using a record with a single field is 
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ) else {
@@ -7264,7 +7503,6 @@ If there should only ever by one variant, using a record with a single field is 
                         checked_calls,
                         checked_local_fns,
                         checked_queries,
-                        checked_spread_records,
                         records_used,
                         choices_used,
                     )
@@ -7301,7 +7539,6 @@ If there should only ever by one variant, using a record with a single field is 
                         checked_calls,
                         checked_local_fns,
                         checked_queries,
-                        checked_spread_records,
                         records_used,
                         choices_used,
                     ),
@@ -7348,7 +7585,6 @@ If there should only ever by one variant, using a record with a single field is 
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ),
@@ -7378,7 +7614,6 @@ If there should only ever by one variant, using a record with a single field is 
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ) else {
@@ -7409,7 +7644,6 @@ If there should only ever by one variant, using a record with a single field is 
                 &mut pattern_introduced_variables,
                 patterns,
                 local_variables,
-                checked_spread_records,
             );
             let mut remaining_specific_pattern_catch_possibilities = Vec::new();
             type_to_possible_specific_pattern_catches(
@@ -7420,7 +7654,6 @@ If there should only ever by one variant, using a record with a single field is 
                 &mut remaining_specific_pattern_catch_possibilities,
                 pattern,
                 patterns,
-                checked_spread_records,
             );
             local_variables.extend(
                 pattern_introduced_variables
@@ -7438,7 +7671,6 @@ If there should only ever by one variant, using a record with a single field is 
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ) else {
@@ -7520,7 +7752,6 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ) else {
@@ -7544,7 +7775,6 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 &mut case0_pattern_introduced_variables,
                 patterns,
                 local_variables,
-                checked_spread_records,
             );
             let mut remaining_specific_pattern_catch_possibilities = Vec::new();
             type_to_possible_specific_pattern_catches(
@@ -7555,7 +7785,6 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 &mut remaining_specific_pattern_catch_possibilities,
                 &case0.pattern,
                 patterns,
-                checked_spread_records,
             );
 
             let mut case0_result_local_variables = local_variables.clone();
@@ -7575,7 +7804,6 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
-                checked_spread_records,
                 records_used,
                 choices_used,
             ) else {
@@ -7611,7 +7839,6 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     &mut case_pattern_introduced_variables,
                     patterns,
                     local_variables,
-                    checked_spread_records,
                 );
                 let remaining_specific_pattern_catch_possibilities_count_before_case =
                     remaining_specific_pattern_catch_possibilities.len();
@@ -7619,7 +7846,6 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     &mut remaining_specific_pattern_catch_possibilities,
                     &case.pattern,
                     patterns,
-                    checked_spread_records,
                 );
                 if remaining_specific_pattern_catch_possibilities.len()
                     == remaining_specific_pattern_catch_possibilities_count_before_case
@@ -7655,7 +7881,6 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     checked_calls,
                     checked_local_fns,
                     checked_queries,
-                    checked_spread_records,
                     records_used,
                     choices_used,
                 ) else {
@@ -9035,21 +9260,24 @@ fn type_fn(in_: Vec<Type>, out: Type) -> Type {
         result: Box::new(out),
     }
 }
+const type_buf_name: &str = "buf";
 fn type_buf(origin: Type, item: Type) -> Type {
     Type::CoreConstruct {
-        name: Name::from_static("buf"),
+        name: Name::from_static(type_buf_name),
         arguments: vec![origin, item],
     }
 }
+const type_slot_name: &str = "slot";
 fn type_slot(origin: Type, item: Type) -> Type {
     Type::CoreConstruct {
-        name: Name::from_static("slot"),
+        name: Name::from_static(type_slot_name),
         arguments: vec![origin, item],
     }
 }
+const type_span_name: &str = "span";
 fn type_span(origin: Type, item: Type) -> Type {
     Type::CoreConstruct {
-        name: Name::from_static("span"),
+        name: Name::from_static(type_span_name),
         arguments: vec![origin, item],
     }
 }
@@ -9895,24 +10123,20 @@ Convenient equivalent to `buf-opt-span-add-str-chars` with an empty span.",
             CoreFnInfo {
                 name: "buf-swap",
                 documentation: "Replace the item at the first given slot with the item at the second given slot and the other way around.
-Important: the first and second resulting slot will each refer to the items of the first and second given slot
-(which is now at at different position in the buf).
+So after this operation, the first slot will point to the item originally behind the second slot and the other way around.
 
 This may not seem very useful considering that you could also just switch out only the slots themselves.
 An example use case is removing a specific index in a span
 where you don't care about order among the items:
 You can take the last slot and swap its item with the item at the specific index,
 then remove the last slot with the item from the original certain index.
-(Drectly removing the last item and replacing the item at the specific index with the last item also works)",
+(Directly removing the last item and replacing the item at the specific index with the last item also works)",
                 type_parameters: vec![],
                 parameters: vec![
                     type_slot(type_variable("Origin"), type_variable("Item")),
                     type_slot(type_variable("Origin"), type_variable("Item")),
                 ],
-                result: type_tuple([
-                    type_slot(type_variable("Origin"), type_variable("Item")),
-                    type_slot(type_variable("Origin"), type_variable("Item")),
-                ]),
+                result: type_empty
             },
             CoreFnInfo {
                 name: "buf-replace",
@@ -11777,7 +12001,6 @@ pub fn project_symbol_at_position<'a, Expressions, Patterns>(
     project: &'a SyntaxProject<Expressions, Patterns>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     position: lsp_types::Position,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
@@ -11883,7 +12106,6 @@ pub fn project_symbol_at_position<'a, Expressions, Patterns>(
                             None,
                             position,
                             type_aliases,
-                            checked_spread_records,
                             patterns,
                             item,
                             result.as_ref(),
@@ -11922,7 +12144,6 @@ pub fn project_symbol_at_position<'a, Expressions, Patterns>(
                             position,
                             type_aliases,
                             checked_queries,
-                            checked_spread_records,
                             expressions,
                             patterns,
                             item,
@@ -11940,7 +12161,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
     position: lsp_types::Position,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
     scope: &'a SyntaxProjectItem<Expressions, Patterns>,
@@ -12013,7 +12233,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                                 position,
                                 type_aliases,
                                 checked_queries,
-                                checked_spread_records,
                                 expressions,
                                 patterns,
                                 scope,
@@ -12029,7 +12248,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             position,
                             type_aliases,
                             checked_queries,
-                            checked_spread_records,
                             expressions,
                             patterns,
                             scope,
@@ -12064,7 +12282,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             position,
                             type_aliases,
                             checked_queries,
-                            checked_spread_records,
                             expressions,
                             patterns,
                             scope,
@@ -12090,7 +12307,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                         None,
                         position,
                         type_aliases,
-                        checked_spread_records,
                         patterns,
                         scope,
                         result,
@@ -12122,7 +12338,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             position,
                             type_aliases,
                             checked_queries,
-                            checked_spread_records,
                             expressions,
                             patterns,
                             scope,
@@ -12142,7 +12357,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                 position,
                 type_aliases,
                 checked_queries,
-                checked_spread_records,
                 expressions,
                 patterns,
                 scope,
@@ -12160,7 +12374,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     position,
                     type_aliases,
                     checked_queries,
-                    checked_spread_records,
                     expressions,
                     patterns,
                     scope,
@@ -12177,7 +12390,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                 position,
                 type_aliases,
                 checked_queries,
-                checked_spread_records,
                 expressions,
                 patterns,
                 scope,
@@ -12197,7 +12409,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     position,
                     type_aliases,
                     checked_queries,
-                    checked_spread_records,
                     expressions,
                     patterns,
                     scope,
@@ -12217,7 +12428,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             expected_pattern_type,
                             position,
                             type_aliases,
-                            checked_spread_records,
                             patterns,
                             scope,
                             result,
@@ -12250,7 +12460,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                             position,
                             type_aliases,
                             checked_queries,
-                            checked_spread_records,
                             expressions,
                             patterns,
                             scope,
@@ -12272,7 +12481,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     position,
                     type_aliases,
                     checked_queries,
-                    checked_spread_records,
                     expressions,
                     patterns,
                     scope,
@@ -12288,7 +12496,6 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                         position,
                         type_aliases,
                         checked_queries,
-                        checked_spread_records,
                         expressions,
                         patterns,
                         scope,
@@ -12304,7 +12511,6 @@ fn expression_if_case_symbol_at_position<'a, Expressions, Patterns>(
     position: lsp_types::Position,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
     scope: &'a SyntaxProjectItem<Expressions, Patterns>,
@@ -12318,7 +12524,6 @@ fn expression_if_case_symbol_at_position<'a, Expressions, Patterns>(
         expected_pattern_type,
         position,
         type_aliases,
-        checked_spread_records,
         patterns,
         scope,
         case.result.as_ref(),
@@ -12352,7 +12557,6 @@ fn expression_if_case_symbol_at_position<'a, Expressions, Patterns>(
             position,
             type_aliases,
             checked_queries,
-            checked_spread_records,
             expressions,
             patterns,
             scope,
@@ -12501,7 +12705,6 @@ fn pattern_symbol_at_position<'a, Expressions, Patterns>(
     expected_type: Option<&Type>,
     position: lsp_types::Position,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-    checked_spread_records: &std::collections::HashMap<lsp_types::Position, Vec<Name>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
     project_item_scope: &'a SyntaxProjectItem<Expressions, Patterns>,
     expression_scope: Option<&'a SyntaxExpression<Expressions, Patterns>>,
@@ -12563,7 +12766,6 @@ fn pattern_symbol_at_position<'a, Expressions, Patterns>(
                         .map(|variant| &variant.value),
                     position,
                     type_aliases,
-                    checked_spread_records,
                     patterns,
                     project_item_scope,
                     expression_scope,
@@ -12584,7 +12786,6 @@ fn pattern_symbol_at_position<'a, Expressions, Patterns>(
                 },
                 position,
                 type_aliases,
-                checked_spread_records,
                 patterns,
                 project_item_scope,
                 expression_scope,
@@ -12608,7 +12809,6 @@ fn pattern_symbol_at_position<'a, Expressions, Patterns>(
                         .map(|field| &field.value),
                     position,
                     type_aliases,
-                    checked_spread_records,
                     patterns,
                     project_item_scope,
                     expression_scope,
