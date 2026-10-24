@@ -8,9 +8,6 @@
 /** @typedef {string} Str
  * Assumed to contain at least one codepoint and at most 2^32-1 bytes
  */
-/** @template $In, $Out @typedef {(_: $In) => $Out} Fn
- * TODO inline
- */
 /** @template $Yes @typedef {{ yes: $Yes } | { no: void }} Opt */
 /** @typedef {{ less: void } | { equal: void } | { greater: void }} Order */
 /** @type{unique symbol}
@@ -350,19 +347,9 @@ export function str_end(str) {
       };
 }
 
-/** @template $Yes @param {$Yes} yes @returns {Opt<$Yes>} */
-export function opt_yes(yes) {
-  return { yes: yes };
-}
-
 /** @template $Result @param {never} never @returns {$Result} */
 export function choice_empty_to(never) {
   return never;
-}
-
-/** @template $In, $Out @param {{ fn: Fn<$In, $Out>, inø: $In, }} call @returns {$Out} */
-export function call(call) {
-  return call.fn(call.inø);
 }
 
 /** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {{ slot: Slot<$Origin, $Item>, index: U32 }} */
@@ -442,16 +429,16 @@ export function span_end_of_length_positive(take) {
  * @param {Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ slot: Slot<$Origin, $Item>, state: $State, }, $State>} step
+ * @param{(state: $State, slot: Slot<$Origin, $Item>) => $State} step
  * @returns {$State} */
 export function span_step(span, direction, state, step) {
   if ("up" in direction) {
     for (let i = span.start; i < span.start + span.length; i++) {
-      state = step({ state: state, slot: i });
+      state = step(state, i);
     }
   } else {
     for (let i = span.start + span.length - 1; i >= span.start; i--) {
-      state = step({ state: state, slot: i });
+      state = step(state, i);
     }
   }
   return state;
@@ -460,26 +447,23 @@ export function span_step(span, direction, state, step) {
  * @param {Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ slot: Slot<$Origin, $Item>, state: $State, }, $State>} step
+ * @param{(state: $State, slot: Slot<$Origin, $Item>) => $State} step
  * @returns {$State} */
 export function opt_span_step(span, direction, state, step) {
   return "no" in span ? state : span_step(span.yes, direction, state, step);
 }
 /** @template $Done, $Going, $Origin, $Item
- * @param {{
- *     span: Span<$Origin, $Item>,
- *     direction: { up: void } | { down: void },
- *     state: $Going,
- *     step: Fn<{ slot: Slot<$Origin, $Item>, state: $Going, }, { going: $Going } | { done: $Done }>,
- * }} step
+ * @param {Span<$Origin, $Item>} span
+ * @param{{ up: void } | { down: void }} direction
+ * @param {$Going} state
+ * @param {(state: $Going, slot: Slot<$Origin, $Item>) => { going: $Going } | { done: $Done }} step
  * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin, $Item>>} }} */
-export function span_step_while(step) {
-  let state = step.state;
-  if ("up" in step.direction) {
-    for (let i = step.span.start; i < step.span.start + step.span.length; i++) {
-      const step_result = step.step({ state: state, slot: i });
+export function span_step_while(span, direction, state, step) {
+  if ("up" in direction) {
+    for (let i = span.start; i < span.start + span.length; i++) {
+      const step_result = step(state, i);
       if ("done" in step_result) {
-        const rest_length = step.span.start + step.span.length - 1 - i;
+        const rest_length = span.start + span.length - 1 - i;
         return {
           done: {
             done: step_result.done,
@@ -493,10 +477,10 @@ export function span_step_while(step) {
       state = step_result.going;
     }
   } else {
-    for (let i = step.span.start + step.span.length - 1; i >= step.span.start; i--) {
-      const step_result = step.step({ state: state, slot: i });
+    for (let i = span.start + span.length - 1; i >= span.start; i--) {
+      const step_result = step(state, i);
       if ("done" in step_result) {
-        const rest_length = i - step.span.start;
+        const rest_length = i - span.start;
         return {
           done: {
             done: step_result.done,
@@ -513,21 +497,14 @@ export function span_step_while(step) {
   return { going: state };
 }
 /** @template $Done, $Going, $Origin, $Item
- * @param {{
- *     span: Opt<Span<$Origin, $Item>>,
- *     direction: { up: void } | { down: void },
- *     state: $Going,
- *     step: Fn<{ slot: Slot<$Origin, $Item>, state: $Going, }, { going: $Going } | { done: $Done }>,
- * }} step
+ * @param {Opt<Span<$Origin, $Item>>} span
+ * @param{{ up: void } | { down: void }} direction
+ * @param {$Going} state
+ * @param {(state: $Going, slot: Slot<$Origin, $Item>) => { going: $Going } | { done: $Done }} step
  * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin, $Item>>} }} */
-export function opt_span_step_while(step) {
-  if ("no" in step.span) return { going: step.state };
-  return span_step_while({
-    span: step.span.yes,
-    direction: step.direction,
-    state: step.state,
-    step: step.step,
-  });
+export function opt_span_step_while(span, direction, state, step) {
+  if ("no" in span) return { going: state };
+  return span_step_while(span.yes, direction, state, step);
 }
 
 /** @template $Item, $Origin @returns {Buf<$Origin, $Item>} */
@@ -541,7 +518,7 @@ export function buf_pre_allocation_rid(buf) {
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
  * @param{Span<$Origin, $Item>} span
- * @param {Fn<$Item, void>} item_rid
+ * @param {(item: $Item) => void} item_rid
  * @returns {void} */
 export function buf_span_rid(buf, span, item_rid) {
   if (span.start + span.length === buf.length) {
@@ -562,7 +539,7 @@ export function buf_span_rid(buf, span, item_rid) {
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
  * @param {Span<$Origin, $Item>} span
- * @param {Fn<$Item, $Item>} item_alter
+ * @param {(item: $Item) => $Item} item_alter
  * @returns {void} */
 export function buf_span_alter(buf, span, item_alter) {
   for (let i = span.start; i < span.start + span.length; i++) {
@@ -572,7 +549,7 @@ export function buf_span_alter(buf, span, item_alter) {
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
  * @param {Opt<Span<$Origin, $Item>>} span
- * @param {Fn<$Item, $Item>} item_alter
+ * @param {(item: $Item) => $Item} item_alter
  * @returns {void} */
 export function buf_opt_span_alter(buf, span, item_alter) {
   if ("yes" in span) {
@@ -584,24 +561,18 @@ export function buf_opt_span_alter(buf, span, item_alter) {
  * @param{Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ item: $Item, state: $State, }, [$State, $Item]>} step
+ * @param{(state: $State, item: $Item) => [$State, $Item]} step
  * @returns {$State} */
 export function buf_span_step(buf, span, direction, state, step) {
   if ("up" in direction) {
     for (let i = span.start; i < span.start + span.length; i++) {
-      const [stepped_state, stepped_item] = step({
-        state: state,
-        item: /** @type $Item */ (buf[i]),
-      });
+      const [stepped_state, stepped_item] = step(state, /** @type $Item */ (buf[i]));
       buf[i] = stepped_item;
       state = stepped_state;
     }
   } else {
     for (let i = span.start + span.length - 1; i >= span.start; i--) {
-      const [stepped_state, stepped_item] = step({
-        state: state,
-        item: /** @type $Item */ (buf[i]),
-      });
+      const [stepped_state, stepped_item] = step(state, /** @type $Item */ (buf[i]));
       buf[i] = stepped_item;
       state = stepped_state;
     }
@@ -613,7 +584,7 @@ export function buf_span_step(buf, span, direction, state, step) {
  * @param{Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ item: $Item, state: $State, }, [$State, $Item]>} step
+ * @param{(state: $State, item: $Item) => [$State, $Item]} step
  * @returns {$State} */
 export function buf_opt_span_step(buf, span, direction, state, step) {
   return "yes" in span ? buf_span_step(buf, span.yes, direction, state, step) : state;
@@ -623,26 +594,26 @@ export function buf_opt_span_step(buf, span, direction, state, step) {
  * @param{Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ item: $Item, state: $State, }, { item: $Item, state: { going: $State} | { done: $Done }, }>} step
+ * @param{(state: $State, item: $Item) => [{ going: $State} | { done: $Done }, $Item]} step
  * @returns {{ going: $State} | { done: $Done }} */
 export function buf_span_step_while(buf, span, direction, state, step) {
   if ("up" in direction) {
     for (let i = span.start; i < span.start + span.length; i++) {
-      const stepped = step({ state: state, item: /** @type $Item */ (buf[i]) });
-      buf[i] = stepped.item;
-      if ("done" in stepped.state) {
-        return stepped.state;
+      const [stepped_state, stepped_item] = step(state, /** @type $Item */ (buf[i]));
+      buf[i] = stepped_item;
+      if ("done" in stepped_state) {
+        return stepped_state;
       }
-      state = stepped.state.going;
+      state = stepped_state.going;
     }
   } else {
     for (let i = span.start + span.length - 1; i >= span.start; i--) {
-      const stepped = step({ state: state, item: /** @type $Item */ (buf[i]) });
-      buf[i] = stepped.item;
-      if ("done" in stepped.state) {
-        return stepped.state;
+      const [stepped_state, stepped_item] = step(state, /** @type $Item */ (buf[i]));
+      buf[i] = stepped_item;
+      if ("done" in stepped_state) {
+        return stepped_state;
       }
-      state = stepped.state.going;
+      state = stepped_state.going;
     }
   }
   return { going: state };
@@ -652,7 +623,7 @@ export function buf_span_step_while(buf, span, direction, state, step) {
  * @param{Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ item: $Item, state: $State, }, { item: $Item, state: { going: $State} | { done: $Done }, }>} step
+ * @param{(state: $State, item: $Item) => [{ going: $State} | { done: $Done }, $Item]} step
  * @returns {{ going: $State} | { done: $Done }} */
 export function buf_opt_span_step_while(buf, span, direction, state, step) {
   if ("yes" in span) {
@@ -776,13 +747,13 @@ export function buf_replace(buf, slot, new_item) {
  * @param {Buf<$Origin, $Item>} buf
  * @param {Slot<$Origin, $Item>} slot
  * @param {$In} in_
- * @param {Fn<{inø: $In, item:$Item}, {item: $Item, out:$Out}>} step
+ * @param {(inø: $In, item:$Item) => [$Out, $Item]} step
  * @returns {$Out} */
 export function buf_item_step(buf, slot, in_, step) {
   const item = /** @type {$Item} */ (buf[slot]);
-  const stepped = step({ inø: in_, item: item });
-  buf[slot] = stepped.item;
-  return stepped.out;
+  const [stepped_out, stepped_item] = step(in_, item);
+  buf[slot] = stepped_item;
+  return stepped_out;
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
@@ -873,15 +844,15 @@ export function buf_opt_span_reverse(buf, span) {
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
  * @param{Span<$Origin, $Item>} span
- * @param{Fn<{ left: $Item, right: $Item }, Order>} item_order
+ * @param{(left: $Item, right: $Item) => Order} item_order
  * @returns {Span<$Origin, $Item>} */
 export function buf_span_sort(buf, span, item_order) {
   const span_indexes = Array.from(span, (_, i) => span.start + i);
   span_indexes.sort((left, right) => {
-    const order = item_order({
-      left: /** @type $Item */ (buf[left]),
-      right: /** @type $Item */ (buf[right]),
-    });
+    const order = item_order(
+      /** @type $Item */ (buf[left]),
+      /** @type $Item */ (buf[right]),
+    );
     return "less" in order ? -1 : "greater" in order ? 1 : 0;
   });
   span_indexes.forEach((buf_index_sorted, old_offset_within_span) => {
@@ -897,7 +868,7 @@ export function buf_span_sort(buf, span, item_order) {
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
  * @param{Opt<Span<$Origin, $Item>>} span
- * @param{Fn<{ left: $Item, right: $Item }, Order>} item_order
+ * @param{(left: $Item, right: $Item) => Order} item_order
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function buf_opt_span_sort(buf, span, item_order) {
   if ("yes" in span) {
