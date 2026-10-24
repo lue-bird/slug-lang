@@ -1378,20 +1378,29 @@ fn parse_parameter_pattern_tuple<Patterns>(
         return None;
     };
     parse_slug_whitespace(state);
-    let open_paren_start = parse_symbol_as_start(state, "(");
-    parse_slug_whitespace(state);
-    let mut parts = Vec::new();
-    while let Some(field) = parse_parameter_pattern(state, patterns) {
-        parts.push(field);
-        parse_slug_whitespace(state);
+    match parse_symbol_as_start(state, "(") {
+        None => Some(SyntaxPattern::Tuple {
+            star_start,
+            open_paren_start: None,
+            parts: vec![],
+            closed_paren_start: None,
+        }),
+        Some(open_paren_start) => {
+            parse_slug_whitespace(state);
+            let mut parts = Vec::new();
+            while let Some(part) = parse_parameter_pattern(state, patterns) {
+                parts.push(part);
+                parse_slug_whitespace(state);
+            }
+            let closed_paren_start = parse_symbol_as_start(state, ")");
+            Some(SyntaxPattern::Tuple {
+                star_start,
+                open_paren_start: Some(open_paren_start),
+                parts,
+                closed_paren_start,
+            })
+        }
     }
-    let closed_paren_start = parse_symbol_as_start(state, ")");
-    Some(SyntaxPattern::Tuple {
-        star_start,
-        open_paren_start,
-        parts,
-        closed_paren_start,
-    })
 }
 fn parse_if_pattern_tuple<Patterns>(
     state: &mut ParseState,
@@ -1401,20 +1410,29 @@ fn parse_if_pattern_tuple<Patterns>(
         return None;
     };
     parse_slug_whitespace(state);
-    let open_paren_start = parse_symbol_as_start(state, "(");
-    parse_slug_whitespace(state);
-    let mut parts = Vec::new();
-    while let Some(field) = parse_if_pattern(state, patterns) {
-        parts.push(field);
-        parse_slug_whitespace(state);
+    match parse_symbol_as_start(state, "(") {
+        None => Some(SyntaxPattern::Tuple {
+            star_start,
+            open_paren_start: None,
+            parts: vec![],
+            closed_paren_start: None,
+        }),
+        Some(open_paren_start) => {
+            parse_slug_whitespace(state);
+            let mut parts = Vec::new();
+            while let Some(part) = parse_if_pattern(state, patterns) {
+                parts.push(part);
+                parse_slug_whitespace(state);
+            }
+            let closed_paren_start = parse_symbol_as_start(state, ")");
+            Some(SyntaxPattern::Tuple {
+                star_start,
+                open_paren_start: Some(open_paren_start),
+                parts,
+                closed_paren_start,
+            })
+        }
     }
-    let closed_paren_start = parse_symbol_as_start(state, ")");
-    Some(SyntaxPattern::Tuple {
-        star_start,
-        open_paren_start,
-        parts,
-        closed_paren_start,
-    })
 }
 fn parse_parameter_pattern_record<Patterns>(
     state: &mut ParseState,
@@ -1489,6 +1507,7 @@ pub fn parse_type(state: &mut ParseState) -> Option<SyntaxType> {
     parse_type_variable(state)
         .or_else(|| parse_type_origin(state))
         .or_else(|| parse_type_construct(state))
+        .or_else(|| parse_type_tuple(state))
         .or_else(|| parse_type_record(state))
         .or_else(|| parse_type_choice(state))
         .or_else(|| parse_type_fn(state))
@@ -1506,6 +1525,35 @@ fn parse_type_origin(state: &mut ParseState) -> Option<SyntaxType> {
     parse_slug_whitespace(state);
     let name = parse_slug_lowercase_name_with_start(state);
     Some(SyntaxType::Origin { hat_start, name })
+}
+fn parse_type_tuple(state: &mut ParseState) -> Option<SyntaxType> {
+    let Some(star_start) = parse_symbol_as_start(state, "*") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    match parse_symbol_as_start(state, "(") {
+        None => Some(SyntaxType::Tuple {
+            star_start,
+            open_paren_start: None,
+            parts: vec![],
+            closed_paren_start: None,
+        }),
+        Some(open_paren_start) => {
+            parse_slug_whitespace(state);
+            let mut parts = Vec::new();
+            while let Some(part) = parse_type(state) {
+                parts.push(part);
+                parse_slug_whitespace(state);
+            }
+            let closed_paren_start = parse_symbol_as_start(state, ")");
+            Some(SyntaxType::Tuple {
+                star_start,
+                open_paren_start: Some(open_paren_start),
+                parts,
+                closed_paren_start,
+            })
+        }
+    }
 }
 fn parse_type_record(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(open_curly_start) = parse_symbol_as_start(state, "{") else {
@@ -1660,20 +1708,29 @@ fn parse_expression_tuple<Expressions, Patterns>(
         return None;
     };
     parse_slug_whitespace(state);
-    let open_paren_start = parse_symbol_as_start(state, "(");
-    parse_slug_whitespace(state);
-    let mut parts = Vec::new();
-    while let Some(field) = parse_expression(state, expressions, patterns) {
-        parts.push(field);
-        parse_slug_whitespace(state);
+    match parse_symbol_as_start(state, "(") {
+        None => Some(SyntaxExpression::Tuple {
+            star_start,
+            open_paren_start: None,
+            parts: vec![],
+            closed_paren_start: None,
+        }),
+        Some(open_paren_start) => {
+            parse_slug_whitespace(state);
+            let mut parts = Vec::new();
+            while let Some(part) = parse_expression(state, expressions, patterns) {
+                parts.push(part);
+                parse_slug_whitespace(state);
+            }
+            let closed_paren_start = parse_symbol_as_start(state, ")");
+            Some(SyntaxExpression::Tuple {
+                star_start,
+                open_paren_start: Some(open_paren_start),
+                parts,
+                closed_paren_start,
+            })
+        }
     }
-    let closed_paren_start = parse_symbol_as_start(state, ")");
-    Some(SyntaxExpression::Tuple {
-        star_start,
-        open_paren_start,
-        parts,
-        closed_paren_start,
-    })
 }
 fn parse_expression_record<Expressions, Patterns>(
     state: &mut ParseState,
@@ -11066,23 +11123,16 @@ pub fn syntax_project_format<Expressions, Patterns>(
                 if let Some(name) = name {
                     formatted.push_str(&name.value);
                 }
-                match parameters
-                    .as_ref()
-                    .and_then(|params| params.parameters.split_first())
+                if let Some(parameters) = parameters
+                    && let Some((parameter0, parameter1_up)) = parameters.parameters.split_first()
                 {
-                    Some((parameter0, parameter1_up)) => {
-                        formatted.push('(');
-                        formatted.push_str(&parameter0.value);
-                        for parameter in parameter1_up {
-                            formatted.push(' ');
-                            formatted.push_str(&parameter.value);
-                        }
+                    formatted.push('(');
+                    formatted.push_str(&parameter0.value);
+                    for parameter in parameter1_up {
+                        formatted.push(' ');
+                        formatted.push_str(&parameter.value);
                     }
-                    None => {
-                        if let Some(name) = name {
-                            formatted.push_str(&name.value);
-                        }
-                    }
+                    formatted.push(')');
                 }
                 match documentation {
                     Some(documentation) => {
@@ -11152,15 +11202,23 @@ pub fn syntax_project_format<Expressions, Patterns>(
                 });
                 space_or_linebreak_indented_into(&mut formatted, header_line_span, next_indent(0));
                 formatted.push('(');
-                for parameter in parameters {
-                    syntax_pattern_format(&mut formatted, next_indent(0), patterns, parameter);
-                    space_or_linebreak_indented_into(
-                        &mut formatted,
-                        header_line_span,
-                        next_indent(0),
-                    );
+                if let Some((parameter0, parameter1_up)) = parameters.split_first() {
+                    if header_line_span == LineSpan::Multiple {
+                        linebreak_indented_into(&mut formatted, next_indent(0));
+                    }
+                    syntax_pattern_format(&mut formatted, next_indent(0), patterns, parameter0);
+                    for parameter in parameter1_up {
+                        space_or_linebreak_indented_into(
+                            &mut formatted,
+                            header_line_span,
+                            next_indent(0),
+                        );
+                        syntax_pattern_format(&mut formatted, next_indent(0), patterns, parameter);
+                    }
+                    if header_line_span == LineSpan::Multiple {
+                        linebreak_indented_into(&mut formatted, 0);
+                    }
                 }
-                space_or_linebreak_indented_into(&mut formatted, header_line_span, 0);
                 formatted.push(')');
                 match result_type {
                     Some(result_type) => {
@@ -11180,7 +11238,6 @@ pub fn syntax_project_format<Expressions, Patterns>(
                 if let Some(documentation) = documentation {
                     syntax_comments_format(&mut formatted, 0, documentation);
                 }
-                formatted.push('=');
                 linebreak_indented_into(&mut formatted, next_indent(0));
                 if let Some(result) = result {
                     syntax_expression_format(
@@ -11842,9 +11899,9 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             }
             formatted.push(')');
             let line_span = range_line_span(type_range(type_));
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            space_or_linebreak_indented_into(formatted, line_span, indent);
             if let Some(result) = result {
-                syntax_type_format(formatted, next_indent(indent), result);
+                syntax_type_format(formatted, indent, result);
             }
         }
         SyntaxType::ConstructWithArguments { name, arguments } => {
@@ -11861,11 +11918,16 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                     start: name.start,
                     end: type_range(argument1_up.last().unwrap_or(argument0)).end,
                 });
-                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
                 syntax_type_format(formatted, next_indent(indent), argument0);
                 for argument_type in argument1_up {
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
                     syntax_type_format(formatted, next_indent(indent), argument_type);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
                 }
                 formatted.push(')');
             }
@@ -11899,28 +11961,20 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             fields,
             closed_curly_start: _,
         } => {
-            // TODO
             formatted.push('{');
-            let line_span = range_line_span(type_range(type_));
-            for field in fields {
-                space_or_linebreak_indented_into(formatted, line_span, indent);
-                formatted.push_str(&field.name.value);
-                match &field.value {
-                    None => {
-                        formatted.push(' ');
-                    }
-                    Some(value) => {
-                        let line_span = range_line_span(lsp_types::Range {
-                            start: field.name.start,
-                            end: type_range(value).end,
-                        });
-                        space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                        syntax_type_format(formatted, next_indent(indent), value);
-                    }
+            if let Some((field0, field1_up)) = fields.split_first() {
+                let line_span = range_line_span(type_range(type_));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
                 }
-            }
-            if line_span == LineSpan::Multiple {
-                linebreak_indented_into(formatted, indent);
+                syntax_type_field_format(formatted, indent, field0);
+                for field in field1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, indent);
+                    syntax_type_field_format(formatted, indent, field);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
             }
             formatted.push('}');
         }
@@ -11929,27 +11983,58 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             variants,
             closed_bracket_start: _,
         } => {
-            // TODO
             formatted.push('[');
-            let line_span = range_line_span(type_range(type_));
-            for variant in variants {
-                space_or_linebreak_indented_into(formatted, line_span, indent);
-                formatted.push_str(&variant.name.value);
-                match &variant.value {
-                    None => {
-                        formatted.push(' ');
-                    }
-                    Some(value) => {
-                        let line_span = range_line_span(lsp_types::Range {
-                            start: variant.name.start,
-                            end: type_end(value),
-                        });
-                        space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                        syntax_type_format(formatted, next_indent(indent), value);
-                    }
+            if let Some((variant0, variant1_up)) = variants.split_first() {
+                let line_span = range_line_span(type_range(type_));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                syntax_type_variant_format(formatted, indent, variant0);
+                for variant in variant1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, indent);
+                    syntax_type_variant_format(formatted, indent, variant);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
                 }
             }
             formatted.push(']');
+        }
+    }
+}
+fn syntax_type_field_format(
+    formatted: &mut String,
+    indent: usize,
+    field: &SyntaxRecordField<SyntaxType>,
+) {
+    formatted.push_str(&field.name.value);
+    match &field.value {
+        None => {
+            formatted.push(' ');
+        }
+        Some(value) => {
+            let line_span = range_line_span(lsp_types::Range {
+                start: field.name.start,
+                end: type_range(value).end,
+            });
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            syntax_type_format(formatted, next_indent(indent), value);
+        }
+    }
+}
+fn syntax_type_variant_format(formatted: &mut String, indent: usize, variant: &SyntaxTypeVariant) {
+    formatted.push_str(&variant.name.value);
+    match &variant.value {
+        None => {
+            formatted.push(' ');
+        }
+        Some(value) => {
+            let line_span = range_line_span(lsp_types::Range {
+                start: variant.name.start,
+                end: type_end(value),
+            });
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            syntax_type_format(formatted, next_indent(indent), value);
         }
     }
 }
@@ -14462,7 +14547,7 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
                 Some((variant0, variant1_up)) => {
                     let line_span: LineSpan = type_line_span(type_);
                     if line_span == LineSpan::Multiple {
-                        linebreak_indented_into(formatted, next_indent(indent));
+                        linebreak_indented_into(formatted, indent);
                     }
                     type_variant_format(formatted, indent, variant0);
                     for variant in variant1_up {
@@ -14470,7 +14555,7 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
                         type_variant_format(formatted, indent, variant);
                     }
                     if line_span == LineSpan::Multiple {
-                        linebreak_indented_into(formatted, next_indent(indent));
+                        linebreak_indented_into(formatted, indent);
                     }
                 }
             }
@@ -14484,13 +14569,17 @@ fn type_record_format(formatted: &mut String, indent: usize, fields: &[TypeField
         None => {}
         Some((field0, field1_up)) => {
             let line_span: LineSpan = type_record_line_span(fields);
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            type_field_format(formatted, next_indent(indent), field0);
-            for field in field1_up {
-                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                type_field_format(formatted, next_indent(indent), field);
+            if line_span == LineSpan::Multiple {
+                linebreak_indented_into(formatted, indent);
             }
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            type_field_format(formatted, indent, field0);
+            for field in field1_up {
+                space_or_linebreak_indented_into(formatted, line_span, indent);
+                type_field_format(formatted, indent, field);
+            }
+            if line_span == LineSpan::Multiple {
+                linebreak_indented_into(formatted, indent);
+            }
         }
     }
     formatted.push('}');
