@@ -24,11 +24,11 @@ const SYMBOL$UNSET = Symbol();
 /** @template $Item @typedef {(typeof SYMBOL$UNSET | $Item)[]} Unset_slice
  * Assumed to contain an empty array (with spare capacity)
  */
-/** @template $Origin @typedef {U32 & { readonly origin?: $Origin }} Slot
- * TODO add item type
+/** @template $Origin, $Item
+ * @typedef {U32 & { readonly origin?: $Origin, readonly item?: $Item }} Slot
  */
-/** @template $Origin @typedef {{ start: U32, length: U32 } & { readonly origin?: $Origin }} Span
- * TODO add item type
+/** @template $Origin, $Item
+ * @typedef {{ start: U32, length: U32 } & { readonly origin?: $Origin, readonly item?: $Item }} Span
  */
 
 const I32$MIN = -2147483648;
@@ -58,7 +58,7 @@ export function f32$to_string(n) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, $Item>} span
  * @returns {$Item[]}
  */
 export function buf$span_slice(buf, span) {
@@ -365,27 +365,27 @@ export function call(call) {
   return call.fn(call.inø);
 }
 
-/** @template $Origin @param {Slot<$Origin>} slot @returns {{ slot: Slot<$Origin>, index: U32 }} */
+/** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {{ slot: Slot<$Origin, $Item>, index: U32 }} */
 export function slot_index(slot) {
   return { slot: slot, index: slot };
 }
-/** @template $Origin @param {Slot<$Origin>} slot @returns {Span<$Origin>} */
+/** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {Span<$Origin, $Item>} */
 export function slot_to_span(slot) {
   return { start: slot, length: 1 };
 }
-/** @template $Origin @param {Span<$Origin>} span @returns {{ span: Span<$Origin>, index: U32, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ span: Span<$Origin, $Item>, index: U32, }} */
 export function span_start_index(span) {
   return { span: span, index: span.start };
 }
-/** @template $Origin @param {Span<$Origin>} span @returns {{ span: Span<$Origin>, length: P32, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ span: Span<$Origin, $Item>, length: P32, }} */
 export function span_length(span) {
   return { span: span, length: span.length };
 }
-/** @template $Origin @param {Opt<Span<$Origin>>} span @returns {{ span: Opt<Span<$Origin>>, length: U32, }} */
+/** @template $Origin, $Item @param {Opt<Span<$Origin, $Item>>} span @returns {{ span: Opt<Span<$Origin, $Item>>, length: U32, }} */
 export function opt_span_length(span) {
   return { span: span, length: "no" in span ? 0 : span.yes.length };
 }
-/** @template $Origin @param {Span<$Origin>} span @returns {{ start: Slot<$Origin>, after: Opt<Span<$Origin>>, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ start: Slot<$Origin, $Item>, after: Opt<Span<$Origin, $Item>>, }} */
 export function span_start(span) {
   return {
     start: span.start,
@@ -395,7 +395,7 @@ export function span_start(span) {
         : { no: undefined },
   };
 }
-/** @template $Origin @param {Span<$Origin>} span @returns {{ end: Slot<$Origin>, before: Opt<Span<$Origin>>, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ end: Slot<$Origin, $Item>, before: Opt<Span<$Origin, $Item>>, }} */
 export function span_end(span) {
   return {
     end: span.start + span.length - 1,
@@ -405,7 +405,7 @@ export function span_end(span) {
         : { no: undefined },
   };
 }
-/** @template $Origin @param {{ span: Span<$Origin>, length: P32, }} take @returns {{ start: Span<$Origin>, after: Opt<Span<$Origin>>, }} */
+/** @template $Origin, $Item @param {{ span: Span<$Origin, $Item>, length: P32, }} take @returns {{ start: Span<$Origin, $Item>, after: Opt<Span<$Origin, $Item>>, }} */
 export function span_start_of_length_positive(take) {
   return {
     start: { start: take.span.start, length: Math.min(take.span.length, take.length) },
@@ -420,7 +420,7 @@ export function span_start_of_length_positive(take) {
           },
   };
 }
-/** @template $Origin @param {{ span: Span<$Origin>, length: P32, }} take @returns {{ end: Span<$Origin>, before: Opt<Span<$Origin>>, }} */
+/** @template $Origin, $Item @param {{ span: Span<$Origin, $Item>, length: P32, }} take @returns {{ end: Span<$Origin, $Item>, before: Opt<Span<$Origin, $Item>>, }} */
 export function span_end_of_length_positive(take) {
   return {
     end: {
@@ -438,11 +438,11 @@ export function span_end_of_length_positive(take) {
           },
   };
 }
-/** @template $Origin, $State
- * @param {Span<$Origin>} span
+/** @template $Origin, $Item, $State
+ * @param {Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ slot: Slot<$Origin>, state: $State, }, $State>} step
+ * @param{Fn<{ slot: Slot<$Origin, $Item>, state: $State, }, $State>} step
  * @returns {$State} */
 export function span_step(span, direction, state, step) {
   if ("up" in direction) {
@@ -456,23 +456,23 @@ export function span_step(span, direction, state, step) {
   }
   return state;
 }
-/** @template $Origin, $State
- * @param {Opt<Span<$Origin>>} span
+/** @template $Origin, $Item, $State
+ * @param {Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{Fn<{ slot: Slot<$Origin>, state: $State, }, $State>} step
+ * @param{Fn<{ slot: Slot<$Origin, $Item>, state: $State, }, $State>} step
  * @returns {$State} */
 export function opt_span_step(span, direction, state, step) {
   return "no" in span ? state : span_step(span.yes, direction, state, step);
 }
-/** @template $Done, $Going, $Origin
+/** @template $Done, $Going, $Origin, $Item
  * @param {{
- *     span: Span<$Origin>,
+ *     span: Span<$Origin, $Item>,
  *     direction: { up: void } | { down: void },
  *     state: $Going,
- *     step: Fn<{ slot: Slot<$Origin>, state: $Going, }, { going: $Going } | { done: $Done }>,
+ *     step: Fn<{ slot: Slot<$Origin, $Item>, state: $Going, }, { going: $Going } | { done: $Done }>,
  * }} step
- * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin>>} }} */
+ * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin, $Item>>} }} */
 export function span_step_while(step) {
   let state = step.state;
   if ("up" in step.direction) {
@@ -512,14 +512,14 @@ export function span_step_while(step) {
   }
   return { going: state };
 }
-/** @template $Done, $Going, $Origin
+/** @template $Done, $Going, $Origin, $Item
  * @param {{
- *     span: Opt<Span<$Origin>>,
+ *     span: Opt<Span<$Origin, $Item>>,
  *     direction: { up: void } | { down: void },
  *     state: $Going,
- *     step: Fn<{ slot: Slot<$Origin>, state: $Going, }, { going: $Going } | { done: $Done }>,
+ *     step: Fn<{ slot: Slot<$Origin, $Item>, state: $Going, }, { going: $Going } | { done: $Done }>,
  * }} step
- * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin>>} }} */
+ * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin, $Item>>} }} */
 export function opt_span_step_while(step) {
   if ("no" in step.span) return { going: step.state };
   return span_step_while({
@@ -540,7 +540,7 @@ export function buf_pre_allocation_rid(buf) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param{Span<$Origin>} span
+ * @param{Span<$Origin, $Item>} span
  * @param {Fn<$Item, void>} item_rid
  * @returns {void} */
 export function buf_span_rid(buf, span, item_rid) {
@@ -561,7 +561,7 @@ export function buf_span_rid(buf, span, item_rid) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, $Item>} span
  * @param {Fn<$Item, $Item>} item_alter
  * @returns {void} */
 export function buf_span_alter(buf, span, item_alter) {
@@ -571,7 +571,7 @@ export function buf_span_alter(buf, span, item_alter) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Opt<Span<$Origin>>} span
+ * @param {Opt<Span<$Origin, $Item>>} span
  * @param {Fn<$Item, $Item>} item_alter
  * @returns {void} */
 export function buf_opt_span_alter(buf, span, item_alter) {
@@ -581,7 +581,7 @@ export function buf_opt_span_alter(buf, span, item_alter) {
 }
 /** @template $Item, $Origin, $State
  * @param {Buf<$Origin, $Item>} buf
- * @param{Span<$Origin>} span
+ * @param{Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
  * @param{Fn<{ item: $Item, state: $State, }, [$State, $Item]>} step
@@ -610,7 +610,7 @@ export function buf_span_step(buf, span, direction, state, step) {
 }
 /** @template $Item, $Origin, $State
  * @param {Buf<$Origin, $Item>} buf
- * @param{Opt<Span<$Origin>>} span
+ * @param{Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
  * @param{Fn<{ item: $Item, state: $State, }, [$State, $Item]>} step
@@ -620,7 +620,7 @@ export function buf_opt_span_step(buf, span, direction, state, step) {
 }
 /** @template $Item, $Origin, $State, $Done
  * @param {Buf<$Origin, $Item>} buf
- * @param{Span<$Origin>} span
+ * @param{Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
  * @param{Fn<{ item: $Item, state: $State, }, { item: $Item, state: { going: $State} | { done: $Done }, }>} step
@@ -649,7 +649,7 @@ export function buf_span_step_while(buf, span, direction, state, step) {
 }
 /** @template $Item, $Origin, $State, $Done
  * @param {Buf<$Origin, $Item>} buf
- * @param{Opt<Span<$Origin>>} span
+ * @param{Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
  * @param{Fn<{ item: $Item, state: $State, }, { item: $Item, state: { going: $State} | { done: $Done }, }>} step
@@ -679,7 +679,7 @@ export function buf_try_pre_allocate_at_least(buf, length) {
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
  * @param {$Item} new_item
- * @returns {Slot<$Origin>} */
+ * @returns {Slot<$Origin, $Item>} */
 export function buf_add(buf, new_item) {
   const new_index = buf.length;
   buf.push(new_item);
@@ -690,7 +690,7 @@ export function buf_add(buf, new_item) {
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
  * @param {$Item} new_item
- * @returns {Slot<$Origin>} */
+ * @returns {Slot<$Origin, $Item>} */
 export function buf_insert(buf, new_item) {
   const existing_unset_index = buf.findIndex((item) => item === SYMBOL$UNSET);
   if (existing_unset_index >= 0) {
@@ -704,7 +704,7 @@ export function buf_insert(buf, new_item) {
  * @param {Buf<$Origin, $Item>} buf
  * @param {U32} index
  * @param {$Item} new_item
- * @returns {Slot<$Origin>} */
+ * @returns {Slot<$Origin, $Item>} */
 export function buf_set_insert(buf, index, new_item) {
   if (buf[index] === SYMBOL$UNSET) {
     buf[index] = new_item;
@@ -714,9 +714,9 @@ export function buf_set_insert(buf, index, new_item) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, $Item>} span
  * @param {$Item} new_item
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, $Item>} */
 export function buf_span_add(buf, span, new_item) {
   if (span.start + span.length < buf.length) {
     // move span to end
@@ -732,9 +732,9 @@ export function buf_span_add(buf, span, new_item) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Opt<Span<$Origin>>} span
+ * @param {Opt<Span<$Origin, $Item>>} span
  * @param {$Item} new_item
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, $Item>} */
 export function buf_opt_span_add(buf, span, new_item) {
   if ("no" in span) {
     const new_index = buf.length;
@@ -747,7 +747,7 @@ export function buf_opt_span_add(buf, span, new_item) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Slot<$Origin>} slot
+ * @param {Slot<$Origin, $Item>} slot
  * @returns {$Item} */
 export function buf_remove(buf, slot) {
   if (slot + 1 < buf.length) {
@@ -764,7 +764,7 @@ export function buf_remove(buf, slot) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Slot<$Origin>} slot
+ * @param {Slot<$Origin, $Item>} slot
  * @param {$Item} new_item
  * @returns {$Item} */
 export function buf_replace(buf, slot, new_item) {
@@ -774,7 +774,7 @@ export function buf_replace(buf, slot, new_item) {
 }
 /** @template $In, $Item, $Origin, $Out
  * @param {Buf<$Origin, $Item>} buf
- * @param {Slot<$Origin>} slot
+ * @param {Slot<$Origin, $Item>} slot
  * @param {$In} in_
  * @param {Fn<{inø: $In, item:$Item}, {item: $Item, out:$Out}>} step
  * @returns {$Out} */
@@ -786,8 +786,8 @@ export function buf_item_step(buf, slot, in_, step) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Slot<$Origin>} slot_a
- * @param {Slot<$Origin>} slot_b
+ * @param {Slot<$Origin, $Item>} slot_a
+ * @param {Slot<$Origin, $Item>} slot_b
  * @returns {void} */
 export function buf_swap(buf, slot_a, slot_b) {
   const a_item = buf[slot_a];
@@ -796,8 +796,8 @@ export function buf_swap(buf, slot_a, slot_b) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Span<$Origin>} span
- * @returns {Span<$Origin>} */
+ * @param {Span<$Origin, $Item>} span
+ * @returns {Span<$Origin, $Item>} */
 export function buf_span_move_to_end(buf, span) {
   if (span.start + span.length < buf.length) {
     // move span to end
@@ -812,16 +812,16 @@ export function buf_span_move_to_end(buf, span) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Opt<Span<$Origin>>} span
- * @returns {Opt<Span<$Origin>>} */
+ * @param {Opt<Span<$Origin, $Item>>} span
+ * @returns {Opt<Span<$Origin, $Item>>} */
 export function buf_opt_span_move_to_end(buf, span) {
   if ("no" in span) return { no: undefined };
   return { yes: buf_span_move_to_end(buf, span.yes) };
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Span<$Origin>} span
- * @returns {Span<$Origin>} */
+ * @param {Span<$Origin, $Item>} span
+ * @returns {Span<$Origin, $Item>} */
 export function buf_span_move_to_unset(buf, span) {
   if (span.start + span.length < buf.length) return span;
   let unset_length = 0;
@@ -847,15 +847,15 @@ export function buf_span_move_to_unset(buf, span) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Opt<Span<$Origin>>} span
- * @returns {Opt<Span<$Origin>>} */
+ * @param {Opt<Span<$Origin, $Item>>} span
+ * @returns {Opt<Span<$Origin, $Item>>} */
 export function buf_opt_span_move_to_unset(buf, span) {
   if ("no" in span) return span;
   return { yes: buf_span_move_to_unset(buf, span.yes) };
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, $Item>} span
  * @returns {void} */
 export function buf_span_reverse(buf, span) {
   const slice = buf.slice(span.start, span.start + span.length);
@@ -864,7 +864,7 @@ export function buf_span_reverse(buf, span) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param {Opt<Span<$Origin>>} span
+ * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {void} */
 export function buf_opt_span_reverse(buf, span) {
   if ("no" in span) return;
@@ -872,9 +872,9 @@ export function buf_opt_span_reverse(buf, span) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param{Span<$Origin>} span
+ * @param{Span<$Origin, $Item>} span
  * @param{Fn<{ left: $Item, right: $Item }, Order>} item_order
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, $Item>} */
 export function buf_span_sort(buf, span, item_order) {
   const span_indexes = Array.from(span, (_, i) => span.start + i);
   span_indexes.sort((left, right) => {
@@ -896,9 +896,9 @@ export function buf_span_sort(buf, span, item_order) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param{Opt<Span<$Origin>>} span
+ * @param{Opt<Span<$Origin, $Item>>} span
  * @param{Fn<{ left: $Item, right: $Item }, Order>} item_order
- * @returns {Opt<Span<$Origin>>} */
+ * @returns {Opt<Span<$Origin, $Item>>} */
 export function buf_opt_span_sort(buf, span, item_order) {
   if ("yes" in span) {
     buf_span_sort(buf, span.yes, item_order);
@@ -907,9 +907,9 @@ export function buf_opt_span_sort(buf, span, item_order) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param{Span<$Origin>} start
- * @param{Span<$Origin>} end
- * @returns {Span<$Origin>} */
+ * @param{Span<$Origin, $Item>} start
+ * @param{Span<$Origin, $Item>} end
+ * @returns {Span<$Origin, $Item>} */
 export function buf_span_add_own_span(buf, start, end) {
   if (start.start + start.length === end.start) {
     return { start: start.start, length: start.length + end.length };
@@ -933,9 +933,9 @@ export function buf_span_add_own_span(buf, start, end) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param{Span<$Origin>} start
- * @param{Opt<Span<$Origin>>} end
- * @returns {Span<$Origin>} */
+ * @param{Span<$Origin, $Item>} start
+ * @param{Opt<Span<$Origin, $Item>>} end
+ * @returns {Span<$Origin, $Item>} */
 export function buf_span_add_own_opt_span(buf, start, end) {
   if ("no" in end) {
     return start;
@@ -944,9 +944,9 @@ export function buf_span_add_own_opt_span(buf, start, end) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param{Opt<Span<$Origin>>} start
- * @param{Span<$Origin>} end
- * @returns {Span<$Origin>} */
+ * @param{Opt<Span<$Origin, $Item>>} start
+ * @param{Span<$Origin, $Item>} end
+ * @returns {Span<$Origin, $Item>} */
 export function buf_opt_span_add_own_span(buf, start, end) {
   if ("no" in start) {
     return end;
@@ -955,9 +955,9 @@ export function buf_opt_span_add_own_span(buf, start, end) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf
- * @param{Opt<Span<$Origin>>} start
- * @param{Opt<Span<$Origin>>} end
- * @returns {Opt<Span<$Origin>>} */
+ * @param{Opt<Span<$Origin, $Item>>} start
+ * @param{Opt<Span<$Origin, $Item>>} end
+ * @returns {Opt<Span<$Origin, $Item>>} */
 export function buf_opt_span_add_own_opt_span(buf, start, end) {
   if ("no" in start) {
     return end;
@@ -970,7 +970,7 @@ export function buf_opt_span_add_own_opt_span(buf, start, end) {
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
  * @param {Str} new_str
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_add_str_chars(buf, new_str) {
   const new_start = buf.length;
   for (const new_char of new_str) {
@@ -985,9 +985,9 @@ export function buf_add_str_chars(buf, new_str) {
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, Char>} span
  * @param {Str} new_str
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_span_add_str_chars(buf, span, new_str) {
   if (span.start + span.length < buf.length) {
     // move span to end
@@ -1009,9 +1009,9 @@ export function buf_span_add_str_chars(buf, span, new_str) {
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Opt<Span<$Origin>>} span
+ * @param {Opt<Span<$Origin, Char>>} span
  * @param {Str} new_str
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_opt_span_add_str_chars(buf, span, new_str) {
   if ("no" in span) {
     return buf_add_str_chars(buf, new_str);
@@ -1020,49 +1020,49 @@ export function buf_opt_span_add_str_chars(buf, span, new_str) {
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, Char>} span
  * @param {U32} n
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_span_add_u32_chars(buf, span, n) {
   return buf_span_add_str_chars(buf, span, n.toString());
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Opt<Span<$Origin>>} span
+ * @param {Opt<Span<$Origin, Char>>} span
  * @param {U32} n
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_opt_span_add_u32_chars(buf, span, n) {
   return buf_opt_span_add_str_chars(buf, span, n.toString());
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, Char>} span
  * @param {I32} n
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_span_add_i32_chars(buf, span, n) {
   return buf_span_add_str_chars(buf, span, n.toString());
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Opt<Span<$Origin>>} span
+ * @param {Opt<Span<$Origin, Char>>} span
  * @param {I32} n
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_opt_span_add_i32_chars(buf, span, n) {
   return buf_opt_span_add_str_chars(buf, span, n.toString());
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Span<$Origin>} span
+ * @param {Span<$Origin, Char>} span
  * @param {F32} n
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_span_add_f32_chars(buf, span, n) {
   return buf_span_add_str_chars(buf, span, f32$to_string(n));
 }
 /** @template $Origin
  * @param {Buf<$Origin, Char>} buf
- * @param {Opt<Span<$Origin>>} span
+ * @param {Opt<Span<$Origin, Char>>} span
  * @param {F32} n
- * @returns {Span<$Origin>} */
+ * @returns {Span<$Origin, Char>} */
 export function buf_opt_span_add_f32_chars(buf, span, n) {
   return buf_opt_span_add_str_chars(buf, span, f32$to_string(n));
 }
