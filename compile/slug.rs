@@ -1989,7 +1989,7 @@ fn parse_expression_variant<Expressions, Patterns>(
     parse_slug_whitespace(state);
     let value = parse_expression(state, expressions, patterns);
     parse_slug_whitespace(state);
-    let closed_bracket_start = parse_symbol_as_start(state, "[");
+    let closed_bracket_start = parse_symbol_as_start(state, "]");
     Some(SyntaxExpression::Variant {
         open_bracket_start,
         type_: type_argument,
@@ -11200,7 +11200,6 @@ pub fn syntax_project_format<Expressions, Patterns>(
                         })
                         .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
                 });
-                space_or_linebreak_indented_into(&mut formatted, header_line_span, next_indent(0));
                 formatted.push('(');
                 if let Some((parameter0, parameter1_up)) = parameters.split_first() {
                     if header_line_span == LineSpan::Multiple {

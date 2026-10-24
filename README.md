@@ -247,6 +247,8 @@ cargo install --offline --debug --path . slug
         - available via implicit parameters
         - any chained result value or pattern variable has a type which in any part but outside of buf items mentions this origin (the first parameter in slot/span)
 - reimplement standard library (positional + removing redundant linear stuff)
+- suggest function completions even if no () are present
+- correct full type completions syntax
 - switch away from rust-implementation internal Slot stuff to get rid of core.rs
 - add more examples
 - website with online repl
