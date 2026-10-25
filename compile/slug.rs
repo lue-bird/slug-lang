@@ -2113,6 +2113,10 @@ pub enum Type {
         parameters: Vec<Type>,
         result: Box<Type>,
     },
+    Alias {
+        name: Name,
+        arguments: Vec<Type>,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TypeField {
@@ -2788,7 +2792,7 @@ pub struct SyntaxProjectFnInfo<'a, Expressions, Patterns> {
     pub documentation: &'a Option<SyntaxComments>,
     pub result: &'a Option<SyntaxExpression<Expressions, Patterns>>,
 }
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct SyntaxProjectTypeInfo<'a> {
     // consider introducing separate structs instead of separately referencing each field
     pub name: &'a WithStartPosition<Name>,
@@ -2803,17 +2807,10 @@ impl<'a, Expressions, Patterns> Clone for SyntaxProjectFnInfo<'a, Expressions, P
         *self
     }
 }
-impl<'a> Copy for SyntaxProjectTypeInfo<'a> {}
-impl<'a> Clone for SyntaxProjectTypeInfo<'a> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
 
 fn project_type_alias_check(
     errors: &mut Vec<ErrorNode>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-
     project_type: SyntaxProjectTypeInfo,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
@@ -3120,8 +3117,11 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
             parameter_introduced_variable_name,
         ));
     }
-    if let Some(result_type_diff) = type_diff(&header_result_type, &checked_result_expression_type)
-    {
+    if let Some(result_type_diff) = type_diff(
+        &header_result_type,
+        &checked_result_expression_type,
+        type_aliases,
+    ) {
         place_expression_type_diff_errors(
             errors,
             syntax_result,
@@ -3177,22 +3177,25 @@ pub fn syntax_type_to_type(
             })
         }
         SyntaxType::ConstructWithArguments { name, arguments } => {
-            if let Some(origin_type_alias) = type_aliases.get(&name.value) {
-                if let Some(SyntaxTypeConstructParenthesizedArguments {
-                    open_paren_start: _,
-                    arguments,
-                    closed_paren_start: _,
-                }) = arguments
-                    && !arguments.is_empty()
-                {
-                    let argument_types = arguments
-                        .iter()
-                        .map(|argument_type| syntax_type_to_type(argument_type, type_aliases))
-                        .collect::<Option<Vec<Type>>>()?;
-                    type_construct_resolve_type_alias(origin_type_alias, argument_types)
-                } else {
-                    origin_type_alias.type_.clone()
-                }
+            let Some(argument_types) = arguments
+                .iter()
+                .flat_map(|arguments| &arguments.arguments)
+                .map(|argument_type| syntax_type_to_type(argument_type, type_aliases))
+                .collect::<Option<Vec<Type>>>()
+            else {
+                return None;
+            };
+            if core_type_aliases.contains_key(&name.value) {
+                Some(Type::CoreConstruct {
+                    name: name.value.clone(),
+                    arguments: argument_types,
+                })
+            } else if type_aliases.contains_key(&name.value) {
+                // can be optimized by not checking for inclusion in type_aliases
+                Some(Type::Alias {
+                    name: name.value.clone(),
+                    arguments: argument_types,
+                })
             } else {
                 None
             }
@@ -3303,13 +3306,6 @@ pub fn syntax_type_check(
             })
         }
         SyntaxType::ConstructWithArguments { name, arguments } => {
-            let Some(origin_type_alias) = type_aliases.get(&name.value) else {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(name)),
-                    message: Box::from("no type alias or origin exists with this name"),
-                });
-                return None;
-            };
             let Some(argument_types) = arguments
                 .iter()
                 .flat_map(|arguments| &arguments.arguments)
@@ -3326,37 +3322,83 @@ pub fn syntax_type_check(
             else {
                 return None;
             };
-            let argument_count = argument_types.len();
-            match origin_type_alias.parameters.len().cmp(&argument_count) {
-                std::cmp::Ordering::Equal => {}
-                std::cmp::Ordering::Less => {
-                    errors.push(ErrorNode {
-                        range: name_range(with_start_position_as_ref(name)),
-                        message: format!(
-                            "this type alias has {} less parameters than arguments are provided here.",
-                            argument_count - origin_type_alias.parameters.len(),
-                        ).into_boxed_str()
-                    });
-                    return None;
+            if let Some(origin_core_type) = core_type_aliases.get(&name.value) {
+                let argument_count = argument_types.len();
+                match origin_core_type.parameters.len().cmp(&argument_count) {
+                    std::cmp::Ordering::Equal => {}
+                    std::cmp::Ordering::Less => {
+                        errors.push(ErrorNode {
+                            range: name_range(with_start_position_as_ref(name)),
+                            message: format!(
+                                "this core type has {} less parameters than arguments are provided here.",
+                                argument_count - origin_core_type.parameters.len(),
+                            ).into_boxed_str()
+                        });
+                        return None;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        errors.push(ErrorNode {
+                            range: name_range(with_start_position_as_ref(name)),
+                            message: format!(
+                                "this core type has {} more parameters than arguments are provided here. The additional {} called {}",
+                                origin_core_type.parameters.len() - argument_count,
+                                if origin_core_type.parameters.len() - argument_count == 1 {
+                                    "parameter is"
+                                } else {
+                                    "parameters are"
+                                },
+                                origin_core_type.parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
+                            ).into_boxed_str()
+                        });
+                        return None;
+                    }
                 }
-                std::cmp::Ordering::Greater => {
-                    errors.push(ErrorNode {
-                        range: name_range(with_start_position_as_ref(name)),
-                        message: format!(
-                            "this type alias has {} more parameters than arguments are provided here. The additional {} called {}",
-                            origin_type_alias.parameters.len() - argument_count,
-                            if origin_type_alias.parameters.len() - argument_count == 1 {
-                                "parameter is"
-                            } else {
-                                "parameters are"
-                            },
-                            origin_type_alias.parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
-                        ).into_boxed_str()
-                    });
-                    return None;
+                Some(Type::CoreConstruct {
+                    name: name.value.clone(),
+                    arguments: argument_types,
+                })
+            } else if let Some(origin_type_alias) = type_aliases.get(&name.value) {
+                let argument_count = argument_types.len();
+                match origin_type_alias.parameters.len().cmp(&argument_count) {
+                    std::cmp::Ordering::Equal => {}
+                    std::cmp::Ordering::Less => {
+                        errors.push(ErrorNode {
+                            range: name_range(with_start_position_as_ref(name)),
+                            message: format!(
+                                "this type alias has {} less parameters than arguments are provided here.",
+                                argument_count - origin_type_alias.parameters.len(),
+                            ).into_boxed_str()
+                        });
+                        return None;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        errors.push(ErrorNode {
+                            range: name_range(with_start_position_as_ref(name)),
+                            message: format!(
+                                "this type alias has {} more parameters than arguments are provided here. The additional {} called {}",
+                                origin_type_alias.parameters.len() - argument_count,
+                                if origin_type_alias.parameters.len() - argument_count == 1 {
+                                    "parameter is"
+                                } else {
+                                    "parameters are"
+                                },
+                                origin_type_alias.parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
+                            ).into_boxed_str()
+                        });
+                        return None;
+                    }
                 }
+                Some(Type::Alias {
+                    name: name.value.clone(),
+                    arguments: argument_types,
+                })
+            } else {
+                errors.push(ErrorNode {
+                    range: name_range(with_start_position_as_ref(name)),
+                    message: Box::from("no type alias or core type with this name exists"),
+                });
+                None
             }
-            type_construct_resolve_type_alias(origin_type_alias, argument_types)
         }
         SyntaxType::Tuple {
             star_start: _,
@@ -3480,9 +3522,35 @@ pub fn syntax_type_check(
         }
     }
 }
+fn type_alias_resolve_to_non_alias<'a>(
+    type_: &'a Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) -> std::borrow::Cow<'a, Type> {
+    match type_ {
+        Type::Alias {
+            name: actual_name,
+            arguments: actual_arguments,
+        } => {
+            if let Some(actual_origin_type_alias) = type_aliases.get(actual_name)
+                && let Some(actual_resolved_alias) = type_construct_resolve_type_alias(
+                    actual_origin_type_alias,
+                    actual_arguments.iter().cloned(),
+                )
+            {
+                std::borrow::Cow::Owned(
+                    type_alias_resolve_to_non_alias(&actual_resolved_alias, type_aliases)
+                        .into_owned(),
+                )
+            } else {
+                std::borrow::Cow::Borrowed(type_)
+            }
+        }
+        _ => std::borrow::Cow::Borrowed(type_),
+    }
+}
 fn type_construct_resolve_type_alias(
     origin_type_alias: &CheckedTypeAlias,
-    argument_types: Vec<Type>,
+    argument_types: impl Iterator<Item = Type>,
 ) -> Option<Type> {
     let Some(type_alias_type) = &origin_type_alias.type_ else {
         return None;
@@ -3507,7 +3575,7 @@ fn type_replace_variables(
     match type_ {
         Type::Variable(variable) => {
             if let Some(replacement_type_node) = type_parameter_replacements.get(variable) {
-                *type_ = replacement_type_node.clone();
+                *type_ = (*replacement_type_node).clone();
             }
         }
         Type::Origin(_) => {}
@@ -3535,6 +3603,11 @@ fn type_replace_variables(
         Type::Choice(variants) => {
             for variant in variants {
                 type_replace_variables(type_parameter_replacements, &mut variant.value);
+            }
+        }
+        Type::Alias { name: _, arguments } => {
+            for argument_type in arguments {
+                type_replace_variables(type_parameter_replacements, argument_type);
             }
         }
     }
@@ -3574,6 +3647,11 @@ fn type_variables_into<'a>(
                 type_variables_into(type_variables, parameter);
             }
             type_variables_into(type_variables, result);
+        }
+        Type::Alias { name: _, arguments } => {
+            for argument in arguments {
+                type_variables_into(type_variables, argument);
+            }
         }
     }
 }
@@ -3621,19 +3699,20 @@ fn parameters_check_if_different_to_actual_type_parameters<'a>(
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
-enum SpecificPatternCatch<'a> {
+enum SpecificPatternCatch {
     OnlyMatchableByVariable,
     Variant {
-        name: &'a Name,
-        value: Box<SpecificPatternCatch<'a>>,
+        name: Name,
+        value: Box<SpecificPatternCatch>,
     },
-    Tuple(Vec<SpecificPatternCatch<'a>>),
-    Record(Vec<(&'a Name, SpecificPatternCatch<'a>)>),
+    Tuple(Vec<SpecificPatternCatch>),
+    Record(Vec<(Name, SpecificPatternCatch)>),
 }
 /// careful. This easily goes exponential
-fn type_to_possible_specific_pattern_catches<'a>(
-    type_: &'a Type,
-    possibilities: &mut Vec<SpecificPatternCatch<'a>>,
+fn type_to_possible_specific_pattern_catches(
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+    possibilities: &mut Vec<SpecificPatternCatch>,
 ) {
     // possible optimizations:
     // - calculate the count of possibilities in advance and pre-allocate
@@ -3643,6 +3722,18 @@ fn type_to_possible_specific_pattern_catches<'a>(
         Type::Variable(_) | Type::Origin(_) | Type::CoreConstruct { .. } | Type::Fn { .. } => {
             possibilities.push(SpecificPatternCatch::OnlyMatchableByVariable);
         }
+        Type::Alias { name, arguments } => {
+            if let Some(origin_type_alias) = type_aliases.get(name)
+                && let Some(resolved_alias) =
+                    type_construct_resolve_type_alias(origin_type_alias, arguments.iter().cloned())
+            {
+                type_to_possible_specific_pattern_catches(
+                    &resolved_alias,
+                    type_aliases,
+                    possibilities,
+                );
+            }
+        }
         Type::Tuple(type_parts) => {
             if type_parts.is_empty() {
                 possibilities.push(SpecificPatternCatch::Tuple(vec![]));
@@ -3651,7 +3742,11 @@ fn type_to_possible_specific_pattern_catches<'a>(
                 let mut parts_possibilities = vec![Vec::new()];
                 for type_part in type_parts {
                     let mut part_possibilities = Vec::new();
-                    type_to_possible_specific_pattern_catches(type_part, &mut part_possibilities);
+                    type_to_possible_specific_pattern_catches(
+                        type_part,
+                        type_aliases,
+                        &mut part_possibilities,
+                    );
                     parts_possibilities = parts_possibilities
                         .into_iter()
                         .flat_map(|parts_possibility| {
@@ -3686,6 +3781,7 @@ fn type_to_possible_specific_pattern_catches<'a>(
                     let mut value_possibilities = Vec::new();
                     type_to_possible_specific_pattern_catches(
                         &type_field.value,
+                        type_aliases,
                         &mut value_possibilities,
                     );
                     fields_possibilities = fields_possibilities
@@ -3699,7 +3795,8 @@ fn type_to_possible_specific_pattern_catches<'a>(
                                     value_possibilities.len(),
                                 ))
                                 .map(|(value_possibility, mut fields_possibility)| {
-                                    fields_possibility.push((&type_field.name, value_possibility));
+                                    fields_possibility
+                                        .push((type_field.name.clone(), value_possibility));
                                     fields_possibility
                                 })
                         })
@@ -3717,11 +3814,12 @@ fn type_to_possible_specific_pattern_catches<'a>(
                 let mut value_possibilities = Vec::new();
                 type_to_possible_specific_pattern_catches(
                     &type_variant.value,
+                    type_aliases,
                     &mut value_possibilities,
                 );
                 possibilities.extend(value_possibilities.into_iter().map(|value_catch| {
                     SpecificPatternCatch::Variant {
-                        name: &type_variant.name,
+                        name: type_variant.name.clone(),
                         value: Box::new(value_catch),
                     }
                 }));
@@ -3875,6 +3973,7 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
     introduced_variables: &mut std::collections::HashMap<&'a Name, CheckedLocalVariable>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
     existing_local_variables: &std::collections::HashMap<&Name, CheckedLocalVariable>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     match pattern {
         SyntaxPattern::Variable { name, type_ } => {
@@ -3940,11 +4039,12 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                 });
                 return;
             };
-            let Type::Choice(origin_choice_type_variants) = &expected_type else {
+            let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
+            let Type::Choice(origin_choice_type_variants) = expected_type.as_ref() else {
                 let mut error_message: String = String::from(
-                    "A variant is part of a choice type (for example |a u32 |b str) but the expected type here is\n",
+                    "A variant is part of a choice type (for example [a u32  b str]) but the expected type here is\n",
                 );
-                type_format(&mut error_message, 0, expected_type);
+                type_format(&mut error_message, 0, expected_type.as_ref());
                 error_message.push_str("\nYou might have intended this pattern to belong to a different if. Use parens for the if case results of ifs with multiple cases");
                 errors.push(ErrorNode {
                     range: name_range(with_start_position_as_ref(name)),
@@ -3965,7 +4065,7 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                     "this variant name {} is not included in it's expected type\n",
                     name.value
                 );
-                type_format(&mut error_message, 0, expected_type);
+                type_format(&mut error_message, 0, expected_type.as_ref());
                 errors.push(ErrorNode {
                     range: name_range(with_start_position_as_ref(name)),
                     message: error_message.into_boxed_str(),
@@ -3990,6 +4090,7 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                 introduced_variables,
                 patterns,
                 existing_local_variables,
+                type_aliases,
             );
         }
         SyntaxPattern::Tuple {
@@ -3998,10 +4099,11 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
             parts,
             closed_paren_start: _,
         } => {
-            let Type::Tuple(expected_type_parts) = expected_type else {
+            let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
+            let Type::Tuple(expected_type_parts) = expected_type.as_ref() else {
                 let mut error_message: String =
                     String::from("This pattern matches a tuple but the expected type here is\n");
-                type_format(&mut error_message, 0, expected_type);
+                type_format(&mut error_message, 0, expected_type.as_ref());
                 error_message.push_str(
                     "\nMaybe you intended this pattern to belong to a different if case?",
                 );
@@ -4017,7 +4119,7 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                     parts_len = parts.len(),
                     expected_type_parts_len = expected_type_parts.len()
                 );
-                type_format(&mut error_message, 0, expected_type);
+                type_format(&mut error_message, 0, expected_type.as_ref());
                 error_message.push_str(
                     "\nMaybe you intended this pattern to belong to a different if case?",
                 );
@@ -4035,6 +4137,7 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                     introduced_variables,
                     patterns,
                     existing_local_variables,
+                    type_aliases,
                 );
             }
         }
@@ -4043,10 +4146,11 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
             fields,
             closed_curly_start: _,
         } => {
-            let Type::Record(expected_type_record_fields) = expected_type else {
+            let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
+            let Type::Record(expected_type_record_fields) = expected_type.as_ref() else {
                 let mut error_message: String =
                     String::from("This pattern matches a record but the expected type here is\n");
-                type_format(&mut error_message, 0, expected_type);
+                type_format(&mut error_message, 0, expected_type.as_ref());
                 error_message.push_str(
                     "\nMaybe you intended this pattern to belong to a different if case?",
                 );
@@ -4091,6 +4195,7 @@ Otherwise, you might have intended this pattern to belong to a different if. Use
                     introduced_variables,
                     patterns,
                     existing_local_variables,
+                    type_aliases,
                 );
             }
             if !remaining_expected_type_fields.is_empty() {
@@ -4305,21 +4410,22 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
         }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct TypeBuf<'a> {
-    origin: &'a Type,
-    item: &'a Type,
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct TypeBuf {
+    origin: Type,
+    item: Type,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BufReachPathSegment<'a> {
+#[derive(Clone, PartialEq, Eq)]
+enum BufReachPathSegment {
     InVariantValue,
     InTuplePart(usize),
-    InRecordFieldValue(&'a Name),
+    InRecordFieldValue(Name),
 }
-fn type_reachable_bufs<'a>(
-    type_: &'a Type,
-    path: Vec<BufReachPathSegment<'a>>,
-    insert_reachable_buf: &mut impl FnMut(TypeBuf<'a>, Vec<BufReachPathSegment<'a>>),
+fn type_reachable_bufs(
+    type_: &Type,
+    path: Vec<BufReachPathSegment>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+    insert_reachable_buf: &mut impl FnMut(TypeBuf, Vec<BufReachPathSegment>),
 ) {
     match type_ {
         Type::Variable(_) => {}
@@ -4329,11 +4435,12 @@ fn type_reachable_bufs<'a>(
                 type_reachable_bufs(
                     part,
                     path.iter()
-                        .copied()
+                        .cloned()
                         .chain(std::iter::once(BufReachPathSegment::InTuplePart(
                             part_index,
                         )))
                         .collect(),
+                    type_aliases,
                     insert_reachable_buf,
                 );
             }
@@ -4343,11 +4450,12 @@ fn type_reachable_bufs<'a>(
                 type_reachable_bufs(
                     value,
                     path.iter()
-                        .copied()
+                        .cloned()
                         .chain(std::iter::once(BufReachPathSegment::InRecordFieldValue(
-                            name,
+                            name.clone(),
                         )))
                         .collect(),
+                    type_aliases,
                     insert_reachable_buf,
                 );
             }
@@ -4359,9 +4467,10 @@ fn type_reachable_bufs<'a>(
                 type_reachable_bufs(
                     value,
                     path.iter()
-                        .copied()
+                        .cloned()
                         .chain(std::iter::once(BufReachPathSegment::InVariantValue))
                         .collect(),
+                    type_aliases,
                     insert_reachable_buf,
                 );
             }
@@ -4370,66 +4479,98 @@ fn type_reachable_bufs<'a>(
             if name == type_buf_name
                 && let [origin, item] = arguments.as_slice()
             {
-                insert_reachable_buf(TypeBuf { origin, item }, path);
+                // we should probably de-alias origin and item until recursion
+                insert_reachable_buf(
+                    TypeBuf {
+                        origin: origin.clone(),
+                        item: item.clone(),
+                    },
+                    path,
+                );
             }
         }
         Type::Fn { .. } => {}
+        Type::Alias { name, arguments } => {
+            if let Some(origin_type_alias) = type_aliases.get(name)
+                && let Some(resolved_alias) =
+                    type_construct_resolve_type_alias(origin_type_alias, arguments.iter().cloned())
+            {
+                type_reachable_bufs(&resolved_alias, path, type_aliases, insert_reachable_buf);
+            }
+        }
     }
 }
 /// use in combination with type_reachable_bufs to filter out already passed bufs from the parameters
-fn function_signature_implicit_bufs<'a>(
-    parameters: &'a [Option<Type>],
-    result: Option<&'a Type>,
-) -> std::collections::HashSet<TypeBuf<'a>> {
+fn function_signature_implicit_bufs(
+    parameters: &[Option<Type>],
+    result: Option<&Type>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) -> std::collections::HashSet<TypeBuf> {
     let mut type_bufs = std::collections::HashSet::new();
     for parameter in parameters.iter().flatten() {
-        type_implicit_bufs(parameter, &mut type_bufs);
+        type_implicit_bufs(parameter, type_aliases, &mut type_bufs);
     }
     if let Some(result) = result {
-        type_implicit_bufs(result, &mut type_bufs);
+        type_implicit_bufs(result, type_aliases, &mut type_bufs);
     }
     type_bufs
 }
-fn type_implicit_bufs<'a>(type_: &'a Type, type_bufs: &mut std::collections::HashSet<TypeBuf<'a>>) {
+fn type_implicit_bufs(
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+    type_bufs: &mut std::collections::HashSet<TypeBuf>,
+) {
     match type_ {
         Type::Variable(_) => {}
         Type::Origin(_) => {}
         Type::Tuple(parts) => {
             for part in parts {
-                type_implicit_bufs(part, type_bufs);
+                type_implicit_bufs(part, type_aliases, type_bufs);
             }
         }
         Type::Record(fields) => {
             for TypeField { name: _, value } in fields {
-                type_implicit_bufs(value, type_bufs);
+                type_implicit_bufs(value, type_aliases, type_bufs);
             }
         }
         Type::Choice(variants) => {
             for TypeVariant { name: _, value } in variants {
-                type_implicit_bufs(value, type_bufs);
+                type_implicit_bufs(value, type_aliases, type_bufs);
             }
         }
         Type::CoreConstruct { name, arguments } => {
             if (name == type_slot_name || name == type_span_name)
                 && let [origin, item] = arguments.as_slice()
             {
-                type_bufs.insert(TypeBuf { origin, item });
-                type_implicit_bufs(item, type_bufs);
+                // we should probably de-alias origin and item until recursion
+                type_bufs.insert(TypeBuf {
+                    origin: origin.clone(),
+                    item: item.clone(),
+                });
+                type_implicit_bufs(item, type_aliases, type_bufs);
             } else if name == type_buf_name
                 && let [_, item] = arguments.as_slice()
             {
-                type_implicit_bufs(item, type_bufs);
+                type_implicit_bufs(item, type_aliases, type_bufs);
             } else {
                 for argument in arguments {
-                    type_implicit_bufs(argument, type_bufs);
+                    type_implicit_bufs(argument, type_aliases, type_bufs);
                 }
             }
         }
         Type::Fn { parameters, result } => {
             for parameter in parameters {
-                type_implicit_bufs(parameter, type_bufs);
+                type_implicit_bufs(parameter, type_aliases, type_bufs);
             }
-            type_implicit_bufs(result, type_bufs);
+            type_implicit_bufs(result, type_aliases, type_bufs);
+        }
+        Type::Alias { name, arguments } => {
+            if let Some(origin_type_alias) = type_aliases.get(name)
+                && let Some(resolved_alias) =
+                    type_construct_resolve_type_alias(origin_type_alias, arguments.iter().cloned())
+            {
+                type_implicit_bufs(&resolved_alias, type_aliases, type_bufs);
+            }
         }
     }
 }
@@ -5646,7 +5787,7 @@ fn type_to_zig(output: &mut String, type_: &Type) {
                 output.push(')');
             }
         }
-        Type::CoreConstruct { name, arguments } => {
+        Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
             output.push_str(&name_to_uppercase_zig(name));
             if !arguments.is_empty() {
                 output.push('(');
@@ -5925,32 +6066,33 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
         output.push(' ');
     }
 
-    let implicit_bufs = function_signature_implicit_bufs(parameter_types, Some(result_type));
+    let implicit_bufs =
+        function_signature_implicit_bufs(parameter_types, Some(result_type), type_aliases);
     let mut reachable_bufs = std::collections::HashMap::new();
     for (parameter_index, parameter) in parameter_types.iter().flatten().enumerate() {
-        type_reachable_bufs(parameter, vec![], &mut |buf, path| {
+        type_reachable_bufs(parameter, vec![], type_aliases, &mut |buf, path| {
             reachable_bufs.insert(buf, (parameter_index, path));
         });
     }
     // TODO do not include reachable bufs
     if implicit_bufs.len() == 1
-        && let Some(&implicit_buf) = implicit_bufs.iter().next()
+        && let Some(implicit_buf) = implicit_bufs.iter().next()
     {
         output.push_str("@param {Buf<");
-        type_to_js(output, implicit_buf.origin);
+        type_to_js(output, &implicit_buf.origin);
         output.push_str(", ");
-        type_to_js(output, implicit_buf.item);
+        type_to_js(output, &implicit_buf.item);
         output.push_str(">} ");
         type_buf_js_variable_name(output, implicit_buf);
         output.push('\n');
     } else if implicit_bufs.len() >= 2 {
         output.push_str("@param {{");
-        for &implicit_buf in &implicit_bufs {
+        for implicit_buf in &implicit_bufs {
             type_buf_js_variable_name(output, implicit_buf);
             output.push_str(": Buf<");
-            type_to_js(output, implicit_buf.origin);
+            type_to_js(output, &implicit_buf.origin);
             output.push_str(", ");
-            type_to_js(output, implicit_buf.item);
+            type_to_js(output, &implicit_buf.item);
             output.push_str(">, ");
         }
         output.push_str("}} $implicit_bufs$\n");
@@ -5973,7 +6115,7 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
     output.push('(');
     // TODO do not include reachable bufs
     if implicit_bufs.len() == 1
-        && let Some(&implicit_buf) = implicit_bufs.iter().next()
+        && let Some(implicit_buf) = implicit_bufs.iter().next()
     {
         type_buf_js_variable_name(output, implicit_buf);
         output.push_str(", ");
@@ -6075,7 +6217,7 @@ fn type_to_js(output: &mut String, type_: &Type) {
                 }
             }
         },
-        Type::CoreConstruct { name, arguments } => {
+        Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
             output.push_str(&name_to_uppercase_js(name));
             if let Some((argument0, argument1_up)) = arguments.split_first() {
                 output.push('<');
@@ -6381,19 +6523,26 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 output.push_str(" = ");
                 output.push_str(&name_to_lowercase_js(&name.value));
                 output.push('(');
-                let mut type_variables_to_substitute =
-                    checked_call.argument_type_variable_replacements.clone();
-                type_variables_to_substitute.extend(
-                    project_fn
-                        .type_parameters
-                        .iter()
-                        .cloned()
-                        .zip(type_arguments.iter().flat_map(|type_arguments| {
-                            type_arguments.types.iter().filter_map(|type_argument| {
-                                syntax_type_to_type(type_argument, type_aliases)
-                            })
-                        })),
-                );
+                let type_arguments = type_arguments
+                    .iter()
+                    .flat_map(|type_arguments| {
+                        type_arguments.types.iter().filter_map(|type_argument| {
+                            syntax_type_to_type(type_argument, type_aliases)
+                        })
+                    })
+                    .collect::<Vec<Type>>();
+                let type_variables_to_substitute = checked_call
+                    .argument_type_variable_replacements
+                    .iter()
+                    .map(|(var, replacement)| (var.clone(), replacement.clone()))
+                    .chain(
+                        project_fn
+                            .type_parameters
+                            .iter()
+                            .cloned()
+                            .zip(type_arguments),
+                    )
+                    .collect::<std::collections::BTreeMap<Name, Type>>();
                 let parameters = project_fn
                     .parameter_types
                     .iter()
@@ -6411,22 +6560,23 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 if let Some(result) = &mut result {
                     type_replace_variables(&type_variables_to_substitute, result);
                 }
-                let implicit_bufs = function_signature_implicit_bufs(&parameters, result.as_ref());
+                let implicit_bufs =
+                    function_signature_implicit_bufs(&parameters, result.as_ref(), type_aliases);
                 let mut reachable_bufs = std::collections::HashMap::new();
                 for (parameter_index, parameter) in parameters.iter().flatten().enumerate() {
-                    type_reachable_bufs(parameter, vec![], &mut |buf, path| {
+                    type_reachable_bufs(parameter, vec![], type_aliases, &mut |buf, path| {
                         reachable_bufs.insert(buf, (parameter_index, path));
                     });
                 }
                 // TODO do not include reachable bufs
                 if implicit_bufs.len() == 1
-                    && let Some(&implicit_buf) = implicit_bufs.iter().next()
+                    && let Some(implicit_buf) = implicit_bufs.iter().next()
                 {
                     type_buf_js_variable_name(output, implicit_buf);
                     output.push_str(", ");
                 } else if implicit_bufs.len() >= 2 {
                     output.push('{');
-                    for implicit_buf in implicit_bufs {
+                    for implicit_buf in &implicit_bufs {
                         type_buf_js_variable_name(output, implicit_buf);
                         output.push_str(", ");
                     }
@@ -6846,11 +6996,11 @@ fn origin_name_to_uppercase_js(output: &mut String, name: &str) {
     output.push_str(&sanitized);
     output.push_str("$origin");
 }
-fn type_buf_js_variable_name(output: &mut String, type_buf: TypeBuf) {
+fn type_buf_js_variable_name(output: &mut String, type_buf: &TypeBuf) {
     output.push_str("$buf$");
-    type_js_variable_name_segment(output, type_buf.origin);
+    type_js_variable_name_segment(output, &type_buf.origin);
     output.push_str("$item$");
-    type_js_variable_name_segment(output, type_buf.item);
+    type_js_variable_name_segment(output, &type_buf.item);
 }
 fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
     match type_ {
@@ -6896,6 +7046,16 @@ fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
                 type_js_variable_name_segment(output, argument);
             }
             output.push_str("$construct_end");
+        }
+        Type::Alias { name, arguments } => {
+            // should only run for recursive type aliases at this point
+            output.push_str("alias_");
+            output.push_str(&name_to_lowercase_js_variable_segment(name));
+            for argument in arguments {
+                output.push_str("$_");
+                type_js_variable_name_segment(output, argument);
+            }
+            output.push_str("$alias_end");
         }
         Type::Fn { parameters, result } => {
             output.push_str("fn");
@@ -7284,8 +7444,8 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
             let mut type_variable_replacements = project_fn_info
                 .type_parameters
                 .iter()
+                .cloned()
                 .zip(type_arguments)
-                .map(|(type_parameter, type_argument)| (type_parameter.clone(), type_argument))
                 .collect();
             let maybe_first_argument = first_argument_dot
                 .as_ref()
@@ -7324,12 +7484,13 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         &mut type_variable_replacements,
                         &expected_argument_type,
                         &checked_argument_type,
+                        type_aliases,
                     );
                 }
                 type_replace_variables(&type_variable_replacements, expected_argument_type);
                 type_replace_variables(&type_variable_replacements, &mut result_type);
                 if let Some(argument_variable_input_type_diff) =
-                    type_diff(expected_argument_type, &checked_argument_type)
+                    type_diff(expected_argument_type, &checked_argument_type, type_aliases)
                 {
                     place_expression_type_diff_errors(
                         errors,
@@ -7350,7 +7511,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
             Some(result_type)
         }
         SyntaxExpression::Variant {
-            open_bracket_start: tick_start,
+            open_bracket_start,
             name,
             type_: other_variants_type,
             value,
@@ -7358,15 +7519,15 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
         } => {
             let Some(name) = name else {
                 errors.push(ErrorNode {
-                    range: symbol_range(*tick_start, "'"),
-                    message: Box::from("missing variant name after this single quote '..here.. . An example of a variant is 'yes{'no .} \"hi c:\" str"),
+                    range: symbol_range(*open_bracket_start, "["),
+                    message: Box::from("missing variant name after this opening brackt [..here..] . An example of a variant is [yes<[no *]> \"hi c:\" str]"),
                 });
                 return None;
             };
             let Some(syntax_type_argument) = other_variants_type else {
                 errors.push(ErrorNode {
                     range: name_range(with_start_position_as_ref(name)),
-                    message: Box::from("missing type of the remaining variants in curly braces after this variant name. Examples of valid variants are 'yes{'no .} \"hi c:\" str and 'yes{Opt str} \"c:\" str.
+                    message: Box::from("missing type of the remaining variants in curly braces after this variant name. Examples of valid variants are [yes<[no *]> \"hi c:\" str] and [yes<[opt(str)]> \"c:\" str].
 If there should only ever by one variant, using a record with a single field is recommended over a single variant choice."),
                 });
                 return None;
@@ -7374,7 +7535,7 @@ If there should only ever by one variant, using a record with a single field is 
             let Some(syntax_type) = &syntax_type_argument.type_ else {
                 errors.push(ErrorNode {
                     range: symbol_range(syntax_type_argument.open_angle_start, "<"),
-                    message: Box::from("missing type argument in angle brackets. Examples of valid variants are [yes<[no *]> \"hi c:\" str] and [yes<opt(str)> \"c:\" str]"),
+                    message: Box::from("missing type argument in angle brackets. Examples of valid variants are [yes<[no *]> \"hi c:\" str] and [yes<[opt(str)]> \"c:\" str]"),
                 });
                 return None;
             };
@@ -7415,12 +7576,14 @@ If there should only ever by one variant, using a record with a single field is 
             ) else {
                 return None;
             };
-            let Type::Choice(origin_choice_type) = &checked_type else {
+            let checked_type_dealiased =
+                type_alias_resolve_to_non_alias(&checked_type, type_aliases);
+            let Type::Choice(origin_choice_type) = checked_type_dealiased.as_ref() else {
                 let mut error_message: String = String::from(
-                    "this variant type should be a choice (for example 'a u32 'b str  or  Opt u32) but it's\n",
+                    "this variant type should be a choice (for example [a u32  b str]  or  opt(u32)) but it's\n",
                 );
-                type_format(&mut error_message, 0, &checked_type);
-                error_message.push_str("\nMaybe you forgot to wrap it in a type like Opt?");
+                type_format(&mut error_message, 0, checked_type_dealiased.as_ref());
+                error_message.push_str("\nMaybe you forgot to wrap it in a type like opt?");
                 errors.push(ErrorNode {
                     range: angled_type_argument_range(syntax_type_argument),
                     message: error_message.into_boxed_str(),
@@ -7436,7 +7599,7 @@ If there should only ever by one variant, using a record with a single field is 
             }) {
                 Some(expected_value_type) => {
                     if let Some(variant_value_type_diff) =
-                        type_diff(expected_value_type, &checked_value_type)
+                        type_diff(expected_value_type, &checked_value_type, type_aliases)
                     {
                         place_expression_type_diff_errors(
                             errors,
@@ -7695,10 +7858,12 @@ If there should only ever by one variant, using a record with a single field is 
                 &mut pattern_introduced_variables,
                 patterns,
                 local_variables,
+                type_aliases,
             );
             let mut remaining_specific_pattern_catch_possibilities = Vec::new();
             type_to_possible_specific_pattern_catches(
                 &checked_queried_type,
+                type_aliases,
                 &mut remaining_specific_pattern_catch_possibilities,
             );
             specific_pattern_catches_remove_those_matched_by_pattern(
@@ -7826,10 +7991,12 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 &mut case0_pattern_introduced_variables,
                 patterns,
                 local_variables,
+                type_aliases,
             );
             let mut remaining_specific_pattern_catch_possibilities = Vec::new();
             type_to_possible_specific_pattern_catches(
                 &checked_queried_type,
+                type_aliases,
                 &mut remaining_specific_pattern_catch_possibilities,
             );
             specific_pattern_catches_remove_those_matched_by_pattern(
@@ -7890,6 +8057,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     &mut case_pattern_introduced_variables,
                     patterns,
                     local_variables,
+                    type_aliases,
                 );
                 let remaining_specific_pattern_catch_possibilities_count_before_case =
                     remaining_specific_pattern_catch_possibilities.len();
@@ -7991,9 +8159,11 @@ If you do not need to use this variable in that case, use any of the -rid functi
                         }
                     }
                 }
-                if let Some(match_result_case_result_type_diff) =
-                    type_diff(&checked_query_result_type, &checked_case_result_type)
-                {
+                if let Some(match_result_case_result_type_diff) = type_diff(
+                    &checked_query_result_type,
+                    &checked_case_result_type,
+                    type_aliases,
+                ) {
                     place_expression_type_diff_errors(
                         errors,
                         case_result,
@@ -8192,43 +8362,45 @@ pub fn syntax_pattern_type_variables_into<'a, Patterns>(
 
 /// Fully validated type
 #[derive(Clone, Debug)]
-enum TypeDiff<'a> {
+enum TypeDiff {
     /// None means no difference
     Conflict {
-        expected: &'a Type,
-        actual: &'a Type,
+        expected: Type,
+        actual: Type,
     },
-    CoreConstruct {
-        name: &'a Name,
-        arguments: Vec<Option<TypeDiff<'a>>>,
+    // should maybe be spit up
+    CoreConstructOrAlias {
+        name: Name,
+        arguments: Vec<Option<TypeDiff>>,
     },
-    Tuple(Vec<Option<TypeDiff<'a>>>),
+    Tuple(Vec<Option<TypeDiff>>),
     Record {
-        fields: Vec<TypeDiffField<'a>>,
-        actual_missing_fields: Vec<&'a Name>,
-        actual_extraneous_fields: Vec<&'a Name>,
+        fields: Vec<TypeDiffField>,
+        actual_missing_fields: Vec<Name>,
+        actual_extraneous_fields: Vec<Name>,
     },
-    Choice(Vec<TypeDiffVariant<'a>>),
+    Choice(Vec<TypeDiffVariant>),
     Fn {
-        parameters: Vec<Option<TypeDiff<'a>>>,
-        result: Option<Box<TypeDiff<'a>>>,
+        parameters: Vec<Option<TypeDiff>>,
+        result: Option<Box<TypeDiff>>,
     },
 }
 #[derive(Clone, Debug)]
-struct TypeDiffField<'a> {
-    name: &'a Name,
-    value: Option<TypeDiff<'a>>,
+struct TypeDiffField {
+    name: Name,
+    value: Option<TypeDiff>,
 }
 #[derive(Clone, Debug)]
-struct TypeDiffVariant<'a> {
-    name: &'a Name,
-    value: Option<TypeDiff<'a>>,
+struct TypeDiffVariant {
+    name: Name,
+    value: Option<TypeDiff>,
 }
 
 fn type_collect_variables_that_are_concrete_into(
     type_parameter_replacements: &mut std::collections::BTreeMap<Name, Type>,
     type_with_variables: &Type,
     concrete_type: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     match type_with_variables {
         Type::Origin(_) => {}
@@ -8241,158 +8413,212 @@ fn type_collect_variables_that_are_concrete_into(
                 .or_insert_with(|| concrete_type.clone());
         }
         Type::CoreConstruct { name, arguments } => {
-            if let Type::CoreConstruct {
-                name: concrete_choice_type_construct_name,
-                arguments: concrete_choice_type_construct_arguments,
-            } = concrete_type
-                && name == concrete_choice_type_construct_name
-            {
-                for (argument_type, concrete_argument_type) in arguments
-                    .iter()
-                    .zip(concrete_choice_type_construct_arguments.iter())
-                {
-                    type_collect_variables_that_are_concrete_into(
-                        type_parameter_replacements,
-                        argument_type,
-                        concrete_argument_type,
-                    );
+            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
+                Type::CoreConstruct {
+                    name: concrete_choice_type_construct_name,
+                    arguments: concrete_choice_type_construct_arguments,
+                } if name == concrete_choice_type_construct_name => {
+                    for (argument_type, concrete_argument_type) in arguments
+                        .iter()
+                        .zip(concrete_choice_type_construct_arguments.iter())
+                    {
+                        type_collect_variables_that_are_concrete_into(
+                            type_parameter_replacements,
+                            argument_type,
+                            concrete_argument_type,
+                            type_aliases,
+                        );
+                    }
                 }
+                _ => {}
             }
         }
         Type::Fn { parameters, result } => {
-            if let Type::Fn {
-                parameters: concrete_parameters,
-                result: concrete_result,
-            } = concrete_type
-            {
-                for (argument_type, concrete_argument_type) in
-                    parameters.iter().zip(concrete_parameters)
-                {
+            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
+                Type::Fn {
+                    parameters: concrete_parameters,
+                    result: concrete_result,
+                } => {
+                    for (argument_type, concrete_argument_type) in
+                        parameters.iter().zip(concrete_parameters)
+                    {
+                        type_collect_variables_that_are_concrete_into(
+                            type_parameter_replacements,
+                            argument_type,
+                            concrete_argument_type,
+                            type_aliases,
+                        );
+                    }
                     type_collect_variables_that_are_concrete_into(
                         type_parameter_replacements,
-                        argument_type,
-                        concrete_argument_type,
+                        result,
+                        concrete_result,
+                        type_aliases,
                     );
                 }
-                type_collect_variables_that_are_concrete_into(
-                    type_parameter_replacements,
-                    result,
-                    concrete_result,
-                );
+                _ => {}
             }
         }
         Type::Tuple(parts) => {
-            if let Type::Tuple(concrete_parts) = concrete_type {
-                for (part, matching_concrete_part) in parts.iter().zip(concrete_parts) {
-                    type_collect_variables_that_are_concrete_into(
-                        type_parameter_replacements,
-                        part,
-                        matching_concrete_part,
-                    );
+            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
+                Type::Tuple(concrete_parts) => {
+                    for (part, matching_concrete_part) in parts.iter().zip(concrete_parts) {
+                        type_collect_variables_that_are_concrete_into(
+                            type_parameter_replacements,
+                            part,
+                            matching_concrete_part,
+                            type_aliases,
+                        );
+                    }
                 }
+                _ => {}
             }
         }
         Type::Record(fields) => {
-            if let Type::Record(concrete_fields) = concrete_type {
-                for field in fields {
-                    if let Some(matching_concrete_field) = concrete_fields
-                        .iter()
-                        .find(|concrete_field| concrete_field.name == field.name)
-                    {
-                        type_collect_variables_that_are_concrete_into(
-                            type_parameter_replacements,
-                            &field.value,
-                            &matching_concrete_field.value,
-                        );
+            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
+                Type::Record(concrete_fields) => {
+                    for field in fields {
+                        if let Some(matching_concrete_field) = concrete_fields
+                            .iter()
+                            .find(|concrete_field| concrete_field.name == field.name)
+                        {
+                            type_collect_variables_that_are_concrete_into(
+                                type_parameter_replacements,
+                                &field.value,
+                                &matching_concrete_field.value,
+                                type_aliases,
+                            );
+                        }
                     }
                 }
+                _ => {}
             }
         }
         Type::Choice(variants) => {
-            if let Type::Choice(concrete_variants) = concrete_type {
-                for variant in variants {
-                    if let Some(matching_concrete_variant) = concrete_variants
-                        .iter()
-                        .find(|concrete_variant| concrete_variant.name == variant.name)
-                    {
-                        type_collect_variables_that_are_concrete_into(
-                            type_parameter_replacements,
-                            &variant.value,
-                            &matching_concrete_variant.value,
-                        );
+            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
+                Type::Choice(concrete_variants) => {
+                    for variant in variants {
+                        if let Some(matching_concrete_variant) = concrete_variants
+                            .iter()
+                            .find(|concrete_variant| concrete_variant.name == variant.name)
+                        {
+                            type_collect_variables_that_are_concrete_into(
+                                type_parameter_replacements,
+                                &variant.value,
+                                &matching_concrete_variant.value,
+                                type_aliases,
+                            );
+                        }
                     }
                 }
+                _ => {}
             }
         }
+        Type::Alias { name, arguments } => match concrete_type {
+            Type::Alias {
+                name: concrete_name,
+                arguments: concrete_arguments,
+            } if name == concrete_name => {
+                for (argument, concrete_argument) in arguments.iter().zip(concrete_arguments.iter())
+                {
+                    type_collect_variables_that_are_concrete_into(
+                        type_parameter_replacements,
+                        argument,
+                        concrete_argument,
+                        type_aliases,
+                    );
+                }
+            }
+            _ => {
+                if let Some(origin_type_alias) = type_aliases.get(name)
+                    && let Some(resolved_alias) = type_construct_resolve_type_alias(
+                        origin_type_alias,
+                        arguments.iter().cloned(),
+                    )
+                {
+                    type_collect_variables_that_are_concrete_into(
+                        type_parameter_replacements,
+                        &resolved_alias,
+                        concrete_type,
+                        type_aliases,
+                    );
+                }
+            }
+        },
     }
 }
 
-/// None means the types are equal
-fn type_diff<'a>(expected_type: &'a Type, actual_type: &'a Type) -> Option<TypeDiff<'a>> {
+/// None means the types are equal. Some(_) means there is a difference somewhere
+fn type_diff(
+    expected_type: &Type,
+    actual_type: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) -> Option<TypeDiff> {
     match expected_type {
         Type::Variable(expected_variable) => {
-            if let Type::Variable(actual_variable) = actual_type
-                && expected_variable == actual_variable
-            {
-                None
-            } else {
-                Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
-                })
+            match type_alias_resolve_to_non_alias(actual_type, type_aliases).as_ref() {
+                Type::Variable(actual_variable) if expected_variable == actual_variable => None,
+                _ => Some(TypeDiff::Conflict {
+                    expected: expected_type.clone(),
+                    actual: actual_type.clone(),
+                }),
+            }
+        }
+        Type::Origin(expected_name) => {
+            match type_alias_resolve_to_non_alias(actual_type, type_aliases).as_ref() {
+                Type::Origin(actual_name) if expected_name == actual_name => None,
+                _ => Some(TypeDiff::Conflict {
+                    expected: expected_type.clone(),
+                    actual: actual_type.clone(),
+                }),
             }
         }
         Type::CoreConstruct {
             name: expected_name,
             arguments: expected_arguments,
-        } => {
-            if let Type::CoreConstruct {
+        } => match type_alias_resolve_to_non_alias(actual_type, type_aliases).as_ref() {
+            Type::CoreConstruct {
                 name: actual_choice_type_construct_name,
                 arguments: actual_choice_type_construct_arguments,
-            } = actual_type
-                && expected_name == actual_choice_type_construct_name
-            {
+            } if expected_name == actual_choice_type_construct_name => {
                 if expected_arguments
                     .iter()
                     .zip(actual_choice_type_construct_arguments.iter())
                     .all(|(expected_argument, actual_argument)| {
-                        type_diff(expected_argument, actual_argument).is_none()
+                        type_diff(expected_argument, actual_argument, type_aliases).is_none()
                     })
                 {
                     return None;
                 }
-                Some(TypeDiff::CoreConstruct {
-                    name: expected_name,
+                Some(TypeDiff::CoreConstructOrAlias {
+                    name: expected_name.clone(),
                     arguments: expected_arguments
                         .iter()
                         .zip(actual_choice_type_construct_arguments.iter())
                         .map(|(expected_argument, actual_argument)| {
-                            type_diff(expected_argument, actual_argument)
+                            type_diff(expected_argument, actual_argument, type_aliases)
                         })
                         .collect(),
                 })
-            } else {
-                Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
-                })
             }
-        }
+            _ => Some(TypeDiff::Conflict {
+                expected: expected_type.clone(),
+                actual: actual_type.clone(),
+            }),
+        },
         Type::Fn {
             parameters: expected_parameters,
             result: expected_result,
-        } => {
-            if let Type::Fn {
+        } => match type_alias_resolve_to_non_alias(actual_type, type_aliases).as_ref() {
+            Type::Fn {
                 parameters: actual_parameters,
                 result: actual_result,
-            } = actual_type
-            {
-                let result_type_diff = type_diff(expected_result, actual_result);
+            } => {
+                let result_type_diff = type_diff(expected_result, actual_result, type_aliases);
                 if result_type_diff.is_none()
-                    && expected_parameters
-                        .iter()
-                        .zip(actual_parameters)
-                        .all(|(expected, actual)| type_diff(expected, actual).is_none())
+                    && expected_parameters.iter().zip(actual_parameters).all(
+                        |(expected, actual)| type_diff(expected, actual, type_aliases).is_none(),
+                    )
                 {
                     return None;
                 }
@@ -8400,151 +8626,208 @@ fn type_diff<'a>(expected_type: &'a Type, actual_type: &'a Type) -> Option<TypeD
                     parameters: expected_parameters
                         .iter()
                         .zip(actual_parameters.iter())
-                        .map(|(expected, actual)| type_diff(expected, actual))
+                        .map(|(expected, actual)| type_diff(expected, actual, type_aliases))
                         .collect(),
-                    result: type_diff(expected_result, actual_result).map(Box::new),
-                })
-            } else {
-                Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
+                    result: type_diff(expected_result, actual_result, type_aliases).map(Box::new),
                 })
             }
-        }
-        Type::Origin(expected_name) => {
-            if let Type::Origin(actual_name) = actual_type
-                && expected_name == actual_name
-            {
-                None
-            } else {
-                Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
-                })
-            }
-        }
+            _ => Some(TypeDiff::Conflict {
+                expected: expected_type.clone(),
+                actual: actual_type.clone(),
+            }),
+        },
         Type::Tuple(expected_parts) => {
-            let Type::Tuple(actual_parts) = actual_type else {
-                return Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
-                });
-            };
-            if expected_parts.len() != actual_parts.len() {
-                return Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
-                });
+            match type_alias_resolve_to_non_alias(actual_type, type_aliases).as_ref() {
+                Type::Tuple(actual_parts) if expected_parts.len() == actual_parts.len() => {
+                    if expected_parts
+                        .iter()
+                        .zip(actual_parts)
+                        .all(|(expected, actual)| {
+                            type_diff(expected, actual, type_aliases).is_none()
+                        })
+                    {
+                        None
+                    } else {
+                        Some(TypeDiff::Tuple(
+                            expected_parts
+                                .iter()
+                                .zip(actual_parts)
+                                .map(|(expected, actual)| type_diff(expected, actual, type_aliases))
+                                .collect(),
+                        ))
+                    }
+                }
+                _ => {
+                    return Some(TypeDiff::Conflict {
+                        expected: expected_type.clone(),
+                        actual: actual_type.clone(),
+                    });
+                }
             }
-            Some(TypeDiff::Tuple(
-                expected_parts
-                    .iter()
-                    .zip(actual_parts)
-                    .map(|(expected, actual)| type_diff(expected, actual))
-                    .collect(),
-            ))
         }
         Type::Record(expected_fields) => {
-            if let Type::Record(actual_fields) = actual_type {
-                // all these filter(find) operations are quadratic.
-                // should be fine since records usually do not contain many fields
-                if expected_fields.len() == actual_fields.len()
-                    && expected_fields.iter().all(|expected_field| {
-                        actual_fields
-                            .iter()
-                            .find(|actual_field| actual_field.name == expected_field.name)
-                            .is_some_and(|actual_field| {
-                                type_diff(&expected_field.value, &actual_field.value).is_none()
-                            })
-                    })
-                {
-                    return None;
-                }
-                Some(TypeDiff::Record {
-                    actual_missing_fields: expected_fields
-                        .iter()
-                        .filter(|expected_field| {
-                            !actual_fields
-                                .iter()
-                                .any(|actual_field| actual_field.name == expected_field.name)
-                        })
-                        .map(|expected_field| &expected_field.name)
-                        .collect(),
-                    actual_extraneous_fields: actual_fields
-                        .iter()
-                        .filter(|expected_field| {
-                            !expected_fields
-                                .iter()
-                                .any(|actual_field| actual_field.name == expected_field.name)
-                        })
-                        .map(|actual_field| &actual_field.name)
-                        .collect(),
-                    fields: expected_fields
-                        .iter()
-                        .filter_map(|expected_field| {
+            match type_alias_resolve_to_non_alias(actual_type, type_aliases).as_ref() {
+                Type::Record(actual_fields) => {
+                    // all these filter(find) operations are quadratic.
+                    // should be fine since records usually do not contain many fields
+                    if expected_fields.len() == actual_fields.len()
+                        && expected_fields.iter().all(|expected_field| {
                             actual_fields
                                 .iter()
                                 .find(|actual_field| actual_field.name == expected_field.name)
-                                .map(|actual_field| (expected_field, &actual_field.value))
+                                .is_some_and(|actual_field| {
+                                    type_diff(
+                                        &expected_field.value,
+                                        &actual_field.value,
+                                        type_aliases,
+                                    )
+                                    .is_none()
+                                })
                         })
-                        .map(|(expected_field, actual_field_value)| TypeDiffField {
-                            name: &expected_field.name,
-                            value: type_diff(&expected_field.value, actual_field_value),
-                        })
-                        .collect(),
-                })
-            } else {
-                Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
-                })
+                    {
+                        return None;
+                    }
+                    Some(TypeDiff::Record {
+                        actual_missing_fields: expected_fields
+                            .iter()
+                            .filter(|expected_field| {
+                                !actual_fields
+                                    .iter()
+                                    .any(|actual_field| actual_field.name == expected_field.name)
+                            })
+                            .map(|expected_field| expected_field.name.clone())
+                            .collect(),
+                        actual_extraneous_fields: actual_fields
+                            .iter()
+                            .filter(|expected_field| {
+                                !expected_fields
+                                    .iter()
+                                    .any(|actual_field| actual_field.name == expected_field.name)
+                            })
+                            .map(|actual_field| actual_field.name.clone())
+                            .collect(),
+                        fields: expected_fields
+                            .iter()
+                            .filter_map(|expected_field| {
+                                actual_fields
+                                    .iter()
+                                    .find(|actual_field| actual_field.name == expected_field.name)
+                                    .map(|actual_field| (expected_field, &actual_field.value))
+                            })
+                            .map(|(expected_field, actual_field_value)| TypeDiffField {
+                                name: expected_field.name.clone(),
+                                value: type_diff(
+                                    &expected_field.value,
+                                    actual_field_value,
+                                    type_aliases,
+                                ),
+                            })
+                            .collect(),
+                    })
+                }
+                _ => Some(TypeDiff::Conflict {
+                    expected: expected_type.clone(),
+                    actual: actual_type.clone(),
+                }),
             }
         }
         Type::Choice(expected_variants) => {
-            if let Type::Choice(actual_variants) = actual_type
-                && expected_variants.len() == actual_variants.len()
-                && expected_variants.iter().all(|expected_variant| {
-                    actual_variants
-                        .iter()
-                        .any(|actual_variant| actual_variant.name == expected_variant.name)
-                })
-            {
-                if expected_variants
-                    .iter()
-                    .filter_map(|expected_variant| {
-                        actual_variants
-                            .iter()
-                            .find(|actual_variant| actual_variant.name == expected_variant.name)
-                            .map(|actual_variant| (&expected_variant.value, &actual_variant.value))
-                    })
-                    .all(|(expected_variant_value, actual_variant_value)| {
-                        type_diff(expected_variant_value, actual_variant_value).is_none()
-                    })
+            match type_alias_resolve_to_non_alias(actual_type, type_aliases).as_ref() {
+                Type::Choice(actual_variants)
+                    if expected_variants.len() == actual_variants.len()
+                        && expected_variants.iter().all(|expected_variant| {
+                            actual_variants
+                                .iter()
+                                .any(|actual_variant| actual_variant.name == expected_variant.name)
+                        }) =>
                 {
-                    return None;
-                }
-                Some(TypeDiff::Choice(
-                    expected_variants
+                    if expected_variants
                         .iter()
                         .filter_map(|expected_variant| {
                             actual_variants
                                 .iter()
                                 .find(|actual_variant| actual_variant.name == expected_variant.name)
-                                .map(|actual_variant| (expected_variant, &actual_variant.value))
+                                .map(|actual_variant| {
+                                    (&expected_variant.value, &actual_variant.value)
+                                })
                         })
-                        .map(|(expected_variant, actual_variant_value)| TypeDiffVariant {
-                            name: &expected_variant.name,
-                            value: type_diff(&expected_variant.value, actual_variant_value),
+                        .all(|(expected_variant_value, actual_variant_value)| {
+                            type_diff(expected_variant_value, actual_variant_value, type_aliases)
+                                .is_none()
                         })
-                        .collect(),
-                ))
-            } else {
-                Some(TypeDiff::Conflict {
-                    expected: expected_type,
-                    actual: actual_type,
-                })
+                    {
+                        return None;
+                    }
+                    Some(TypeDiff::Choice(
+                        expected_variants
+                            .iter()
+                            .filter_map(|expected_variant| {
+                                actual_variants
+                                    .iter()
+                                    .find(|actual_variant| {
+                                        actual_variant.name == expected_variant.name
+                                    })
+                                    .map(|actual_variant| (expected_variant, &actual_variant.value))
+                            })
+                            .map(|(expected_variant, actual_variant_value)| TypeDiffVariant {
+                                name: expected_variant.name.clone(),
+                                value: type_diff(
+                                    &expected_variant.value,
+                                    actual_variant_value,
+                                    type_aliases,
+                                ),
+                            })
+                            .collect(),
+                    ))
+                }
+                _ => Some(TypeDiff::Conflict {
+                    expected: expected_type.clone(),
+                    actual: actual_type.clone(),
+                }),
             }
         }
+        Type::Alias {
+            name: expected_name,
+            arguments: expected_arguments,
+        } => match actual_type {
+            Type::Alias {
+                name: actual_name,
+                arguments: actual_arguments,
+            } if expected_name == actual_name => {
+                if expected_arguments.iter().zip(actual_arguments.iter()).all(
+                    |(expected_argument, actual_argument)| {
+                        type_diff(expected_argument, actual_argument, type_aliases).is_none()
+                    },
+                ) {
+                    return None;
+                }
+                Some(TypeDiff::CoreConstructOrAlias {
+                    name: expected_name.clone(),
+                    arguments: expected_arguments
+                        .iter()
+                        .zip(actual_arguments.iter())
+                        .map(|(expected_argument, actual_argument)| {
+                            type_diff(expected_argument, actual_argument, type_aliases)
+                        })
+                        .collect(),
+                })
+            }
+            _ => {
+                if let Some(expected_origin_type_alias) = type_aliases.get(expected_name)
+                    && let Some(expected_resolved_alias) = type_construct_resolve_type_alias(
+                        expected_origin_type_alias,
+                        expected_arguments.iter().cloned(),
+                    )
+                {
+                    type_diff(&expected_resolved_alias, actual_type, type_aliases)
+                } else {
+                    Some(TypeDiff::Conflict {
+                        expected: expected_type.clone(),
+                        actual: actual_type.clone(),
+                    })
+                }
+            }
+        },
     }
 }
 fn type_diff_error_message(type_diff: &TypeDiff) -> String {
@@ -8571,7 +8854,7 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
             );
             type_format(formatted, next_indent(indent), actual);
         }
-        TypeDiff::CoreConstruct { name, arguments } => {
+        TypeDiff::CoreConstructOrAlias { name, arguments } => {
             formatted.push_str(name);
             if let Some((argument0, argument1_up)) = arguments.split_first() {
                 formatted.push('(');
@@ -8699,8 +8982,7 @@ fn option_type_diff_format(formatted: &mut String, indent: usize, type_diff: Opt
     }
 }
 fn type_diff_field_format(formatted: &mut String, indent: usize, type_diff_field: &TypeDiffField) {
-    formatted.push('.');
-    formatted.push_str(type_diff_field.name);
+    formatted.push_str(&type_diff_field.name);
     space_or_linebreak_indented_into(
         formatted,
         option_type_diff_line_span(type_diff_field.value.as_ref()),
@@ -8717,8 +8999,7 @@ fn type_diff_variant_format(
     indent: usize,
     type_diff_variant: &TypeDiffVariant,
 ) {
-    formatted.push('\'');
-    formatted.push_str(type_diff_variant.name);
+    formatted.push_str(&type_diff_variant.name);
     space_or_linebreak_indented_into(
         formatted,
         option_type_diff_line_span(type_diff_variant.value.as_ref()),
@@ -8761,7 +9042,7 @@ fn option_type_diff_length_estimate(type_diff: Option<&TypeDiff>) -> usize {
 fn type_diff_length_estimate(type_diff: &TypeDiff) -> usize {
     match type_diff {
         TypeDiff::Conflict { .. } => type_info_line_length_estimate_maximum + 1,
-        TypeDiff::CoreConstruct { name, arguments } => {
+        TypeDiff::CoreConstructOrAlias { name, arguments } => {
             1 + name.len()
                 + arguments
                     .iter()
@@ -9276,24 +9557,15 @@ const type_str: Type = Type::CoreConstruct {
 };
 
 fn type_opt(yes: Type) -> Type {
-    type_choice([("no", type_empty), ("yes", yes)])
+    Type::Alias {
+        name: Name::from_static("opt"),
+        arguments: vec![yes],
+    }
 }
-fn type_order() -> Type {
-    Type::Choice(vec![
-        TypeVariant {
-            name: Name::from_static("less"),
-            value: type_empty,
-        },
-        TypeVariant {
-            name: Name::from_static("equal"),
-            value: type_empty,
-        },
-        TypeVariant {
-            name: Name::from_static("greater"),
-            value: type_empty,
-        },
-    ])
-}
+const type_order: Type = Type::Alias {
+    name: Name::from_static("opt"),
+    arguments: vec![],
+};
 fn type_fn(in_: Vec<Type>, out: Type) -> Type {
     Type::Fn {
         parameters: in_,
@@ -9363,7 +9635,7 @@ pub static core_fns: std::sync::LazyLock<std::collections::HashMap<Name, Checked
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_p32, type_p32],
-                result: type_order(),
+                result: type_order,
             },
             CoreFnInfo {
                 name: "u32-to-p32",
@@ -9436,7 +9708,7 @@ or performance is critical.",
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_u32, type_u32],
-                result: type_order(),
+                result: type_order,
             },
             CoreFnInfo {
                 name: "i32-to-u32",
@@ -9493,7 +9765,7 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_i32, type_i32],
-                result: type_order(),
+                result: type_order,
             },
             CoreFnInfo {
                 name: "f32-pi",
@@ -9734,7 +10006,7 @@ fn Age . : f32 =
                 documentation: "Compare left to right. For example 'less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_f32, type_f32],
-                result: type_order(),
+                result: type_order,
             },
             CoreFnInfo {
                 name: "char-to-u32",
@@ -10236,7 +10508,7 @@ Do no rely on a specific order of when items are compared."#,
                     type_span(type_variable("Origin"), type_variable("Item")),
                     type_fn(
                         vec![type_variable("Item"), type_variable("Item")],
-                        type_order()
+                        type_order
                     )
                 ],
                 result: type_empty,
@@ -10253,7 +10525,7 @@ Do no rely on a specific order of when items are compared."#,
                     type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
                     type_fn(
                         vec![type_variable("Item"), type_variable("Item")],
-                        type_order()
+                        type_order
                     )
                 ],
                 result: type_empty,
@@ -10789,7 +11061,11 @@ fn u32-max(a u32 b u32) u32
 ```",
                 )),
                 parameters: vec![],
-                type_: Some(type_order()),
+                type_: Some(type_choice([
+                    ("less" ,type_empty),
+                    ("equal" ,type_empty),
+                    ("greater" ,type_empty),
+                ])),
             },
         ),
         (
@@ -10799,8 +11075,8 @@ fn u32-max(a u32 b u32) u32
                 documentation: Some(Box::from(
                     "Either you have some value (yes) or you have nothing (no).",
                 )),
-                parameters: vec![Name::from_static("yes")],
-                type_: Some(type_opt(type_variable("yes"))),
+                parameters: vec![Name::from_static("Yes")],
+                type_: Some(type_choice([("no", type_empty), ("yes", type_variable("Yes"))])),
             },
         ),
         (
@@ -10893,6 +11169,11 @@ pub static core_records: std::sync::LazyLock<std::collections::HashSet<&'static 
                         type_records(parameter, records);
                     }
                 }
+                Type::Alias { name: _, arguments } => {
+                    for argument in arguments {
+                        type_records(argument, records);
+                    }
+                }
             }
         }
         let mut records = std::collections::HashSet::new();
@@ -10941,6 +11222,11 @@ pub static core_choices: std::sync::LazyLock<std::collections::HashSet<&'static 
                     type_choices(result, choices);
                     for parameter in parameters {
                         type_choices(parameter, choices);
+                    }
+                }
+                Type::Alias { name: _, arguments } => {
+                    for argument in arguments {
+                        type_choices(argument, choices);
                     }
                 }
             }
@@ -14475,7 +14761,7 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
             formatted.push('^');
             formatted.push_str(name);
         }
-        Type::CoreConstruct { name, arguments } => {
+        Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
             formatted.push_str(name);
             if let Some((argument0, argument1_up)) = arguments.split_first() {
                 formatted.push('(');
@@ -14606,7 +14892,7 @@ fn type_length_estimate(type_: &Type) -> usize {
     match type_ {
         Type::Variable(variable_name) => variable_name.len(),
         Type::Origin(name) => name.len(),
-        Type::CoreConstruct { name, arguments } => {
+        Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
             1 + name.len()
                 + arguments
                     .iter()

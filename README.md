@@ -221,6 +221,7 @@ cargo install --offline --debug --path . slug
 ## TODO
 - allow recursive type aliases through slot and span (probably buf as well)
   and do not expand those arguments once recursion is hit
+- fix extra space after project fn type in formatting
 - fix the countless bugs
 - implement association checking:
     - implicit arguments are as follows:
