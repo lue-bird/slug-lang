@@ -11497,16 +11497,16 @@ pub fn syntax_project_format<Expressions, Patterns>(
                             next_indent(0),
                         );
                         syntax_type_format(&mut formatted, next_indent(0), result_type);
-                        space_or_linebreak_indented_into(&mut formatted, result_type_lne_span, 0);
                     }
                     None => {
                         space_or_linebreak_indented_into(&mut formatted, header_line_span, 0);
                     }
                 }
+                linebreak_indented_into(&mut formatted, next_indent(0));
                 if let Some(documentation) = documentation {
                     syntax_comments_format(&mut formatted, 0, documentation);
+                    linebreak_indented_into(&mut formatted, next_indent(0));
                 }
-                linebreak_indented_into(&mut formatted, next_indent(0));
                 if let Some(result) = result {
                     syntax_expression_format(
                         &mut formatted,
