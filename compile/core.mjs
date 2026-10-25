@@ -66,9 +66,9 @@ export function buf$span_slice(buf, span) {
 export function p32_to_u32(p) {
   return p;
 }
-/** @param {{ p: P32, u: U32, }} mul @returns {P32} */
-export function p32_mul_clamp(mul) {
-  return Math.min(U32$MAX, mul.p * mul.u);
+/** @param {P32} p @param {U32} u mul @returns {P32} */
+export function p32_mul_clamp(p, u) {
+  return Math.min(U32$MAX, p * u);
 }
 /** @param {P32} left @param{P32} right @returns {Order} */
 export function p32_order(left, right) {
@@ -94,33 +94,33 @@ export function u32_round_to_nearest_f32_else_even(u) {
 export function u32_successor_clamp(u) {
   return Math.min(U32$MAX, u + 1);
 }
-/** @param {{ a: U32; b: U32 }} add @returns {U32} */
-export function u32_add_clamp(add) {
-  return Math.min(U32$MAX, add.a + add.b);
+/** @param {U32} a @param {U32} b add @returns {U32} */
+export function u32_add_clamp(a, b) {
+  return Math.min(U32$MAX, a + b);
 }
-/** @param {{ u: U32, i: I32, }} add @returns {U32} */
-export function u32_add_i32_clamp(add) {
-  return Math.max(0, Math.min(U32$MAX, add.u + add.i));
+/** @param {U32} u @param {I32} i @returns {U32} */
+export function u32_add_i32_clamp(u, i) {
+  return Math.max(0, Math.min(U32$MAX, u + i));
 }
-/** @param {{ a: U32, b: U32, }} mul @returns {U32} */
-export function u32_mul_clamp(mul) {
-  return Math.min(U32$MAX, mul.a * mul.b);
+/** @param {U32} a @param {U32} b @returns {U32} */
+export function u32_mul_clamp(a, b) {
+  return Math.min(U32$MAX, a * b);
 }
-/** @param {{ a: U32, b: U32, }} mul @returns {U32} */
-export function u32_mul_wrap(mul) {
+/** @param {U32} a @param {U32} b @returns {U32} */
+export function u32_mul_wrap(a, b) {
   /// >>> 0 undoes the conversion from unsigned to signed
   // (step 4 in https://tc39.es/ecma262/multipage/numbers-and-dates.html#sec-math.imul)
-  return Math.imul(mul.a, mul.b) >>> 0;
+  return Math.imul(a, b) >>> 0;
 }
-/** @param {{ base: U32, exponent: P32, }} pow @returns {U32} */
-export function u32_pow_clamp(pow) {
-  return Math.min(U32$MAX, Math.pow(pow.base, pow.exponent));
+/** @param {U32} base @param {P32} exponent @returns {U32} */
+export function u32_pow_clamp(base, exponent) {
+  return Math.min(U32$MAX, Math.pow(base, exponent));
 }
-/** @param {{ left: U32, right: U32, }} sides @returns {Order} */
-export function u32_order(sides) {
-  return sides.left < sides.right
+/** @param {U32} left @param {U32} right sides @returns {Order} */
+export function u32_order(left, right) {
+  return left < right
     ? { less: undefined }
-    : sides.left > sides.right
+    : left > right
       ? { greater: undefined }
       : { equal: undefined };
 }
@@ -145,55 +145,53 @@ export function i32_abs_to_u32(i) {
 export function i32_negate_clamp(i) {
   return Math.max(I32$MIN, -i);
 }
-/** @param {{ left: I32, right: I32, }} sides @returns {Order} */
-export function i32_order(sides) {
-  return sides.left < sides.right
+/** @param {I32} left @param {I32} right @returns {Order} */
+export function i32_order(left, right) {
+  return left < right
     ? { less: undefined }
-    : sides.left > sides.right
+    : left > right
       ? { greater: undefined }
       : { equal: undefined };
 }
-/** @param {{ a: I32; b: I32 }} add @returns {I32} */
-export function i32_add_clamp(add) {
-  return Math.max(I32$MIN, Math.min(I32$MAX, add.a + add.b));
+/** @param {I32} a @param {I32} b add @returns {I32} */
+export function i32_add_clamp(a, b) {
+  return Math.max(I32$MIN, Math.min(I32$MAX, a + b));
 }
-/** @param {{ a: I32, b: I32, }} mul @returns {I32} */
-export function i32_mul_clamp(mul) {
-  return Math.max(I32$MIN, Math.min(I32$MAX, mul.a * mul.b));
+/** @param {I32} a @param {I32} b @returns {I32} */
+export function i32_mul_clamp(a, b) {
+  return Math.max(I32$MIN, Math.min(I32$MAX, a * b));
 }
-/** @param {{ base: I32, exponent: P32, }} power @returns {I32} */
-export function i32_pow_clamp(power) {
-  return Math.max(I32$MIN, Math.min(I32$MAX, Math.pow(power.base, power.exponent)));
+/** @param {I32} base @param {P32} exponent @returns {I32} */
+export function i32_pow_clamp(base, exponent) {
+  return Math.max(I32$MIN, Math.min(I32$MAX, Math.pow(base, exponent)));
 }
 /** @returns {F32} */
 export function f32_pi() {
   return Math.PI;
 }
-/** @param {{ a: F32; b: F32 }} add @returns {F32} */
-export function f32_add_clamp(add) {
-  return add.a + add.b;
+/** @param {F32} a @param {F32} b @returns {F32} */
+export function f32_add_clamp(a, b) {
+  return a + b;
 }
-/** @param {{ a: F32, b: F32, }} mul @returns {F32} */
-export function f32_mul_clamp(mul) {
-  return Math.max(Number.MIN_VALUE, Math.min(Number.MAX_VALUE, mul.a * mul.b));
+/** @param {F32} a @param {F32} b @returns {F32} */
+export function f32_mul_clamp(a, b) {
+  return Math.max(Number.MIN_VALUE, Math.min(Number.MAX_VALUE, a * b));
 }
-/** @param {{ n: F32, by: F32, }} div @returns {F32} */
-export function f32_div_clamp(div) {
-  return div.by === 0
-    ? 0
-    : Math.max(F32$MIN, Math.min(F32$MAX, Math.fround(div.n / div.by)));
+/** @param {F32} n @param {F32} by @returns {F32} */
+export function f32_div_clamp(n, by) {
+  return by === 0 ? 0 : Math.max(F32$MIN, Math.min(F32$MAX, Math.fround(n / by)));
 }
 /** @param {F32} n @returns {Opt<F32>} */
 export function f32_square_root(n) {
   return n < 0.0 ? { no: undefined } : { yes: Math.sqrt(n) };
 }
-/** @param {{ base: F32, exponent: I32, }} pow @returns {Opt<F32>} */
-export function f32_pow_i32(pow) {
-  return f32_pow(pow);
+/** @param {F32} base @param {I32} exponent @returns {Opt<F32>} */
+export function f32_pow_i32(base, exponent) {
+  return f32_pow(base, exponent);
 }
-/** @param {{ base: F32, exponent: F32, }} pow @returns {Opt<F32>} */
-export function f32_pow(pow) {
-  const power = Math.pow(pow.base, pow.exponent);
+/** @param {F32} base @param {F32} exponent @returns {Opt<F32>} */
+export function f32_pow(base, exponent) {
+  const power = Math.pow(base, exponent);
   return Number.isFinite(power) && power >= F32$MIN && power <= F32$MAX
     ? { yes: Math.fround(power) }
     : { no: undefined };
@@ -294,11 +292,11 @@ export function f32_round_toward_0(n) {
 export function f32_round_toward_0_to_i32_clamp(n) {
   return Math.max(I32$MIN, Math.min(I32$MAX, Math.trunc(n)));
 }
-/** @param {{ left: F32, right: F32, }} sides @returns {Order} */
-export function f32_order(sides) {
-  return sides.left < sides.right
+/** @param {F32} left @param {F32} right sides @returns {Order} */
+export function f32_order(left, right) {
+  return left < right
     ? { less: undefined }
-    : sides.left > sides.right
+    : left > right
       ? { greater: undefined }
       : { equal: undefined };
 }
@@ -322,29 +320,22 @@ export function str_utf8_length(str) {
   // new TextEncoder().encode(str).length
   return new Blob([str]).size;
 }
-/** @param {Str} str @returns {{ start: Char, after: Opt<Str>, }} */
+/** @param {Str} str @returns {[Char, Opt<Str>]} */
 export function str_start(str) {
   const first = str.charAt(0);
-  return {
-    start: first,
-    after:
-      str.length === first.length ? { no: undefined } : { yes: str.slice(first.length) },
-  };
+  return [
+    first,
+    str.length === first.length ? { no: undefined } : { yes: str.slice(first.length) },
+  ];
 }
-/** @param {Str} str @returns {{ end: Char, before: Opt<Str>, }} */
+/** @param {Str} str @returns {[Opt<Str>, Char]} */
 export function str_end(str) {
   const lastOneOrTwo = str.slice(-2);
   return lastOneOrTwo.charAt(0).length === 2
     ? // last codepoint consists of 2 code units
-      {
-        end: lastOneOrTwo,
-        before: str.length === 2 ? { no: undefined } : { yes: str.slice(0, -2) },
-      }
+      [str.length === 2 ? { no: undefined } : { yes: str.slice(0, -2) }, lastOneOrTwo]
     : // last codepoint consists of 1 code unit
-      {
-        end: str.slice(-1),
-        before: str.length === 1 ? { no: undefined } : { yes: str.slice(0, -1) },
-      };
+      [str.length === 1 ? { no: undefined } : { yes: str.slice(0, -1) }, str.slice(-1)];
 }
 
 /** @template $Result @param {never} never @returns {$Result} */
@@ -352,78 +343,80 @@ export function choice_empty_to(never) {
   return never;
 }
 
-/** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {{ slot: Slot<$Origin, $Item>, index: U32 }} */
+/** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {U32} */
 export function slot_index(slot) {
-  return { slot: slot, index: slot };
+  return slot;
 }
 /** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {Span<$Origin, $Item>} */
 export function slot_to_span(slot) {
   return { start: slot, length: 1 };
 }
-/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ span: Span<$Origin, $Item>, index: U32, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {U32} */
 export function span_start_index(span) {
-  return { span: span, index: span.start };
+  return span.start;
 }
-/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ span: Span<$Origin, $Item>, length: P32, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {P32} */
 export function span_length(span) {
-  return { span: span, length: span.length };
+  return span.length;
 }
-/** @template $Origin, $Item @param {Opt<Span<$Origin, $Item>>} span @returns {{ span: Opt<Span<$Origin, $Item>>, length: U32, }} */
+/** @template $Origin, $Item @param {Opt<Span<$Origin, $Item>>} span @returns {U32} */
 export function opt_span_length(span) {
-  return { span: span, length: "no" in span ? 0 : span.yes.length };
+  return "no" in span ? 0 : span.yes.length;
 }
-/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ start: Slot<$Origin, $Item>, after: Opt<Span<$Origin, $Item>>, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {[Slot<$Origin, $Item>, Opt<Span<$Origin, $Item>>]} */
 export function span_start(span) {
-  return {
-    start: span.start,
-    after:
-      span.length >= 2
-        ? { yes: { start: span.start + 1, length: span.length - 1 } }
-        : { no: undefined },
-  };
+  return [
+    span.start,
+    span.length >= 2
+      ? { yes: { start: span.start + 1, length: span.length - 1 } }
+      : { no: undefined },
+  ];
 }
-/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {{ end: Slot<$Origin, $Item>, before: Opt<Span<$Origin, $Item>>, }} */
+/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {[Opt<Span<$Origin, $Item>>, Slot<$Origin, $Item>]} */
 export function span_end(span) {
-  return {
-    end: span.start + span.length - 1,
-    before:
-      span.length >= 2
-        ? { yes: { start: span.start, length: span.length - 1 } }
-        : { no: undefined },
-  };
+  return [
+    span.length >= 2
+      ? { yes: { start: span.start, length: span.length - 1 } }
+      : { no: undefined },
+    span.start + span.length - 1,
+  ];
 }
-/** @template $Origin, $Item @param {{ span: Span<$Origin, $Item>, length: P32, }} take @returns {{ start: Span<$Origin, $Item>, after: Opt<Span<$Origin, $Item>>, }} */
-export function span_start_of_length_positive(take) {
-  return {
-    start: { start: take.span.start, length: Math.min(take.span.length, take.length) },
-    after:
-      take.span.length <= take.length
-        ? { no: undefined }
-        : {
-            yes: {
-              start: take.span.start + take.length,
-              length: take.span.length - take.length,
-            },
+/** @template $Origin, $Item
+ * @param {Span<$Origin, $Item>} span
+ * @param{P32} length
+ * @returns {[Span<$Origin, $Item>, Opt<Span<$Origin, $Item>>]} */
+export function span_start_of_length_positive(span, length) {
+  return [
+    { start: span.start, length: Math.min(span.length, length) },
+    span.length <= length
+      ? { no: undefined }
+      : {
+          yes: {
+            start: span.start + length,
+            length: span.length - length,
           },
-  };
+        },
+  ];
 }
-/** @template $Origin, $Item @param {{ span: Span<$Origin, $Item>, length: P32, }} take @returns {{ end: Span<$Origin, $Item>, before: Opt<Span<$Origin, $Item>>, }} */
-export function span_end_of_length_positive(take) {
-  return {
-    end: {
-      start: take.span.start + Math.max(0, take.span.length - take.length),
-      length: take.length,
+/** @template $Origin, $Item
+ * @param {Span<$Origin, $Item>} span
+ * @param{P32} length
+ * @returns {[Opt<Span<$Origin, $Item>>, Span<$Origin, $Item>]} */
+export function span_end_of_length_positive(span, length) {
+  return [
+    span.length <= length
+      ? { no: undefined }
+      : {
+          yes: {
+            start: span.start,
+            length: span.length - length,
+          },
+        },
+    {
+      start: span.start + Math.max(0, span.length - length),
+      length: length,
     },
-    before:
-      take.span.length <= take.length
-        ? { no: undefined }
-        : {
-            yes: {
-              start: take.span.start,
-              length: take.span.length - take.length,
-            },
-          },
-  };
+  ];
 }
 /** @template $Origin, $Item, $State
  * @param {Span<$Origin, $Item>} span
@@ -457,7 +450,7 @@ export function opt_span_step(span, direction, state, step) {
  * @param{{ up: void } | { down: void }} direction
  * @param {$Going} state
  * @param {(state: $Going, slot: Slot<$Origin, $Item>) => { going: $Going } | { done: $Done }} step
- * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin, $Item>>} }} */
+ * @returns {{ going: $Going } | { done: [$Done, Opt<Span<$Origin, $Item>>] }} */
 export function span_step_while(span, direction, state, step) {
   if ("up" in direction) {
     for (let i = span.start; i < span.start + span.length; i++) {
@@ -465,13 +458,12 @@ export function span_step_while(span, direction, state, step) {
       if ("done" in step_result) {
         const rest_length = span.start + span.length - 1 - i;
         return {
-          done: {
-            done: step_result.done,
-            rest:
-              rest_length >= 1
-                ? { yes: { start: i + 1, length: rest_length } }
-                : { no: undefined },
-          },
+          done: [
+            step_result.done,
+            rest_length >= 1
+              ? { yes: { start: i + 1, length: rest_length } }
+              : { no: undefined },
+          ],
         };
       }
       state = step_result.going;
@@ -482,13 +474,12 @@ export function span_step_while(span, direction, state, step) {
       if ("done" in step_result) {
         const rest_length = i - span.start;
         return {
-          done: {
-            done: step_result.done,
-            rest:
-              rest_length >= 1
-                ? { yes: { start: 0, length: rest_length } }
-                : { no: undefined },
-          },
+          done: [
+            step_result.done,
+            rest_length >= 1
+              ? { yes: { start: 0, length: rest_length } }
+              : { no: undefined },
+          ],
         };
       }
       state = step_result.going;
@@ -501,7 +492,7 @@ export function span_step_while(span, direction, state, step) {
  * @param{{ up: void } | { down: void }} direction
  * @param {$Going} state
  * @param {(state: $Going, slot: Slot<$Origin, $Item>) => { going: $Going } | { done: $Done }} step
- * @returns {{ going: $Going } | { done: { done: $Done, rest: Opt<Span<$Origin, $Item>>} }} */
+ * @returns {{ going: $Going } | { done: [$Done, Opt<Span<$Origin, $Item>>] }} */
 export function opt_span_step_while(span, direction, state, step) {
   if ("no" in span) return { going: state };
   return span_step_while(span.yes, direction, state, step);

@@ -9235,17 +9235,6 @@ const fn type_variable(name: &'static str) -> Type {
 fn type_tuple(fields: impl IntoIterator<Item = Type>) -> Type {
     Type::Tuple(fields.into_iter().collect())
 }
-fn type_record(fields: impl IntoIterator<Item = (&'static str, Type)>) -> Type {
-    Type::Record(
-        fields
-            .into_iter()
-            .map(|(field_name, field_value)| TypeField {
-                name: Name::from_static(field_name),
-                value: field_value,
-            })
-            .collect(),
-    )
-}
 /// preferred type to hold no information
 const type_empty: Type = type_tuple_empty;
 const type_tuple_empty: Type = Type::Tuple(vec![]);
@@ -9774,14 +9763,14 @@ You usually want to use the slower strr-char-count.",
                 documentation: "Split off its first char",
                 type_parameters: vec![],
                 parameters: vec![type_str],
-                result: type_record([("start", type_char), ("after", type_opt(type_str))]),
+                result: type_tuple([type_char, type_opt(type_str)]),
             },
             CoreFnInfo {
                 name: "str-end",
                 documentation: "Split off its last char",
                 type_parameters: vec![],
                 parameters: vec![type_str],
-                result: type_record([("end", type_char), ("before", type_opt(type_str))]),
+                result: type_tuple([type_opt(type_str), type_char]),
             },
             CoreFnInfo {
                 name: "choice-empty-to",
@@ -9995,9 +9984,9 @@ An example can be found in `opt-span-step-while`",
                 result: type_choice([
                     (
                         "done",
-                        type_record([
-                            ("done", type_variable("done")),
-                            ("rest", type_opt(type_span(type_variable("Origin"), type_variable("Item"))))
+                        type_tuple([
+                            type_variable("done"),
+                            type_opt(type_span(type_variable("Origin"), type_variable("Item")))
                         ])
                     ),
                     ("going", type_variable("State"))
@@ -10057,9 +10046,9 @@ Note that `.rest` does not include any slot given to the step function, even the
                 result: type_choice([
                     (
                         "done",
-                        type_record([
-                            ("done", type_variable("done")),
-                            ("rest", type_opt(type_span(type_variable("Origin"), type_variable("Item"))))
+                        type_tuple([
+                            type_variable("done"),
+                            type_opt(type_span(type_variable("Origin"), type_variable("Item")))
                         ])
                     ),
                     ("going", type_variable("State"))
@@ -10212,7 +10201,7 @@ To just switch out an item, use `buf-replace`",
                     type_variable("In"),
                     type_fn(
                         vec![type_variable("In"), type_variable("Item")],
-                        type_record([("out", type_variable("Out")), ("item", type_variable("Item"))])
+                        type_tuple([type_variable("Out"), type_variable("Item")])
                     )
                 ],
                 result: type_variable("Out")
