@@ -975,21 +975,20 @@ fn respond_to_hover<Expressions, Patterns>(
         slug::SyntaxSymbol::ProjectTypeOrUnknown {
             name: symbol_name,
             construct_info: _,
-        } => project_state
-            .type_aliases
-            .iter()
-            .find_map(|(type_alias_name, type_alias_info)| {
-                if type_alias_name == symbol_name.value {
-                    Some(lsp_types::Hover {
-                        contents: lsp_types::Contents::MarkupContent(lsp_types::MarkupContent {
-                            kind: lsp_types::MarkupKind::Markdown,
-                            value: present_type_alias_markdown(type_alias_name, type_alias_info),
-                        }),
-                        range: Some(slug::name_range(symbol_name)),
-                    })
-                } else {
-                    None
-                }
+        } => slug::core_type_aliases
+            .get_key_value(symbol_name.value)
+            .or_else(|| {
+                project_state
+                    .type_aliases
+                    .iter()
+                    .find(|(type_alias_name, _)| *type_alias_name == symbol_name.value)
+            })
+            .map(|(type_alias_name, type_alias_info)| lsp_types::Hover {
+                contents: lsp_types::Contents::MarkupContent(lsp_types::MarkupContent {
+                    kind: lsp_types::MarkupKind::Markdown,
+                    value: present_type_alias_markdown(type_alias_name, type_alias_info),
+                }),
+                range: Some(slug::name_range(symbol_name)),
             }),
         slug::SyntaxSymbol::Origin { name, use_start } => Some(lsp_types::Hover {
             contents: lsp_types::Contents::MarkupContent(lsp_types::MarkupContent {
@@ -1329,34 +1328,28 @@ fn respond_to_completion<Expressions, Patterns>(
             slug::ConstructInfo::Declaration => None,
             slug::ConstructInfo::NotExpectingArgument => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
-                    project_state
-                        .type_aliases
+                    slug::core_type_aliases
                         .iter()
-                        .filter_map(|(type_alias_name, type_alias_info)| {
-                            if !type_alias_info.parameters.is_empty() {
-                                None
-                            } else {
-                                Some(lsp_types::CompletionItem {
-                                    label: type_alias_name.to_string(),
-                                    kind: Some(lsp_types::CompletionItemKind::Struct),
-                                    documentation: Some(lsp_documentation_markdown(
-                                        present_type_alias_markdown(
-                                            type_alias_name,
-                                            type_alias_info,
-                                        ),
-                                    )),
-                                    ..lsp_types::CompletionItem::default()
-                                })
-                            }
-                        })
+                        .chain(&project_state.type_aliases)
+                        .filter(|(_, type_alias_info)| type_alias_info.parameters.is_empty())
+                        .map(
+                            |(type_alias_name, type_alias_info)| lsp_types::CompletionItem {
+                                label: type_alias_name.to_string(),
+                                kind: Some(lsp_types::CompletionItemKind::Struct),
+                                documentation: Some(lsp_documentation_markdown(
+                                    present_type_alias_markdown(type_alias_name, type_alias_info),
+                                )),
+                                ..lsp_types::CompletionItem::default()
+                            },
+                        )
                         .collect(),
                 ))
             }
             slug::ConstructInfo::ArgumentMissing => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
-                    project_state
-                        .type_aliases
+                    slug::core_type_aliases
                         .iter()
+                        .chain(&project_state.type_aliases)
                         .filter_map(|(type_alias_name, type_alias_info)| {
                             match type_alias_info.parameters.split_first() {
                                 None => None,
@@ -1401,26 +1394,20 @@ fn respond_to_completion<Expressions, Patterns>(
             }
             slug::ConstructInfo::ArgumentExists => {
                 Some(lsp_types::CompletionResponse::CompletionItemList(
-                    project_state
-                        .type_aliases
+                    slug::core_type_aliases
                         .iter()
-                        .filter_map(|(type_alias_name, type_alias_info)| {
-                            if type_alias_info.parameters.is_empty() {
-                                None
-                            } else {
-                                Some(lsp_types::CompletionItem {
-                                    label: type_alias_name.to_string(),
-                                    kind: Some(lsp_types::CompletionItemKind::Struct),
-                                    documentation: Some(lsp_documentation_markdown(
-                                        present_type_alias_markdown(
-                                            type_alias_name,
-                                            type_alias_info,
-                                        ),
-                                    )),
-                                    ..lsp_types::CompletionItem::default()
-                                })
-                            }
-                        })
+                        .chain(&project_state.type_aliases)
+                        .filter(|(_, type_alias_info)| type_alias_info.parameters.is_empty())
+                        .map(
+                            |(type_alias_name, type_alias_info)| lsp_types::CompletionItem {
+                                label: type_alias_name.to_string(),
+                                kind: Some(lsp_types::CompletionItemKind::Struct),
+                                documentation: Some(lsp_documentation_markdown(
+                                    present_type_alias_markdown(type_alias_name, type_alias_info),
+                                )),
+                                ..lsp_types::CompletionItem::default()
+                            },
+                        )
                         .collect(),
                 ))
             }

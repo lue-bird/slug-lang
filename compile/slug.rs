@@ -2386,9 +2386,10 @@ Choose a different ty name.",
     }
 
     // maybe instead start from 0 instead of cloning every time?
-    let mut checked_type_aliases: std::collections::HashMap<Name, CheckedTypeAlias> =
-        core_type_aliases.clone();
-    checked_type_aliases.reserve(project_type_by_graph_node.len());
+    let mut checked_type_aliases =
+        std::collections::HashMap::<Name, CheckedTypeAlias>::with_capacity(
+            project_type_by_graph_node.len(),
+        );
     for project_type_strongly_connected_component in
         strongly_connected_components::find(&type_graph)
     {
