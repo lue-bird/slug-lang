@@ -2393,6 +2393,30 @@ Choose a different ty name.",
     for project_type_strongly_connected_component in
         strongly_connected_components::find(&type_graph)
     {
+        // possible optimization: skip this computation when project_type_strongly_connected_component is single, non-self-referencing node
+        let project_type_strongly_connected_component_parameters =
+            project_type_strongly_connected_component
+                .iter()
+                .filter_map(|variable_declaration_graph_node| {
+                    project_type_by_graph_node.get(variable_declaration_graph_node)
+                })
+                .copied()
+                .map(|project_type| {
+                    (
+                        &project_type.name.value,
+                        project_type
+                            .parameters
+                            .iter()
+                            .flat_map(|parameters| {
+                                parameters
+                                    .parameters
+                                    .iter()
+                                    .map(|parameter| parameter.value.clone())
+                            })
+                            .collect(),
+                    )
+                })
+                .collect::<std::collections::HashMap<_, _>>();
         for project_type in project_type_strongly_connected_component
             .iter()
             .filter_map(|variable_declaration_graph_node| {
@@ -2403,9 +2427,10 @@ Choose a different ty name.",
             checked_type_aliases.insert(
                 project_type.name.value.clone(),
                 project_type_alias_check(
-                    errors,
-                    &checked_type_aliases,
                     project_type,
+                    errors,
+                    &project_type_strongly_connected_component_parameters,
+                    &checked_type_aliases,
                     &mut records_used,
                     &mut choices_used,
                 ),
@@ -2810,9 +2835,10 @@ impl<'a, Expressions, Patterns> Clone for SyntaxProjectFnInfo<'a, Expressions, P
 }
 
 fn project_type_alias_check(
-    errors: &mut Vec<ErrorNode>,
-    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     project_type: SyntaxProjectTypeInfo,
+    errors: &mut Vec<ErrorNode>,
+    recursive_type_alias_parameters: &std::collections::HashMap<&Name, Vec<Name>>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
 ) -> CheckedTypeAlias {
@@ -2850,6 +2876,8 @@ fn project_type_alias_check(
             match syntax_type_check(
                 aliased_syntax_type,
                 errors,
+                recursive_type_alias_parameters,
+                false,
                 type_aliases,
                 records_used,
                 choices_used,
@@ -2870,43 +2898,15 @@ fn project_type_alias_check(
                     let mut actually_used_type_variables: std::collections::BTreeSet<&Name> =
                         std::collections::BTreeSet::new();
                     type_variables_into(&mut actually_used_type_variables, &aliased_type);
-                    let parameters = if !actually_used_type_variables.is_empty()
-                        && project_type
-                            .name
-                            .value
-                            .starts_with(|start: char| start.is_ascii_lowercase())
-                    {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(project_type.name)),
-                            message: Box::from(
-                                "When declaring a type with parameters, its name needs to start with an uppercase letter. Only concrete types (e.g. u32) have a lowercase name",
-                            ),
-                        });
-                        vec![]
-                    } else if actually_used_type_variables.is_empty()
-                        && project_type
-                            .name
-                            .value
-                            .starts_with(|start: char| start.is_ascii_uppercase())
-                    {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(project_type.name)),
-                            message: Box::from(
-                                "When declaring a type without parameters, its name needs to start with a lowercase letter. Only generic types (e.g. buf(Origin _item)) have an uppercase name",
-                            ),
-                        });
-                        vec![]
-                    } else {
-                        parameters_check_if_different_to_actual_type_parameters(
-                            errors,
-                            name_range(with_start_position_as_ref(project_type.name)),
-                            project_type.parameters.iter().flat_map(|parameters| {
-                                parameters.parameters.iter().map(with_start_position_as_ref)
-                            }),
-                            actually_used_type_variables,
-                            "Type parameter variables follow after the name and are separated by commas, so for example ty buf(Origin _item)",
-                        )
-                    };
+                    let parameters = parameters_check_if_different_to_actual_type_parameters(
+                        errors,
+                        name_range(with_start_position_as_ref(project_type.name)),
+                        project_type.parameters.iter().flat_map(|parameters| {
+                            parameters.parameters.iter().map(with_start_position_as_ref)
+                        }),
+                        actually_used_type_variables,
+                        "Type parameter variables follow after the name and are separated by commas, so for example ty buf(Origin _item)",
+                    );
                     CheckedTypeAlias {
                         name_range: Some(name_range(with_start_position_as_ref(project_type.name))),
                         documentation,
@@ -2945,7 +2945,7 @@ fn syntax_project_fn_header_check<'a, Expressions, Patterns>(
         .collect::<Vec<_>>();
     let result_type: Option<Type> = {
         match &project_fn.result_type {
-            Some(syntax_result_type) => syntax_type_check(
+            Some(syntax_result_type) => syntax_type_check_not_in_type_alias(
                 syntax_result_type,
                 errors,
                 type_aliases,
@@ -3258,9 +3258,28 @@ pub fn syntax_type_to_type(
         }
     }
 }
+pub fn syntax_type_check_not_in_type_alias(
+    type_: &SyntaxType,
+    errors: &mut Vec<ErrorNode>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+    records_used: &mut std::collections::HashSet<Vec<Name>>,
+    choices_used: &mut std::collections::HashSet<Vec<Name>>,
+) -> Option<Type> {
+    syntax_type_check(
+        type_,
+        errors,
+        &std::collections::HashMap::new(),
+        false,
+        type_aliases,
+        records_used,
+        choices_used,
+    )
+}
 pub fn syntax_type_check(
     type_: &SyntaxType,
     errors: &mut Vec<ErrorNode>,
+    recursive_type_alias_parameters: &std::collections::HashMap<&Name, Vec<Name>>,
+    using_recursive_type_alias_allowed: bool,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
@@ -3287,15 +3306,29 @@ pub fn syntax_type_check(
             let Some(result) = result else {
                 return None;
             };
-            let Some(result) =
-                syntax_type_check(result, errors, type_aliases, records_used, choices_used)
-            else {
+            let Some(result) = syntax_type_check(
+                result,
+                errors,
+                recursive_type_alias_parameters,
+                using_recursive_type_alias_allowed,
+                type_aliases,
+                records_used,
+                choices_used,
+            ) else {
                 return None;
             };
             let Some(parameters) = parameters
                 .iter()
                 .map(|parameter| {
-                    syntax_type_check(parameter, errors, type_aliases, records_used, choices_used)
+                    syntax_type_check(
+                        parameter,
+                        errors,
+                        recursive_type_alias_parameters,
+                        using_recursive_type_alias_allowed,
+                        type_aliases,
+                        records_used,
+                        choices_used,
+                    )
                 })
                 .collect::<Option<Vec<_>>>()
             else {
@@ -3307,6 +3340,11 @@ pub fn syntax_type_check(
             })
         }
         SyntaxType::ConstructWithArguments { name, arguments } => {
+            let using_recursive_type_alias_in_arguments_allowed = using_recursive_type_alias_allowed
+                || match name.value.as_str() {
+                    type_span_name | type_slot_name | type_buf_name => true,
+                    _ => false,
+                };
             let Some(argument_types) = arguments
                 .iter()
                 .flat_map(|arguments| &arguments.arguments)
@@ -3314,6 +3352,8 @@ pub fn syntax_type_check(
                     syntax_type_check(
                         argument_type,
                         errors,
+                        recursive_type_alias_parameters,
+                        using_recursive_type_alias_in_arguments_allowed,
                         type_aliases,
                         records_used,
                         choices_used,
@@ -3323,83 +3363,83 @@ pub fn syntax_type_check(
             else {
                 return None;
             };
-            if let Some(origin_core_type) = core_type_aliases.get(&name.value) {
-                let argument_count = argument_types.len();
-                match origin_core_type.parameters.len().cmp(&argument_count) {
-                    std::cmp::Ordering::Equal => {}
-                    std::cmp::Ordering::Less => {
-                        errors.push(ErrorNode {
+            let argument_count = argument_types.len();
+            // TODO also check for recursive type aliases
+            // TODO set using_recursive_type_alias_allowed to true
+            let (origin_type_parameters, checked_type) = if let Some(origin_core_type) =
+                core_type_aliases.get(&name.value)
+            {
+                (
+                    &origin_core_type.parameters,
+                    Type::CoreConstruct {
+                        name: name.value.clone(),
+                        arguments: argument_types,
+                    },
+                )
+            } else if let Some(recursive_origin_type_alias_parameters) =
+                recursive_type_alias_parameters.get(&name.value)
+            {
+                if using_recursive_type_alias_allowed {
+                    (
+                        recursive_origin_type_alias_parameters,
+                        Type::Alias {
+                            name: name.value.clone(),
+                            arguments: argument_types,
+                        },
+                    )
+                } else {
+                    errors.push(ErrorNode {
                             range: name_range(with_start_position_as_ref(name)),
-                            message: format!(
-                                "this core type has {} less parameters than arguments are provided here.",
-                                argument_count - origin_core_type.parameters.len(),
-                            ).into_boxed_str()
+                            message: Box::from("recursive type alias. A value of such a directly recursive type has no known maximum size on the stack.
+Move nested parts of this data into the heap (using slot/span) to represent such nested data."),
                         });
-                        return None;
-                    }
-                    std::cmp::Ordering::Greater => {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(name)),
-                            message: format!(
-                                "this core type has {} more parameters than arguments are provided here. The additional {} called {}",
-                                origin_core_type.parameters.len() - argument_count,
-                                if origin_core_type.parameters.len() - argument_count == 1 {
-                                    "parameter is"
-                                } else {
-                                    "parameters are"
-                                },
-                                origin_core_type.parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
-                            ).into_boxed_str()
-                        });
-                        return None;
-                    }
+                    return None;
                 }
-                Some(Type::CoreConstruct {
-                    name: name.value.clone(),
-                    arguments: argument_types,
-                })
             } else if let Some(origin_type_alias) = type_aliases.get(&name.value) {
-                let argument_count = argument_types.len();
-                match origin_type_alias.parameters.len().cmp(&argument_count) {
-                    std::cmp::Ordering::Equal => {}
-                    std::cmp::Ordering::Less => {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(name)),
-                            message: format!(
-                                "this type alias has {} less parameters than arguments are provided here.",
-                                argument_count - origin_type_alias.parameters.len(),
-                            ).into_boxed_str()
-                        });
-                        return None;
-                    }
-                    std::cmp::Ordering::Greater => {
-                        errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(name)),
-                            message: format!(
-                                "this type alias has {} more parameters than arguments are provided here. The additional {} called {}",
-                                origin_type_alias.parameters.len() - argument_count,
-                                if origin_type_alias.parameters.len() - argument_count == 1 {
-                                    "parameter is"
-                                } else {
-                                    "parameters are"
-                                },
-                                origin_type_alias.parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
-                            ).into_boxed_str()
-                        });
-                        return None;
-                    }
-                }
-                Some(Type::Alias {
-                    name: name.value.clone(),
-                    arguments: argument_types,
-                })
+                (
+                    &origin_type_alias.parameters,
+                    Type::Alias {
+                        name: name.value.clone(),
+                        arguments: argument_types,
+                    },
+                )
             } else {
                 errors.push(ErrorNode {
                     range: name_range(with_start_position_as_ref(name)),
                     message: Box::from("no type alias or core type with this name exists"),
                 });
-                None
+                return None;
+            };
+            match origin_type_parameters.len().cmp(&argument_count) {
+                std::cmp::Ordering::Equal => {}
+                std::cmp::Ordering::Less => {
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: format!(
+                            "this core type has {} less parameters than arguments are provided here.",
+                            argument_count - origin_type_parameters.len(),
+                        ).into_boxed_str()
+                    });
+                    return None;
+                }
+                std::cmp::Ordering::Greater => {
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: format!(
+                            "this core type has {} more parameters than arguments are provided here. The additional {} called {}",
+                            origin_type_parameters.len() - argument_count,
+                            if origin_type_parameters.len() - argument_count == 1 {
+                                "parameter is"
+                            } else {
+                                "parameters are"
+                            },
+                            origin_type_parameters.iter().map(|parameter| parameter.as_str()).skip(argument_count).collect::<Vec<_>>().join(", ")
+                        ).into_boxed_str()
+                    });
+                    return None;
+                }
             }
+            Some(checked_type)
         }
         SyntaxType::Tuple {
             star_start: _,
@@ -3408,7 +3448,17 @@ pub fn syntax_type_check(
             closed_paren_start: _,
         } => parts
             .iter()
-            .map(|part| syntax_type_check(part, errors, type_aliases, records_used, choices_used))
+            .map(|part| {
+                syntax_type_check(
+                    part,
+                    errors,
+                    recursive_type_alias_parameters,
+                    using_recursive_type_alias_allowed,
+                    type_aliases,
+                    records_used,
+                    choices_used,
+                )
+            })
             .collect::<Option<Vec<_>>>()
             .map(Type::Tuple),
         SyntaxType::Record {
@@ -3443,6 +3493,8 @@ pub fn syntax_type_check(
                 match syntax_type_check(
                     field_value,
                     errors,
+                    recursive_type_alias_parameters,
+                    using_recursive_type_alias_allowed,
                     type_aliases,
                     records_used,
                     choices_used,
@@ -3498,6 +3550,8 @@ pub fn syntax_type_check(
                 match syntax_type_check(
                     syntax_variant_value,
                     errors,
+                    recursive_type_alias_parameters,
+                    using_recursive_type_alias_allowed,
                     type_aliases,
                     records_used,
                     choices_used,
@@ -3527,6 +3581,13 @@ fn type_alias_resolve_to_non_alias<'a>(
     type_: &'a Type,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) -> std::borrow::Cow<'a, Type> {
+    type_alias_resolve_to_non_alias_or_error(type_, type_aliases)
+        .unwrap_or_else(|| std::borrow::Cow::Borrowed(type_))
+}
+fn type_alias_resolve_to_non_alias_or_error<'a>(
+    type_: &'a Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) -> Option<std::borrow::Cow<'a, Type>> {
     match type_ {
         Type::Alias {
             name: actual_name,
@@ -3538,15 +3599,13 @@ fn type_alias_resolve_to_non_alias<'a>(
                     actual_arguments.iter().cloned(),
                 )
             {
-                std::borrow::Cow::Owned(
-                    type_alias_resolve_to_non_alias(&actual_resolved_alias, type_aliases)
-                        .into_owned(),
-                )
+                type_alias_resolve_to_non_alias_or_error(&actual_resolved_alias, type_aliases)
+                    .map(|resolved| std::borrow::Cow::Owned(resolved.into_owned()))
             } else {
-                std::borrow::Cow::Borrowed(type_)
+                None
             }
         }
-        _ => std::borrow::Cow::Borrowed(type_),
+        _ => Some(std::borrow::Cow::Borrowed(type_)),
     }
 }
 fn type_construct_resolve_type_alias(
@@ -4236,7 +4295,7 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                     None
                 }
                 Some(actual_type) => {
-                    let Some(actual_type) = syntax_type_check(
+                    let Some(actual_type) = syntax_type_check_not_in_type_alias(
                         actual_type,
                         errors,
                         type_aliases,
@@ -4291,7 +4350,7 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                 None
             }
             Some(actual_type) => {
-                let Some(actual_type) = syntax_type_check(
+                let Some(actual_type) = syntax_type_check_not_in_type_alias(
                     actual_type,
                     errors,
                     type_aliases,
@@ -4411,7 +4470,7 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
         }
     }
 }
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct TypeBuf {
     origin: Type,
     item: Type,
@@ -4521,6 +4580,7 @@ fn type_implicit_bufs(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     type_bufs: &mut std::collections::HashSet<TypeBuf>,
 ) {
+    // TODO store outer type aliases which are not checked in inner aliases
     match type_ {
         Type::Variable(_) => {}
         Type::Origin(_) => {}
@@ -4543,15 +4603,20 @@ fn type_implicit_bufs(
             if (name == type_slot_name || name == type_span_name)
                 && let [origin, item] = arguments.as_slice()
             {
-                // we should probably de-alias origin and item until recursion
-                type_bufs.insert(TypeBuf {
+                // TODO de-alias origin and item until recursion
+                let item_fully_dealiased = item.clone();
+                let same_origin_and_item_was_not_already_added = type_bufs.insert(TypeBuf {
                     origin: origin.clone(),
-                    item: item.clone(),
+                    item: item_fully_dealiased,
                 });
-                type_implicit_bufs(item, type_aliases, type_bufs);
+                if same_origin_and_item_was_not_already_added {
+                    type_implicit_bufs(item, type_aliases, type_bufs);
+                }
             } else if name == type_buf_name
                 && let [_, item] = arguments.as_slice()
             {
+                // TODO avoid possibly recursing infinitely
+                // TODO de-alias origin and item until recursion
                 type_implicit_bufs(item, type_aliases, type_bufs);
             } else {
                 for argument in arguments {
@@ -7178,7 +7243,7 @@ fn syntax_expression_check<'a, Expressions, Patterns>(
                 None
             }
             Some(syntax_type) => {
-                let Some(type_) = syntax_type_check(
+                let Some(type_) = syntax_type_check_not_in_type_alias(
                     syntax_type,
                     errors,
                     type_aliases,
@@ -7429,7 +7494,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
             }
             let mut type_arguments = Vec::new();
             for syntax_type_argument in syntax_type_arguments.iter().flat_map(|args| &args.types) {
-                let Some(type_argument) = syntax_type_check(
+                let Some(type_argument) = syntax_type_check_not_in_type_alias(
                     syntax_type_argument,
                     errors,
                     type_aliases,
@@ -7552,7 +7617,7 @@ If there should only ever by one variant, using a record with a single field is 
                 return None;
             };
             let value = expressions.item(value);
-            let Some(checked_type) = syntax_type_check(
+            let Some(checked_type) = syntax_type_check_not_in_type_alias(
                 syntax_type,
                 errors,
                 type_aliases,

@@ -219,9 +219,7 @@ cargo install --offline --debug --path . slug
 - shadowing is allowed and encouraged
 
 ## TODO
-- allow recursive type aliases through slot and span (probably buf as well)
-  and do not expand those arguments once recursion is hit
-- fix the countless bugs
+- fix the many bugs
 - implement association checking:
     - implicit arguments are as follows:
         - a bundle of bufs, each passed by (noalias) *mut.
