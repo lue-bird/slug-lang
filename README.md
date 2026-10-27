@@ -216,9 +216,11 @@ cargo install --offline --debug --path . slug
 - drop and clone is implicit and happens after the last use. This is possible leak-free because a `slot` knows how to modify the associated `buf` in the scope it's in
 - positional arguments and otherwise familiar syntax
 - `.` syntax for piping the first argument
-- shadowing is allowed and encouraged
 
 ## TODO
+- allow local variables to be used multiple times
+- clear up: should local variables be able to shadow other local variables?
+  It probably makes things harder rather than easier
 - fix the many bugs
 - implement association checking:
     - implicit arguments are as follows:

@@ -3082,6 +3082,7 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
                     CheckedLocalVariable {
                         origin_start: name.start,
                         type_: type_.and_then(|type_| syntax_type_to_type(type_, type_aliases)),
+                        used: false,
                     },
                 );
             },
@@ -3112,6 +3113,8 @@ fn syntax_project_fn_check<'a, Expressions, Patterns>(
     };
     for (parameter_introduced_variable_name, parameter_introduced_variable_origin) in
         parameter_introduced_variables
+            .iter()
+            .filter(|(_, var)| !var.used)
     {
         errors.push(error_introduced_pattern_variable_is_unused(
             parameter_introduced_variable_origin.origin_start,
@@ -4050,6 +4053,7 @@ fn syntax_if_case_pattern_check<'a, Patterns>(
                 CheckedLocalVariable {
                     origin_start: name.start,
                     type_: Some(expected_type.clone()),
+                    used: false,
                 },
             );
             if let Some(_existing_variable_with_the_same_name) =
@@ -4312,6 +4316,7 @@ fn syntax_parameter_pattern_check<'a, Patterns>(
                 CheckedLocalVariable {
                     origin_start: name.start,
                     type_: maybe_checked_variable.clone(),
+                    used: false,
                 },
             );
             if let Some(_existing_variable_with_the_same_name) =
@@ -5173,7 +5178,7 @@ fn syntax_expression_to_zig<'a, Expressions, Patterns>(
             if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
                 zig_break_start(output, label);
             }
-            if let Some(local_variable_introduced_start) = local_variables.remove(&name.value) {
+            if let Some(&local_variable_introduced_start) = local_variables.get(&name.value) {
                 name_to_lowercase_local_zig_introduced_at(
                     output,
                     &name.value,
@@ -6540,7 +6545,7 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
         SyntaxExpression::Variable(name) => {
             js_scope_result_variable(output, scope_start);
             output.push_str(" = ");
-            if let Some(local_variable_introduced_start) = local_variables.remove(&name.value) {
+            if let Some(&local_variable_introduced_start) = local_variables.get(&name.value) {
                 name_to_lowercase_local_js_introduced_at(
                     output,
                     &name.value,
@@ -7212,6 +7217,7 @@ const js_lowercase_keywords: [&str; 70] = [
 struct CheckedLocalVariable {
     origin_start: lsp_types::Position,
     type_: Option<Type>,
+    used: bool,
 }
 fn syntax_expression_check<'a, Expressions, Patterns>(
     errors: &mut Vec<ErrorNode>,
@@ -7433,19 +7439,21 @@ fn syntax_expression_check<'a, Expressions, Patterns>(
             }
         }
         SyntaxExpression::Variable(name) => {
-            if let Some(variable_info) = local_variables.remove(&name.value) {
-                let Some(variable_type) = variable_info.type_ else {
+            if let Some(variable_info) = local_variables.get_mut(&name.value) {
+                variable_info.used = true;
+                let Some(variable_type) = &variable_info.type_ else {
                     return None;
                 };
-                Some(variable_type)
+                Some(variable_type.clone())
             } else {
                 errors.push(ErrorNode {
                     range: name_range(with_start_position_as_ref(name)),
                     message: format!(
                         "No local variable in scope has this name. Hints:
-- each variable can only be used once, even simple numbers etc.. To duplicate the value, use the helpers like U32-dup, Char-dup or create your own dup helpers
 - a function name always starts uppercase
-- a local function result can not refer to any variable from the outside. Otherwise check for typos.
+- a local function result can not refer to any variable from the outside
+- a variable whose type contains type variables cannot be duplicated (because it might introduce multiple bufs with the same origin)
+- check for typos
 
 Available variable names are {}",
                         local_variables.keys().map(|var| var.as_str()).collect::<Vec<_>>().join(", ")
@@ -7463,118 +7471,192 @@ Available variable names are {}",
             closed_paren_start: _,
         } => {
             // TODO handle name being local variable
-            let Some(project_fn_info) = project_fns.get(name.value.as_str()) else {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(name)),
-                    message: Box::from("unknown function name. No fn in core or in this project has this name. Note that a local fn expression can not refer to any variable from the outside. Otherwise check for typos.")
-                });
-                return None;
-            };
-            let Some(project_fn_result_type) = &project_fn_info.result_type else {
-                return None;
-            };
-            let type_argument_count = syntax_type_arguments
-                .as_ref()
-                .map(|args| args.types.len())
-                .unwrap_or(0);
-            if type_argument_count != project_fn_info.type_parameters.len() {
-                errors.push(ErrorNode {
-                    range: name_range(with_start_position_as_ref(name)),
-                    message: format!("incorrect number of type parameters. The project fn has {parameter_count} type {parameter_pluralized}, but you provided {type_argument_count} as arguments.
-Type arguments are provided each wrapped in curly braces after the fn name, like in Buf-empty{{u32}} origin.",
-                        parameter_count = project_fn_info.type_parameters.len(),
-                        parameter_pluralized = if project_fn_info.type_parameters.len() == 1 {
-                            "parameter"
-                        } else {
-                            "parameters"
-                        },
-                    ).into_boxed_str()
-                });
-                return None;
-            }
-            let mut type_arguments = Vec::new();
-            for syntax_type_argument in syntax_type_arguments.iter().flat_map(|args| &args.types) {
-                let Some(type_argument) = syntax_type_check_not_in_type_alias(
-                    syntax_type_argument,
-                    errors,
-                    type_aliases,
-                    records_used,
-                    choices_used,
-                ) else {
+            if let Some(project_fn_info) = project_fns.get(&name.value) {
+                let Some(project_fn_result_type) = &project_fn_info.result_type else {
                     return None;
                 };
-                type_arguments.push(type_argument);
-            }
-            let mut expected_argument_types = project_fn_info.parameter_types.clone();
-            let mut result_type = project_fn_result_type.clone();
-            let mut type_variable_replacements = project_fn_info
-                .type_parameters
-                .iter()
-                .cloned()
-                .zip(type_arguments)
-                .collect();
-            let maybe_first_argument = first_argument_dot
-                .as_ref()
-                .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
-            // TODO(important) compare actual to expected argument count and repeat extraneous and missing arguments
-            for (expected_argument_type, syntax_argument) in
-                expected_argument_types.iter_mut().flatten().zip(
+                let type_argument_count = syntax_type_arguments
+                    .as_ref()
+                    .map(|args| args.types.len())
+                    .unwrap_or(0);
+                if type_argument_count != project_fn_info.type_parameters.len() {
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: format!("incorrect number of type parameters. The project fn has {parameter_count} type {parameter_pluralized}, but you provided {type_argument_count} as arguments.
+Type arguments are provided each wrapped in curly braces after the fn name, like in Buf-empty{{u32}} origin.",
+                            parameter_count = project_fn_info.type_parameters.len(),
+                            parameter_pluralized = if project_fn_info.type_parameters.len() == 1 {
+                                "parameter"
+                            } else {
+                                "parameters"
+                            },
+                        ).into_boxed_str()
+                    });
+                    return None;
+                }
+                let mut type_arguments = Vec::new();
+                for syntax_type_argument in
+                    syntax_type_arguments.iter().flat_map(|args| &args.types)
+                {
+                    let Some(type_argument) = syntax_type_check_not_in_type_alias(
+                        syntax_type_argument,
+                        errors,
+                        type_aliases,
+                        records_used,
+                        choices_used,
+                    ) else {
+                        return None;
+                    };
+                    type_arguments.push(type_argument);
+                }
+                let mut expected_argument_types = project_fn_info.parameter_types.clone();
+                let mut result_type = project_fn_result_type.clone();
+                let mut type_variable_replacements = project_fn_info
+                    .type_parameters
+                    .iter()
+                    .cloned()
+                    .zip(type_arguments)
+                    .collect();
+                let maybe_first_argument = first_argument_dot
+                    .as_ref()
+                    .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
+                // TODO(important) compare actual to expected argument count and repeat extraneous and missing arguments
+                for (expected_argument_type, syntax_argument) in
+                    expected_argument_types.iter_mut().flatten().zip(
+                        maybe_first_argument
+                            .into_iter()
+                            .chain(rest_syntax_arguments),
+                    )
+                {
+                    let Some(checked_argument_type) = syntax_expression_check(
+                        errors,
+                        type_aliases,
+                        project_fns,
+                        expressions,
+                        patterns,
+                        local_variables,
+                        syntax_argument,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
+                        records_used,
+                        choices_used,
+                    ) else {
+                        return None;
+                    };
+                    {
+                        let mut expected_argument_type = expected_argument_type.clone();
+                        type_replace_variables(
+                            &type_variable_replacements,
+                            &mut expected_argument_type,
+                        );
+                        type_collect_variables_that_are_concrete_into(
+                            &mut type_variable_replacements,
+                            &expected_argument_type,
+                            &checked_argument_type,
+                            type_aliases,
+                        );
+                    }
+                    type_replace_variables(&type_variable_replacements, expected_argument_type);
+                    type_replace_variables(&type_variable_replacements, &mut result_type);
+                    if let Some(argument_variable_input_type_diff) =
+                        type_diff(expected_argument_type, &checked_argument_type, type_aliases)
+                    {
+                        place_expression_type_diff_errors(
+                            errors,
+                            syntax_argument,
+                            &argument_variable_input_type_diff,
+                            expressions,
+                            patterns,
+                        );
+                        return None;
+                    }
+                }
+                checked_calls.insert(
+                    name.start,
+                    CheckedCall {
+                        argument_type_variable_replacements: type_variable_replacements,
+                    },
+                );
+                Some(result_type)
+            } else if let Some(checked_local_variable) = local_variables.get_mut(&name.value) {
+                checked_local_variable.used = true;
+                let Some(called_variable_type) = &checked_local_variable.type_ else {
+                    return None;
+                };
+                let Type::Fn {
+                    parameters: expected_argument_types,
+                    result: result_type,
+                } = type_alias_resolve_to_non_alias(called_variable_type, type_aliases)
+                    .into_owned()
+                else {
+                    let mut error_message =
+                        "this variable is called like a function but its type is\n".to_string();
+                    type_format(
+                        &mut error_message,
+                        0,
+                        type_alias_resolve_to_non_alias(called_variable_type, type_aliases)
+                            .as_ref(),
+                    );
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: error_message.into_boxed_str(),
+                    });
+                    return None;
+                };
+                let maybe_first_argument = first_argument_dot
+                    .as_ref()
+                    .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
+                // TODO(important) compare actual to expected argument count and repeat extraneous and missing arguments
+                for (expected_argument_type, syntax_argument) in expected_argument_types.iter().zip(
                     maybe_first_argument
                         .into_iter()
                         .chain(rest_syntax_arguments),
-                )
-            {
-                let Some(checked_argument_type) = syntax_expression_check(
-                    errors,
-                    type_aliases,
-                    project_fns,
-                    expressions,
-                    patterns,
-                    local_variables,
-                    syntax_argument,
-                    checked_calls,
-                    checked_local_fns,
-                    checked_queries,
-                    records_used,
-                    choices_used,
-                ) else {
-                    return None;
-                };
-                {
-                    let mut expected_argument_type = expected_argument_type.clone();
-                    type_replace_variables(
-                        &type_variable_replacements,
-                        &mut expected_argument_type,
-                    );
-                    type_collect_variables_that_are_concrete_into(
-                        &mut type_variable_replacements,
-                        &expected_argument_type,
-                        &checked_argument_type,
-                        type_aliases,
-                    );
-                }
-                type_replace_variables(&type_variable_replacements, expected_argument_type);
-                type_replace_variables(&type_variable_replacements, &mut result_type);
-                if let Some(argument_variable_input_type_diff) =
-                    type_diff(expected_argument_type, &checked_argument_type, type_aliases)
-                {
-                    place_expression_type_diff_errors(
+                ) {
+                    let Some(checked_argument_type) = syntax_expression_check(
                         errors,
-                        syntax_argument,
-                        &argument_variable_input_type_diff,
+                        type_aliases,
+                        project_fns,
                         expressions,
                         patterns,
-                    );
-                    return None;
+                        local_variables,
+                        syntax_argument,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
+                        records_used,
+                        choices_used,
+                    ) else {
+                        return None;
+                    };
+                    if let Some(argument_variable_input_type_diff) =
+                        type_diff(expected_argument_type, &checked_argument_type, type_aliases)
+                    {
+                        place_expression_type_diff_errors(
+                            errors,
+                            syntax_argument,
+                            &argument_variable_input_type_diff,
+                            expressions,
+                            patterns,
+                        );
+                        return None;
+                    }
                 }
+                // TODO this should be removed eventually once not every call expects this to be present
+                checked_calls.insert(
+                    name.start,
+                    CheckedCall {
+                        argument_type_variable_replacements: std::collections::BTreeMap::new(),
+                    },
+                );
+                Some(*result_type)
+            } else {
+                errors.push(ErrorNode {
+                    range: name_range(with_start_position_as_ref(name)),
+                    message: Box::from("unknown function name. No variable, fn in core or in this project exists with this name. Note that a local fn() expression can not refer to any variable from the outside. Otherwise check for typos.")
+                });
+                None
             }
-            checked_calls.insert(
-                name.start,
-                CheckedCall {
-                    argument_type_variable_replacements: type_variable_replacements,
-                },
-            );
-            Some(result_type)
         }
         SyntaxExpression::Variant {
             open_bracket_start,
@@ -7748,6 +7830,8 @@ If there should only ever by one variant, using a record with a single field is 
             };
             for (parameter_introduced_variable_name, parameter_introduced_variable_origin) in
                 parameter_introduced_variables
+                    .iter()
+                    .filter(|(_, var)| !var.used)
             {
                 errors.push(error_introduced_pattern_variable_is_unused(
                     parameter_introduced_variable_origin.origin_start,
@@ -7958,16 +8042,15 @@ If there should only ever by one variant, using a record with a single field is 
             ) else {
                 return None;
             };
-            for (case0_pattern_introduced_variable, case0_pattern_introduced_variable_origin) in
+            for (pattern_introduced_variable, pattern_introduced_variable_origin) in
                 pattern_introduced_variables
             {
-                if local_variables
-                    .remove(case0_pattern_introduced_variable)
-                    .is_some()
+                if let Some(CheckedLocalVariable { used: false, .. }) =
+                    local_variables.remove(pattern_introduced_variable)
                 {
                     errors.push(error_introduced_pattern_variable_is_unused(
-                        case0_pattern_introduced_variable_origin.origin_start,
-                        case0_pattern_introduced_variable,
+                        pattern_introduced_variable_origin.origin_start,
+                        pattern_introduced_variable,
                     ));
                 }
             }
@@ -8071,8 +8154,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 patterns,
             );
 
-            let mut case0_result_local_variables = local_variables.clone();
-            case0_result_local_variables.extend(
+            local_variables.extend(
                 case0_pattern_introduced_variables
                     .iter()
                     .map(|(binding, info)| (*binding, info.clone())),
@@ -8083,7 +8165,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 project_fns,
                 expressions,
                 patterns,
-                &mut case0_result_local_variables,
+                local_variables,
                 case0_result,
                 checked_calls,
                 checked_local_fns,
@@ -8096,9 +8178,8 @@ If you want to handle cases in separate branches, use an if like  if option { [y
             for (case0_pattern_introduced_variable, case0_pattern_introduced_variable_origin) in
                 case0_pattern_introduced_variables
             {
-                if case0_result_local_variables
-                    .remove(case0_pattern_introduced_variable)
-                    .is_some()
+                if let Some(CheckedLocalVariable { used: false, .. }) =
+                    local_variables.remove(case0_pattern_introduced_variable)
                 {
                     errors.push(error_introduced_pattern_variable_is_unused(
                         case0_pattern_introduced_variable_origin.origin_start,
@@ -8149,8 +8230,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     });
                     continue 'checking_case1_up;
                 };
-                let mut case_local_variables = local_variables.clone();
-                case_local_variables.extend(
+                local_variables.extend(
                     case_pattern_introduced_variables
                         .iter()
                         .map(|(binding, info)| (*binding, info.clone())),
@@ -8161,7 +8241,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     project_fns,
                     expressions,
                     patterns,
-                    &mut case_local_variables,
+                    local_variables,
                     case_result,
                     checked_calls,
                     checked_local_fns,
@@ -8172,57 +8252,16 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     invalid_case_indexes.push(case_index);
                     continue 'checking_case1_up;
                 };
-                for (case_pattern_introduced_variable, case0_pattern_introduced_variable_origin) in
+                for (case_pattern_introduced_variable, case_pattern_introduced_variable_origin) in
                     case_pattern_introduced_variables
                 {
-                    if case_local_variables
-                        .remove(case_pattern_introduced_variable)
-                        .is_some()
+                    if let Some(CheckedLocalVariable { used: false, .. }) =
+                        local_variables.remove(case_pattern_introduced_variable)
                     {
                         errors.push(error_introduced_pattern_variable_is_unused(
-                            case0_pattern_introduced_variable_origin.origin_start,
+                            case_pattern_introduced_variable_origin.origin_start,
                             case_pattern_introduced_variable,
                         ));
-                    }
-                }
-                for (pattern_variable, pattern_variable_origin) in local_variables.iter() {
-                    match (
-                        case0_result_local_variables.contains_key(pattern_variable),
-                        case_local_variables.contains_key(pattern_variable),
-                    ) {
-                        (false, false) => {
-                            // both cases use this pattern variable
-                        }
-                        (true, true) => {
-                            // neither case uses this pattern variable
-                        }
-                        (true, false) => {
-                            // only this case uses this pattern variable, not the first case
-                            errors.push(ErrorNode {
-                                range: name_range(WithStartPosition { value: pattern_variable, start: pattern_variable_origin.origin_start }),
-                                message: format!("this pattern variable is not used in the result of the first case starting at {}.
-This is problematic because accidentally not handling a value in one branch could lead to leaked memory (or worse).
-If you do not need to use this variable in that case, use any of the -rid functions to scrap it, like ? U32-rid your-variable [.] ..your existing case result..",
-                                    position_to_string(expression_start(case0_result, expressions))
-                                ).into_boxed_str()
-                            });
-                            // pretend the first case does use this pattern variable
-                            // so that this variable is not reported as unused twice
-                            case0_result_local_variables.remove(pattern_variable);
-                        }
-                        (false, true) => {
-                            // only the first case uses this pattern variable, not this case
-                            errors.push(ErrorNode {
-                                range: name_range(WithStartPosition { value: pattern_variable, start: pattern_variable_origin.origin_start }),
-                                message: format!(
-                                    "this pattern variable is not used in the result of the {} case starting at {}.
-This is problematic because accidentally not handling a value in one branch could lead to leaked memory (or worse).
-If you do not need to use this variable in that case, use any of the -rid functions to scrap it, like ? U32-rid your-variable [.] ..your existing case result..",
-                                    index_to_th(case_index),
-                                    position_to_string(expression_start(case_result, expressions))
-                                ).into_boxed_str()
-                            });
-                        }
                     }
                 }
                 if let Some(match_result_case_result_type_diff) = type_diff(
@@ -8264,7 +8303,6 @@ If not, add patterns for the cases above"
                         ).into_boxed_str(),
                 });
             }
-            *local_variables = case0_result_local_variables;
             checked_queries.insert(
                 *if_keyword_start,
                 CheckedQuery {
@@ -12395,6 +12433,7 @@ pub enum SyntaxSymbol<'a, Expressions, Patterns> {
         scope: &'a SyntaxProjectItem<Expressions, Patterns>,
     },
     VariantOrUnknown(WithStartPosition<&'a Name>),
+    // TODO merge with variableOrUnknown
     ProjectFnOrUnknown {
         name: WithStartPosition<&'a Name>,
         construct_info: ConstructInfo,
@@ -12421,6 +12460,15 @@ pub struct LocalVariableSymbolOrigin<'a, Expressions, Patterns> {
     pub start: lsp_types::Position,
     pub scope: Option<&'a SyntaxExpression<Expressions, Patterns>>,
     pub type_: Option<Type>,
+}
+impl<'a, Expressions, Patterns> Clone for LocalVariableSymbolOrigin<'a, Expressions, Patterns> {
+    fn clone(&self) -> Self {
+        Self {
+            start: self.start,
+            scope: self.scope,
+            type_: self.type_.clone(),
+        }
+    }
 }
 pub fn project_symbol_at_position<'a, Expressions, Patterns>(
     project: &'a SyntaxProject<Expressions, Patterns>,
@@ -15295,17 +15343,6 @@ fn position_add_characters(
 }
 fn position_to_string(lsp_position: lsp_types::Position) -> String {
     format!("{}:{}", lsp_position.line + 1, lsp_position.character + 1)
-}
-fn index_to_th(index: usize) -> String {
-    let n = index + 1;
-    let last_digit = n % 10;
-    let th = match last_digit {
-        1 => "st",
-        2 => "nd",
-        3 => "rd",
-        _ => "th",
-    };
-    format!("{n}{th}")
 }
 
 mod strongly_connected_components {
