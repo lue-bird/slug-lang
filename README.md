@@ -218,7 +218,6 @@ cargo install --offline --debug --path . slug
 - `.` syntax for piping the first argument
 
 ## TODO
-- allow local variables to be used multiple times
 - clear up: should local variables be able to shadow other local variables?
   It probably makes things harder rather than easier
 - fix the many bugs

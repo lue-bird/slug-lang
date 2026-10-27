@@ -12199,14 +12199,21 @@ fn syntax_pattern_format<Patterns>(
             fields,
             closed_curly_start: _,
         } => {
-            // TODO
             formatted.push('{');
-            let line_span = range_line_span(pattern_range(pattern, patterns));
-            for field in fields {
-                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                syntax_pattern_record_field_format(formatted, indent, patterns, field);
+            if let Some((field0, field1_up)) = fields.split_first() {
+                let line_span = range_line_span(pattern_range(pattern, patterns));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                syntax_pattern_record_field_format(formatted, indent, patterns, field0);
+                for field in field1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, indent);
+                    syntax_pattern_record_field_format(formatted, indent, patterns, field);
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
             }
-            space_or_linebreak_indented_into(formatted, line_span, indent);
             formatted.push('}');
         }
     }
@@ -12433,24 +12440,22 @@ pub enum SyntaxSymbol<'a, Expressions, Patterns> {
         scope: &'a SyntaxProjectItem<Expressions, Patterns>,
     },
     VariantOrUnknown(WithStartPosition<&'a Name>),
-    // TODO merge with variableOrUnknown
-    ProjectFnOrUnknown {
+    ProjectFnOrVariableUnknown {
         name: WithStartPosition<&'a Name>,
         construct_info: ConstructInfo,
+        local_variables: std::collections::HashMap<
+            &'a Name,
+            LocalVariableSymbolOrigin<'a, Expressions, Patterns>,
+        >,
     },
     LocalVariable {
         name: &'a Name,
         use_start: lsp_types::Position,
         origin: LocalVariableSymbolOrigin<'a, Expressions, Patterns>,
     },
-    VariableUnknown {
-        local_variables: std::collections::HashMap<
-            &'a Name,
-            LocalVariableSymbolOrigin<'a, Expressions, Patterns>,
-        >,
-    },
 }
 pub enum ConstructInfo {
+    // these are a little weird. Maybe there should also be MaybeExpectingArgument or something?
     NotExpectingArgument,
     ArgumentMissing,
     ArgumentExists,
@@ -12550,9 +12555,10 @@ pub fn project_symbol_at_position<'a, Expressions, Patterns>(
             if let Some(name) = name
                 && range_includes_position(name_range(with_start_position_as_ref(name)), position)
             {
-                return Some(SyntaxSymbol::ProjectFnOrUnknown {
+                return Some(SyntaxSymbol::ProjectFnOrVariableUnknown {
                     name: with_start_position_as_ref(name),
                     construct_info: ConstructInfo::Declaration,
+                    local_variables: std::collections::HashMap::new(),
                 });
             }
             type_parameters
@@ -12669,7 +12675,9 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
                     use_start: name.start,
                     origin: local_variable,
                 })
-                .unwrap_or_else(|| SyntaxSymbol::VariableUnknown {
+                .unwrap_or_else(|| SyntaxSymbol::ProjectFnOrVariableUnknown {
+                    name: with_start_position_as_ref(name),
+                    construct_info: ConstructInfo::NotExpectingArgument,
                     local_variables: std::mem::take(local_variables),
                 }),
         ),
@@ -12682,14 +12690,25 @@ fn expression_symbol_at_position<'a, Expressions, Patterns>(
             closed_paren_start: _,
         } => {
             if range_includes_position(name_range(with_start_position_as_ref(name)), position) {
-                return Some(SyntaxSymbol::ProjectFnOrUnknown {
-                    name: with_start_position_as_ref(name),
-                    construct_info: if first_argument_dot.is_some() || !arguments.is_empty() {
-                        ConstructInfo::ArgumentExists
-                    } else {
-                        ConstructInfo::ArgumentMissing
-                    },
-                });
+                return Some(
+                    local_variables
+                        .remove(&name.value)
+                        .map(|local_variable| SyntaxSymbol::LocalVariable {
+                            name: &name.value,
+                            use_start: name.start,
+                            origin: local_variable,
+                        })
+                        .unwrap_or_else(|| SyntaxSymbol::ProjectFnOrVariableUnknown {
+                            name: with_start_position_as_ref(name),
+                            construct_info: if first_argument_dot.is_some() || !arguments.is_empty()
+                            {
+                                ConstructInfo::ArgumentExists
+                            } else {
+                                ConstructInfo::ArgumentMissing
+                            },
+                            local_variables: std::mem::take(local_variables),
+                        }),
+                );
             }
             type_arguments
                 .iter()
@@ -13469,9 +13488,10 @@ pub fn syntax_project_symbol_origin_range<Expressions, Patterns>(
             SyntaxProjectItem::Comments(_) | SyntaxProjectItem::Unrecognized { .. } => None,
         },
         SyntaxSymbol::VariantOrUnknown(_) => None,
-        SyntaxSymbol::ProjectFnOrUnknown {
+        SyntaxSymbol::ProjectFnOrVariableUnknown {
             name: symbol_name,
             construct_info: _,
+            local_variables: _,
         } => project.items.iter().find_map(|item| match item {
             SyntaxProjectItem::Fn {
                 name: Some(fn_name),
@@ -13489,7 +13509,6 @@ pub fn syntax_project_symbol_origin_range<Expressions, Patterns>(
             value: name,
             start: origin.start,
         })),
-        SyntaxSymbol::VariableUnknown { .. } => None,
     }
 }
 /// resulting uses do not include the origin. For that, use syntax_project_symbol_origin_range
@@ -13661,7 +13680,7 @@ pub fn syntax_project_symbol_uses<Expressions, Patterns>(
                 }
             }
         }
-        SyntaxSymbol::VariantOrUnknown(_) | SyntaxSymbol::ProjectFnOrUnknown { .. } => {
+        SyntaxSymbol::VariantOrUnknown(_) | SyntaxSymbol::ProjectFnOrVariableUnknown { .. } => {
             for item in &project.items {
                 match item {
                     SyntaxProjectItem::Fn {
@@ -13711,7 +13730,6 @@ pub fn syntax_project_symbol_uses<Expressions, Patterns>(
                 }
             }
         }
-        SyntaxSymbol::VariableUnknown { .. } => {}
     }
     uses
 }
@@ -13895,8 +13913,7 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
         SyntaxExpression::Variable(name) => match symbol {
             SyntaxSymbol::TypeVariable { .. }
             | SyntaxSymbol::VariantOrUnknown(_)
-            | SyntaxSymbol::ProjectFnOrUnknown { .. }
-            | SyntaxSymbol::VariableUnknown { .. }
+            | SyntaxSymbol::ProjectFnOrVariableUnknown { .. }
             | SyntaxSymbol::Origin { .. } => {}
             SyntaxSymbol::ProjectTypeOrUnknown {
                 name:
@@ -13932,8 +13949,7 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                 SyntaxSymbol::TypeVariable { .. }
                 | SyntaxSymbol::Origin { .. }
                 | SyntaxSymbol::ProjectTypeOrUnknown { .. }
-                | SyntaxSymbol::VariantOrUnknown(_)
-                | SyntaxSymbol::VariableUnknown { .. } => {}
+                | SyntaxSymbol::VariantOrUnknown(_) => {}
                 SyntaxSymbol::LocalVariable {
                     name: symbol_name, ..
                 } => {
@@ -13941,13 +13957,14 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                         uses.push(name_range(with_start_position_as_ref(name)));
                     }
                 }
-                SyntaxSymbol::ProjectFnOrUnknown {
+                SyntaxSymbol::ProjectFnOrVariableUnknown {
                     name:
                         WithStartPosition {
                             start: _,
                             value: symbol_name,
                         },
                     construct_info: _,
+                    local_variables: _,
                 } => {
                     if *symbol_name == &name.value && !local_variables.contains(&name.value) {
                         uses.push(name_range(with_start_position_as_ref(name)));
@@ -14020,8 +14037,7 @@ fn syntax_expression_symbol_uses_into<Expressions, Patterns>(
                 | SyntaxSymbol::Origin { .. }
                 | SyntaxSymbol::TypeVariable { .. }
                 | SyntaxSymbol::VariantOrUnknown(_)
-                | SyntaxSymbol::ProjectFnOrUnknown { .. }
-                | SyntaxSymbol::VariableUnknown { .. } => {}
+                | SyntaxSymbol::ProjectFnOrVariableUnknown { .. } => {}
             }
             for parameter in parameters {
                 syntax_pattern_symbol_uses_into(uses, parameter, symbol, patterns);

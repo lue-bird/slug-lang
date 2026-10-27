@@ -1015,9 +1015,10 @@ fn respond_to_hover<Expressions, Patterns>(
             }),
         }),
         slug::SyntaxSymbol::VariantOrUnknown(_) => None,
-        slug::SyntaxSymbol::ProjectFnOrUnknown {
+        slug::SyntaxSymbol::ProjectFnOrVariableUnknown {
             name: symbol_name,
             construct_info: _,
+            local_variables: _,
         } => project_state.fns.iter().find_map(|(fn_name, fn_info)| {
             if fn_name == symbol_name.value {
                 let formatted = present_project_fn_with_complete_type_markdown(fn_name, fn_info);
@@ -1032,7 +1033,6 @@ fn respond_to_hover<Expressions, Patterns>(
                 None
             }
         }),
-        slug::SyntaxSymbol::VariableUnknown { .. } => None,
         slug::SyntaxSymbol::LocalVariable {
             name,
             use_start,
@@ -1134,9 +1134,10 @@ fn respond_to_prepare_rename<Expressions, Patterns>(
             end: lsp_position_add_characters(use_underscore_start, (name.len() + 1) as u32),
         }),
         slug::SyntaxSymbol::VariantOrUnknown(name) => Some(slug::name_range(name)),
-        slug::SyntaxSymbol::ProjectFnOrUnknown {
+        slug::SyntaxSymbol::ProjectFnOrVariableUnknown {
             name,
             construct_info: _,
+            local_variables: _,
         } => Some(slug::name_range(name)),
         slug::SyntaxSymbol::LocalVariable {
             name,
@@ -1146,7 +1147,6 @@ fn respond_to_prepare_rename<Expressions, Patterns>(
             value: name,
             start: use_start,
         })),
-        slug::SyntaxSymbol::VariableUnknown { .. } => None,
     }) else {
         return None;
     };
@@ -1490,9 +1490,10 @@ fn respond_to_completion<Expressions, Patterns>(
             // otherwise suggest all known names and add {} before it on completion
             None
         }
-        slug::SyntaxSymbol::ProjectFnOrUnknown {
+        slug::SyntaxSymbol::ProjectFnOrVariableUnknown {
             name: _,
             construct_info,
+            local_variables,
         } => match construct_info {
             slug::ConstructInfo::Declaration => None,
             slug::ConstructInfo::NotExpectingArgument => {
@@ -1516,6 +1517,18 @@ fn respond_to_completion<Expressions, Patterns>(
                                 None
                             }
                         })
+                        .chain(local_variables.into_iter().map(
+                            |(local_variable, local_variable_origin)| lsp_types::CompletionItem {
+                                label: local_variable.to_string(),
+                                kind: Some(lsp_types::CompletionItemKind::Variable),
+                                documentation: Some(lsp_documentation_markdown(
+                                    present_local_variable_markdown(
+                                        local_variable_origin.type_.as_ref(),
+                                    ),
+                                )),
+                                ..lsp_types::CompletionItem::default()
+                            },
+                        ))
                         .collect(),
                 ))
             }
@@ -1555,6 +1568,18 @@ fn respond_to_completion<Expressions, Patterns>(
                                 ..lsp_types::CompletionItem::default()
                             }
                         })
+                        .chain(local_variables.into_iter().map(
+                            |(local_variable, local_variable_origin)| lsp_types::CompletionItem {
+                                label: local_variable.to_string(),
+                                kind: Some(lsp_types::CompletionItemKind::Variable),
+                                documentation: Some(lsp_documentation_markdown(
+                                    present_local_variable_markdown(
+                                        local_variable_origin.type_.as_ref(),
+                                    ),
+                                )),
+                                ..lsp_types::CompletionItem::default()
+                            },
+                        ))
                         .collect(),
                 ))
             }
@@ -1571,58 +1596,22 @@ fn respond_to_completion<Expressions, Patterns>(
                             )),
                             ..lsp_types::CompletionItem::default()
                         })
+                        .chain(local_variables.into_iter().map(
+                            |(local_variable, local_variable_origin)| lsp_types::CompletionItem {
+                                label: local_variable.to_string(),
+                                kind: Some(lsp_types::CompletionItemKind::Variable),
+                                documentation: Some(lsp_documentation_markdown(
+                                    present_local_variable_markdown(
+                                        local_variable_origin.type_.as_ref(),
+                                    ),
+                                )),
+                                ..lsp_types::CompletionItem::default()
+                            },
+                        ))
                         .collect(),
                 ))
             }
         },
-        slug::SyntaxSymbol::VariableUnknown { local_variables } => {
-            Some(lsp_types::CompletionResponse::CompletionItemList(
-                local_variables
-                    .into_iter()
-                    .map(
-                        |(local_variable, local_variable_origin)| lsp_types::CompletionItem {
-                            label: local_variable.to_string(),
-                            kind: Some(lsp_types::CompletionItemKind::Variable),
-                            documentation: Some(lsp_documentation_markdown(
-                                present_local_variable_markdown(
-                                    local_variable_origin.type_.as_ref(),
-                                ),
-                            )),
-                            ..lsp_types::CompletionItem::default()
-                        },
-                    )
-                    .chain(project_state.fns.iter().map(|(fn_name, fn_info)| {
-                        let mut snippet = String::new();
-                        snippet.push_str(fn_name);
-                        snippet.push_str("<${");
-                        use std::fmt::Write as _;
-                        for (type_parameter_index, type_parameter) in
-                            fn_info.type_parameters.iter().enumerate()
-                        {
-                            snippet.push_str("${");
-                            let _ = write!(snippet, "{}", type_parameter_index);
-                            snippet.push_str(":_");
-                            snippet.push_str(type_parameter);
-                            snippet.push('}');
-                            if type_parameter_index >= 1 {
-                                snippet.push(' ');
-                            }
-                        }
-                        snippet.push_str(">()");
-                        lsp_types::CompletionItem {
-                            label: fn_name.to_string(),
-                            kind: Some(lsp_types::CompletionItemKind::Function),
-                            documentation: Some(lsp_documentation_markdown(
-                                present_project_fn_with_complete_type_markdown(fn_name, fn_info),
-                            )),
-                            insert_text_format: Some(lsp_types::InsertTextFormat::Snippet),
-                            insert_text: Some(snippet),
-                            ..lsp_types::CompletionItem::default()
-                        }
-                    }))
-                    .collect(),
-            ))
-        }
         slug::SyntaxSymbol::Origin { .. } => None,
         slug::SyntaxSymbol::LocalVariable {
             name: _,
