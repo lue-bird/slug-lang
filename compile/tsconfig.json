@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "lib": ["es2020", "dom"],
+    "lib": ["ES2024", "dom"],
     "checkJs": true,
     "allowJs": true,
     "noEmit": true,

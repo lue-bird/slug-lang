@@ -6102,7 +6102,7 @@ fn project_type_alias_to_js(
     output.push_str(" @typedef {");
     type_to_js(output, aliased_type);
     output.push_str("} ");
-    output.push_str(&name_to_uppercase_js(name));
+    output.push_str(&name_to_uppercase_js_segment(name));
     output.push_str("\n*/\n\n");
 }
 fn syntax_project_fn_to_js<Expressions, Patterns>(
@@ -6145,18 +6145,15 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
             reachable_bufs.insert(buf, (parameter_index, path));
         });
     }
-    // TODO do not include reachable bufs
-    if implicit_bufs.len() == 1
-        && let Some(implicit_buf) = implicit_bufs.iter().next()
-    {
-        output.push_str("@param {Buf<");
-        type_to_js(output, &implicit_buf.origin);
-        output.push_str(", ");
-        type_to_js(output, &implicit_buf.item);
-        output.push_str(">} ");
-        type_buf_js_variable_name(output, implicit_buf);
+    for (parameter_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
+        output.push_str("@param {");
+        type_to_js(output, parameter_type);
+        output.push_str("} $");
+        use std::fmt::Write as _;
+        _ = write!(output, "{}", parameter_index);
         output.push('\n');
-    } else if implicit_bufs.len() >= 2 {
+    }
+    if implicit_bufs.len() >= 1 {
         output.push_str("@param {{");
         for implicit_buf in &implicit_bufs {
             type_buf_js_variable_name(output, implicit_buf);
@@ -6166,15 +6163,7 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
             type_to_js(output, &implicit_buf.item);
             output.push_str(">, ");
         }
-        output.push_str("}} $implicit_bufs$\n");
-    }
-    for (parameter_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
-        output.push_str("@param {");
-        type_to_js(output, parameter_type);
-        output.push_str("} $");
-        use std::fmt::Write as _;
-        _ = write!(output, "{}", parameter_index);
-        output.push('\n');
+        output.push_str("}} $\n");
     }
 
     output.push_str("@returns {");
@@ -6184,20 +6173,14 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
     output.push_str("export function ");
     output.push_str(&name_to_lowercase_js(name));
     output.push('(');
-    // TODO do not include reachable bufs
-    if implicit_bufs.len() == 1
-        && let Some(implicit_buf) = implicit_bufs.iter().next()
-    {
-        type_buf_js_variable_name(output, implicit_buf);
-        output.push_str(", ");
-    } else if implicit_bufs.len() >= 2 {
-        output.push_str("$implicit_bufs$, ");
-    }
     for (parameter_index, _) in parameter_types.iter().flatten().enumerate() {
         output.push('$');
         use std::fmt::Write as _;
         _ = write!(output, "{}", parameter_index);
         output.push_str(", ");
+    }
+    if implicit_bufs.len() >= 1 {
+        output.push('$');
     }
     output.push_str(") {");
     let mut parameter_introduced_variables = std::collections::HashMap::new();
@@ -6289,7 +6272,7 @@ fn type_to_js(output: &mut String, type_: &Type) {
             }
         },
         Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
-            output.push_str(&name_to_uppercase_js(name));
+            output.push_str(&name_to_uppercase_js_segment(name));
             if let Some((argument0, argument1_up)) = arguments.split_first() {
                 output.push('<');
                 type_to_js(output, argument0);
@@ -6561,14 +6544,14 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             name,
             type_arguments,
             open_paren_start: _,
-            arguments_rest: rest_arguments,
+            arguments_rest,
             closed_paren_start: _,
         } => {
             // TODO call local variables instead when available and no type_arguments
             let maybe_first_argument = first_argument_dot
                 .as_ref()
                 .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
-            for argument in maybe_first_argument.into_iter().chain(rest_arguments) {
+            for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
                 // not start because the first argument start matches the full function start
                 let argument_scope_start = expression_end(argument, expressions, patterns);
                 output.push_str("let ");
@@ -6614,51 +6597,44 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                             .zip(type_arguments),
                     )
                     .collect::<std::collections::BTreeMap<Name, Type>>();
-                let parameters = project_fn
-                    .parameter_types
-                    .iter()
-                    .map(|parameter_type| {
-                        parameter_type.clone().map(|mut parameter_type| {
-                            type_replace_variables(
-                                &type_variables_to_substitute,
-                                &mut parameter_type,
-                            );
-                            parameter_type
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let mut result = project_fn.result_type.clone();
-                if let Some(result) = &mut result {
-                    type_replace_variables(&type_variables_to_substitute, result);
-                }
-                let implicit_bufs =
-                    function_signature_implicit_bufs(&parameters, result.as_ref(), type_aliases);
-                let mut reachable_bufs = std::collections::HashMap::new();
-                for (parameter_index, parameter) in parameters.iter().flatten().enumerate() {
-                    type_reachable_bufs(parameter, vec![], type_aliases, &mut |buf, path| {
-                        reachable_bufs.insert(buf, (parameter_index, path));
-                    });
-                }
-                // TODO do not include reachable bufs
-                if implicit_bufs.len() == 1
-                    && let Some(implicit_buf) = implicit_bufs.iter().next()
-                {
-                    type_buf_js_variable_name(output, implicit_buf);
-                    output.push_str(", ");
-                } else if implicit_bufs.len() >= 2 {
-                    output.push('{');
-                    for implicit_buf in &implicit_bufs {
-                        type_buf_js_variable_name(output, implicit_buf);
-                        output.push_str(", ");
-                    }
-                    output.push_str("}, ");
-                }
-                for argument in maybe_first_argument.into_iter().chain(rest_arguments) {
+                let implicit_bufs = function_signature_implicit_bufs(
+                    &project_fn.parameter_types,
+                    project_fn.result_type.as_ref(),
+                    type_aliases,
+                );
+                for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
                     js_scope_result_variable(
                         output,
                         expression_end(argument, expressions, patterns),
                     );
                     output.push_str(", ");
+                }
+                if implicit_bufs.len() >= 1 {
+                    output.push('{');
+                    for implicit_buf in &implicit_bufs {
+                        type_buf_js_variable_name(output, implicit_buf);
+                        output.push_str(": $.");
+                        let mut specialized_implicit_buf_origin = implicit_buf.origin.clone();
+                        type_replace_variables(
+                            &type_variables_to_substitute,
+                            &mut specialized_implicit_buf_origin,
+                        );
+                        let mut specialized_implicit_buf_item = implicit_buf.item.clone();
+                        type_replace_variables(
+                            &type_variables_to_substitute,
+                            &mut specialized_implicit_buf_item,
+                        );
+                        type_buf_js_variable_name(
+                            output,
+                            &TypeBuf {
+                                origin: specialized_implicit_buf_origin,
+                                item: specialized_implicit_buf_item,
+                            },
+                        );
+                        output.push_str(", ");
+                    }
+                    // TODO add generic clone and drop functions
+                    output.push_str("}");
                 }
                 output.push_str(");\n");
             }
@@ -7004,20 +6980,16 @@ fn js_incomplete_statement() {
 }
 const record_empty_js_type_name: &str = "void";
 const choice_empty_js_type_name: &str = "never";
-fn name_to_uppercase_js(name: &str) -> String {
+fn name_to_uppercase_local_js(output: &mut String, name: &str) {
+    output.push('$');
+    output.push_str(&name_to_uppercase_js_segment(name));
+}
+pub fn name_to_uppercase_js_segment(name: &str) -> String {
     let mut sanitized: String = name.replace("-", "_");
     if let Some(first) = sanitized.get_mut(0..=0) {
         first.make_ascii_uppercase();
     }
     sanitized
-}
-fn name_to_uppercase_local_js(output: &mut String, name: &str) {
-    let mut sanitized: String = name.replace("-", "_");
-    if let Some(first) = sanitized.get_mut(0..=0) {
-        first.make_ascii_uppercase();
-    }
-    output.push('$');
-    output.push_str(&sanitized);
 }
 pub fn name_to_lowercase_js_variable_segment(name: &str) -> String {
     let mut sanitized: String = name.replace("-", "_");
@@ -7068,37 +7040,35 @@ fn origin_name_to_uppercase_js(output: &mut String, name: &str) {
     output.push_str("$origin");
 }
 fn type_buf_js_variable_name(output: &mut String, type_buf: &TypeBuf) {
-    output.push_str("$buf$");
+    output.push_str("buf");
     type_js_variable_name_segment(output, &type_buf.origin);
-    output.push_str("$item$");
     type_js_variable_name_segment(output, &type_buf.item);
 }
 fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
     match type_ {
         Type::Variable(variable) => {
-            output.push_str("variable_");
-            output.push_str(&name_to_lowercase_js_variable_segment(variable));
+            output.push('$');
+            output.push_str(&name_to_uppercase_js_segment(variable));
         }
         Type::Origin(origin_name) => {
-            output.push_str("origin_");
+            output.push_str("$origin");
             output.push_str(&name_to_lowercase_js_variable_segment(origin_name));
         }
         Type::Tuple(parts) => {
-            output.push_str("tuple");
+            output.push_str("$tuple");
             for part in parts {
                 output.push_str("$_");
                 type_js_variable_name_segment(output, part);
             }
-            output.push_str("$tuple_end");
         }
         Type::Record(fields) => {
-            output.push_str("record");
+            output.push_str("$record");
             for field in fields {
                 output.push_str("$_");
                 output.push_str(&name_to_lowercase_js_variable_segment(&field.name));
                 type_js_variable_name_segment(output, &field.value);
             }
-            output.push_str("$record_end");
+            output.push_str("$end");
         }
         Type::Choice(variants) => {
             output.push_str("$choice");
@@ -7107,34 +7077,30 @@ fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
                 output.push_str(&name_to_lowercase_js_variable_segment(&variant.name));
                 type_js_variable_name_segment(output, &variant.value);
             }
-            output.push_str("$choice_end");
         }
         Type::CoreConstruct { name, arguments } => {
-            output.push_str("construct_");
+            output.push_str("$ty");
             output.push_str(&name_to_lowercase_js_variable_segment(name));
             for argument in arguments {
                 output.push_str("$_");
                 type_js_variable_name_segment(output, argument);
             }
-            output.push_str("$construct_end");
         }
         Type::Alias { name, arguments } => {
             // should only run for recursive type aliases at this point
-            output.push_str("alias_");
+            output.push_str("$alias");
             output.push_str(&name_to_lowercase_js_variable_segment(name));
             for argument in arguments {
                 output.push_str("$_");
                 type_js_variable_name_segment(output, argument);
             }
-            output.push_str("$alias_end");
         }
         Type::Fn { parameters, result } => {
-            output.push_str("fn");
+            output.push_str("$fn");
             for parameter in parameters {
                 output.push_str("$_");
                 type_js_variable_name_segment(output, parameter);
             }
-            output.push_str("$result_");
             type_js_variable_name_segment(output, result);
         }
     }
@@ -10240,7 +10206,7 @@ For example, the second item in a buf is at index 1",
             CoreFnInfo {
                 name: "span-start",
                 documentation: "Split into the first slot and span after.
-To join disconnected slots and spans back together, use helpers like `buf-span-add-own-opt-span`.
+To join disconnected slots and spans back together, use helpers like `span-add-own-opt-span`.
 Note that to only read the start index you can directly call `span-start-index`",
                 type_parameters: vec![],
                 parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
@@ -10304,7 +10270,7 @@ See also `span-start-of-length-positive`, `span-end`.",
             CoreFnInfo {
                 name: "span-step",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line.
-A less powerful version that preserves the span is `buf-span-step`",
+A less powerful version that preserves the span is `span-step`",
                 type_parameters: vec![],
                 parameters: vec![
                     type_span(type_variable("Origin"), type_variable("Item")),
@@ -10323,7 +10289,7 @@ A less powerful version that preserves the span is `buf-span-step`",
             CoreFnInfo {
                 name: "opt-span-step",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line.
-A less powerful version that preserves the span is `buf-opt-span-step`",
+A less powerful version that preserves the span is `opt-span-step`",
                 type_parameters: vec![],
                 parameters: vec![
                     type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
@@ -10433,7 +10399,7 @@ Note that `.rest` does not include any slot given to the step function, even the
             CoreFnInfo {
                 name: "buf-empty",
                 documentation: "Create an empty buf.
-To modify it, use `buf-pre-allocate-at-least`, `buf-add`, `buf-add-unset` etc.",
+To modify it, use `buf-pre-allocate-at-least`, `add`, `buf-add-unset` etc.",
                 type_parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
                 parameters: vec![],
                 result: type_buf(type_variable("Origin"), type_variable("Item")),
@@ -10486,26 +10452,26 @@ You may also use it to adjust memory usage after `buf-reuse` when the given `Uns
                 result: type_empty,
             },
             CoreFnInfo {
-                name: "buf-insert",
+                name: "insert",
                 documentation: "Add a new item into the `buf` and keep a slot to it,
 reusing unset space closest to the start of the `buf` when available.
-Use `buf-add` if you don't care about reuse.
-Use `buf-set-or-insert` if you already know of an index that's likely unset",
+Use `add` if you don't care about reuse.
+Use `set-or-insert` if you already know of an index that's likely unset",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_variable("Item")],
                 result: type_slot(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
-                name: "buf-set-or-insert",
+                name: "set-or-insert",
                 documentation: "Add a new item into the `buf`
 a a specific index (starting at 0 for the first item) and keep a slot to it.
 If the given index is already occupied, chooses an unset index closest to the start of the `buf` when available.
 
 You can use this to more cheaply return temporarily removed items to their original spots.
 `span-start-index` is also often useful here.
-Note that `buf-item-step`, `buf-swap` etc. will be enough to fulfill most of the same purposes without indexes flying about.
+Note that `item-step`, `swap` etc. will be enough to fulfill most of the same purposes without indexes flying about.
 
-Use `buf-add` if you don't care about reuse.",
+Use `add` if you don't care about reuse.",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![
                     type_u32,
@@ -10514,30 +10480,30 @@ Use `buf-add` if you don't care about reuse.",
                 result: type_slot(type_variable("Origin"), type_variable("Item")),
             },
             CoreFnInfo {
-                name: "buf-add",
+                name: "add",
                 documentation: "Add a new item to the end of the `buf` and keep a slot to it without trying to reuse unset slots.
-Can be faster than `buf-insert` when you expect no unset space or when all the storage gets scrapped soon anyway.",
+Can be faster than `insert` when you expect no unset space or when all the storage gets scrapped soon anyway.",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_variable("Item")],
                 result: type_slot(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-add-str-chars",
+                name: "add-str-chars",
                 documentation: "Attach the chars in a given `str` to the end of the `buf` and keep a span to it without trying to reuse unset slots.
-Convenient equivalent to `buf-opt-span-add-str-chars` with an empty span.",
+Convenient equivalent to `opt-span-add-str-chars` with an empty span.",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_str],
                 result: type_span(type_variable("Origin"), type_char),
             },
             CoreFnInfo {
-                name: "buf-remove",
-                documentation: "Unset and retrieve an item from the `buf` at a given slot (the inverse of `buf-insert`/`buf-add`)",
+                name: "item",
+                documentation: "Retrieve an item from the `buf` at a given slot (the inverse of `insert`/`add`)",
                 type_parameters: vec![],
                 parameters: vec![type_slot(type_variable("Origin"), type_variable("Item"))],
                 result: type_variable("Item"),
             },
             CoreFnInfo {
-                name: "buf-swap",
+                name: "swap",
                 documentation: "Replace the item at the first given slot with the item at the second given slot and the other way around.
 So after this operation, the first slot will point to the item originally behind the second slot and the other way around.
 
@@ -10555,9 +10521,9 @@ then remove the last slot with the item from the original certain index.
                 result: type_empty
             },
             CoreFnInfo {
-                name: "buf-replace",
+                name: "replace",
                 documentation: "Switch out the item from the `buf` at a given slot and return the original item.
-A more versatile version is `buf-item-step`.",
+A more versatile version is `item-step`.",
                 type_parameters: vec![],
                 parameters: vec![
                     type_slot(type_variable("Origin"), type_variable("Item")),
@@ -10566,11 +10532,11 @@ A more versatile version is `buf-item-step`.",
                 result: type_variable("Item"),
             },
             CoreFnInfo {
-                name: "buf-item-step",
+                name: "item-step",
                 documentation: "Look at an item from the `buf` at a given slot, change it and return something out.
-It behaves like `buf-remove` followed by `buf-insert` but is more performant because it always operates on the same slot.
-It's common to create simple helpers using `buf-item-step`, for example
-To just switch out an item, use `buf-replace`",
+It behaves like `item` followed by `insert`/`replace` but is more performant because it always operates on the same slot.
+It's common to create simple helpers using `item-step`, for example
+To just switch out an item, use `replace`",
                 type_parameters: vec![],
                 parameters: vec![
                     type_slot(type_variable("Origin"), type_variable("Item")),
@@ -10583,7 +10549,7 @@ To just switch out an item, use `buf-replace`",
                 result: type_variable("Out")
             },
             CoreFnInfo {
-                name: "buf-span-reverse",
+                name: "span-reverse",
                 documentation: "Order the referenced items such that the previously last is now first, second last is second etc.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10592,7 +10558,7 @@ To just switch out an item, use `buf-replace`",
                 result: type_empty,
             },
             CoreFnInfo {
-                name: "buf-opt-span-reverse",
+                name: "opt-span-reverse",
                 documentation: "Order the referenced items such that the previously last is now first, second last is second etc.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10601,7 +10567,7 @@ To just switch out an item, use `buf-replace`",
                 result: type_empty,
             },
             CoreFnInfo {
-                name: "buf-span-sort",
+                name: "span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
 Items whose comparison returns `'equal .` are ordered according to their original position in the span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
@@ -10618,7 +10584,7 @@ Do no rely on a specific order of when items are compared."#,
                 result: type_empty,
             },
             CoreFnInfo {
-                name: "buf-opt-span-sort",
+                name: "opt-span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
 Items whose comparison returns `'equal .` are ordered according to their original position in the span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
@@ -10635,9 +10601,9 @@ Do no rely on a specific order of when items are compared."#,
                 result: type_empty,
             },
             CoreFnInfo {
-                name: "buf-span-alter",
+                name: "span-alter",
                 documentation: "Change every item referenced by the given span with a given function to a new item of the same type.
-If your change function needs extra context from the outside, use `buf-span-step` instead",
+If your change function needs extra context from the outside, use `span-step` instead",
                 type_parameters: vec![],
                 parameters: vec![
                     type_span(type_variable("Origin"), type_variable("Item")),
@@ -10646,9 +10612,9 @@ If your change function needs extra context from the outside, use `buf-span-step
                 result: type_empty,
             },
             CoreFnInfo {
-                name: "buf-opt-span-alter",
+                name: "opt-span-alter",
                 documentation: "Change every item referenced by the given span with a given function to a new item of the same type.
-If your change function needs extra context from the outside, use `buf-opt-span-step` instead",
+If your change function needs extra context from the outside, use `opt-span-step` instead",
                 type_parameters: vec![],
                 parameters: vec![
                     type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
@@ -10657,146 +10623,7 @@ If your change function needs extra context from the outside, use `buf-opt-span-
                 result: type_empty,
             },
             CoreFnInfo {
-                name: "buf-span-step",
-                documentation: "Step through each item for a given Span,
-change it to a new item of the same type and update the given initial state.
-If you want to be able to exit anytime, use `buf-span-step-while` instead.
-If you need more control (for example accessing the given buf during a step), use `span-step` instead.
-To change every item without any state, use `buf-span-alter`",
-                type_parameters: vec![],
-                parameters: vec![
-                    type_span(type_variable("Origin"), type_variable("Item")),
-                    type_choice([("up", type_empty), ("down", type_empty)]),
-                    type_variable("State"),
-                    type_fn(
-                        vec![
-                            type_variable("State"),
-                            type_variable("Item"),
-                        ],
-                        type_tuple([
-                            type_variable("State"),
-                            type_variable("Item"),
-                        ])
-                    )
-                ],
-                result: type_variable("State")
-            },
-            CoreFnInfo {
-                name: "buf-opt-span-step",
-                documentation: "Step through each item for a given Opt Span,
-change it to a new item of the same type and update the given initial state.
-If you want to be able to exit anytime, use `buf-opt-span-step-while` instead.
-If you need more control (for example accessing the given buf during a step), use `opt-span-step` instead.
-To change every item without any state, use `buf-opt-span-alter`",
-                type_parameters: vec![],
-                parameters: vec![
-                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
-                    type_choice([("up", type_empty), ("down", type_empty)]),
-                    type_variable("State"),
-                    type_fn(
-                        vec![
-                            type_variable("State"),
-                            type_variable("Item"),
-                        ],
-                        type_tuple([
-                            type_variable("State"),
-                            type_variable("Item"),
-                        ])
-                    )
-                ],
-                result: type_variable("State")
-            },
-            CoreFnInfo {
-                name: "buf-span-step-while",
-                documentation: "Step through each item for a given span,
-change it to a new item of the same type and update the given initial state or exit early.
-```slug
-fn buf-span-last-negative-i32(
-    buf buf(Origin i32)
-    span span(Origin)
-)
-    opt(i32)
-    if
-        buf-span-step-while(
-            buf
-            span
-            [down<[up *]> *]
-            {},
-            fn({} i i32)
-            { item i
-              state (
-                if i32-order(i 0 i32) {
-                [less *] [done<[going *]> i]
-                [equal *] [going<[done i32]> *]
-                [greater *] [going<[done i32]> *]
-                }
-            }
-        )
-    {
-    [going *] [no<opt(i32)> *]
-    [done i] [yes<opt(i32)> i]
-    }
-```
-If you want to step through all items instead, use `buf-span-step`.
-If you need more control (for example accessing the given buf during a step), use `span-step-while` instead.
-To change every item without any state, use `buf-span-alter`",
-                type_parameters: vec![],
-                parameters: vec![
-                    type_span(type_variable("Origin"), type_variable("Item")),
-                    type_choice([("up", type_empty), ("down", type_empty)]),
-                    type_variable("State"),
-                    type_fn(
-                        vec![
-                            type_variable("State"),
-                            type_variable("Item"),
-                        ],
-                        type_tuple([
-                            type_choice([
-                                ("going", type_variable("State")),
-                                ("done", type_variable("done")),
-                            ]),
-                            type_variable("Item")
-                        ]),
-                    )
-                ],
-                result: type_choice([
-                    ("going", type_variable("State")),
-                    ("done", type_variable("done")),
-                ]),
-            },
-            CoreFnInfo {
-                name: "buf-opt-span-step-while",
-                documentation: "Step through each item for a given Span,
-change it to a new item of the same type and update the given initial state with the possibility to exit early.
-If you want to step through all items instead, use `buf-opt-span-step`.
-If you need more control (for example accessing the given buf during a step), use `opt-span-step-while` instead.
-To change every item without any state, use `buf-opt-span-alter`",
-                type_parameters: vec![],
-                parameters: vec![
-                    type_opt(type_span(type_variable("Origin"), type_variable("Item"))),
-                    type_choice([("up", type_empty), ("down", type_empty)]),
-                    type_variable("State"),
-                    type_fn(
-                        vec![
-                            type_variable("State"),
-                            type_variable("Item"),
-                        ],
-                        type_tuple([
-                            type_choice([
-                                ("going", type_variable("State")),
-                                ("done", type_variable("done")),
-                            ]),
-                            type_variable("Item")
-                        ]),
-                    )
-                ],
-                result: type_choice([
-                    ("going", type_variable("State")),
-                    ("done", type_variable("done")),
-                ]),
-            },
-            CoreFnInfo {
-                name: "buf-opt-span-add",
+                name: "opt-span-add",
                 documentation: "Attach a given item at the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10806,7 +10633,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-span-add",
+                name: "span-add",
                 documentation: "Attach a given item at the end of the span",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10816,7 +10643,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-opt-span-add-str-chars",
+                name: "opt-span-add-str-chars",
                 documentation: "Attach a given `str` at the end of the span",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10826,7 +10653,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-span-add-str-chars",
+                name: "span-add-str-chars",
                 documentation: "Attach a given `str` to the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10836,7 +10663,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-span-add-u32-chars",
+                name: "span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10846,7 +10673,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-opt-span-add-u32-chars",
+                name: "opt-span-add-u32-chars",
                 documentation: "Print a given `u32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10856,7 +10683,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-span-add-i32-chars",
+                name: "span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10866,7 +10693,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-opt-span-add-i32-chars",
+                name: "opt-span-add-i32-chars",
                 documentation: "Print a given `i32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10876,7 +10703,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-span-add-f32-chars",
+                name: "span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10886,7 +10713,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-opt-span-add-f32-chars",
+                name: "opt-span-add-f32-chars",
                 documentation: "Print a given `f32` after the end of the span.",
                 type_parameters: vec![],
                 parameters: vec![
@@ -10896,7 +10723,7 @@ To change every item without any state, use `buf-opt-span-alter`",
                 result: type_span(type_variable("Origin"), type_char)
             },
             CoreFnInfo {
-                name: "buf-opt-span-move-to-unset",
+                name: "opt-span-move-to-unset",
                 documentation: "Move the given span to a unset range if there is unset space available where moving the given span to would reduce the amount of unset space.
 Try to use sparingly",
                 type_parameters: vec![],
@@ -10904,33 +10731,33 @@ Try to use sparingly",
                 result: type_opt(type_span(type_variable("Origin"), type_variable("Item")))
             },
             CoreFnInfo {
-                name: "buf-span-move-to-unset",
+                name: "span-move-to-unset",
                 documentation: "Move the given span to a unset range if there is unset space available where moving the given span to would reduce the amount of unset space.",
                 type_parameters: vec![],
                 parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
                 result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-span-move-to-end",
+                name: "span-move-to-end",
                 documentation: "Move the given span to after all existing items if necessary.",
                 type_parameters: vec![],
                 parameters: vec![type_span(type_variable("Origin"), type_variable("Item"))],
                 result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-opt-span-move-to-end",
+                name: "opt-span-move-to-end",
                 documentation: "Move the given span to after all existing items if necessary.",
                 type_parameters: vec![],
                 parameters: vec![type_opt(type_span(type_variable("Origin"), type_variable("Item")))],
                 result: type_opt(type_span(type_variable("Origin"), type_variable("Item")))
             },
             CoreFnInfo {
-                name: "buf-span-add-own-span",
+                name: "span-add-own-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
-As an example, you could implement `buf-span-add` in slug itself as
+As an example, you could implement `span-add` in slug itself as
 ```slug
-fn Buf-span-add(
+fn span-add(
     span span(Origin Item)
     new Item
 )
@@ -10949,7 +10776,7 @@ fn Buf-span-add(
                 result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-span-add-own-opt-span",
+                name: "span-add-own-opt-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
 The most common use case is re-combining spans that have been split up with e.g. `span-start` (see also `slot-to-span`)",
@@ -10961,7 +10788,7 @@ The most common use case is re-combining spans that have been split up with e.g.
                 result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-opt-span-add-own-span",
+                name: "opt-span-add-own-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
 The most common use case is re-combining spans that have been split up with e.g. `span-end` (see also `slot-to-span`)",
@@ -10973,7 +10800,7 @@ The most common use case is re-combining spans that have been split up with e.g.
                 result: type_span(type_variable("Origin"), type_variable("Item"))
             },
             CoreFnInfo {
-                name: "buf-opt-span-add-own-opt-span",
+                name: "opt-span-add-own-opt-span",
                 documentation: "Append the items of a given end span directly after the start span, returning the combined span.
 If start and end spans are not already connected, both are appended at the end and their original spans are unset",
                 type_parameters: vec![],
@@ -11140,7 +10967,7 @@ like `"abc" str` or `"\"hello 👀 \\\r\n world \(2665)\"" str`
 - `\r` represents carriage return
 
 Internally, a string is compactly represented as UTF-8 bytes and can be accessed as such.
-When building new strings at runtime, use functions like `buf-opt-span-add-str-chars`."#,
+When building new strings at runtime, use functions like `opt-span-add-str-chars`."#,
                 )),
                 parameters: vec![],
                 type_: Some(type_str),
@@ -11184,7 +11011,7 @@ fn u32-max(a u32 b u32) u32
             },
         ),
         (
-            Name::from_static("buf"),
+            Name::from_static(type_buf_name),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
@@ -11196,7 +11023,7 @@ Has constant time access, remove, step and add."
             },
         ),
         (
-            Name::from_static("slot"),
+            Name::from_static(type_slot_name),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
@@ -11208,7 +11035,7 @@ For consecutive `slot`s, check out `span`."
             },
         ),
         (
-            Name::from_static("span"),
+            Name::from_static(type_span_name),
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
@@ -11360,40 +11187,36 @@ pub fn is_core_fn_that_can_run_out_of_memory_in_zig(fn_name: &str) -> bool {
         | "opt-span-step-while"
         | "unset-slice-cast-or-rid-and-allocate"
         | "unset-slice-allocate-length"
-        | "buf-item-step"
-        | "buf-opt-span-sort"
-        | "buf-span-sort"
-        | "buf-opt-span-alter"
-        | "buf-span-alter"
-        | "buf-opt-span-step"
-        | "buf-span-step"
-        | "buf-opt-span-step-while"
-        | "buf-span-step-while"
-        | "buf-opt-span-move-to-end"
-        | "buf-span-move-to-end"
-        | "buf-opt-span-add-own-opt-span"
-        | "buf-span-add-own-opt-span"
-        | "buf-opt-span-add-own-span"
-        | "buf-span-add-own-span"
-        | "buf-opt-span-add-buf-span"
-        | "buf-opt-span-add-buf-opt-span"
-        | "buf-span-add-buf-span"
-        | "buf-span-add-buf-opt-span"
-        | "buf-opt-span-add-f32-chars"
-        | "buf-span-add-f32-chars"
-        | "buf-opt-span-add-i32-chars"
-        | "buf-span-add-i32-chars"
-        | "buf-opt-span-add-u32-chars"
-        | "buf-span-add-u32-chars"
-        | "buf-span-add-str-chars"
-        | "buf-opt-span-add-str-chars"
-        | "buf-span-add"
-        | "buf-opt-span-add"
-        | "buf-add-array"
-        | "buf-add-str-chars"
-        | "buf-add"
-        | "buf-insert"
-        | "buf-set-or-insert"
+        | "item-step"
+        | "opt-span-sort"
+        | "span-sort"
+        | "opt-span-alter"
+        | "span-alter"
+        | "opt-span-move-to-end"
+        | "span-move-to-end"
+        | "opt-span-add-own-opt-span"
+        | "span-add-own-opt-span"
+        | "opt-span-add-own-span"
+        | "span-add-own-span"
+        | "opt-span-add-buf-span"
+        | "opt-span-add-buf-opt-span"
+        | "span-add-buf-span"
+        | "span-add-buf-opt-span"
+        | "opt-span-add-f32-chars"
+        | "span-add-f32-chars"
+        | "opt-span-add-i32-chars"
+        | "span-add-i32-chars"
+        | "opt-span-add-u32-chars"
+        | "span-add-u32-chars"
+        | "span-add-str-chars"
+        | "opt-span-add-str-chars"
+        | "span-add"
+        | "opt-span-add"
+        | "add-array"
+        | "add-str-chars"
+        | "add"
+        | "insert"
+        | "set-or-insert"
         | "buf-pre-allocation-rid"
         | "buf-pre-allocate-at-least" => true,
         _ => false,
@@ -15512,7 +15335,7 @@ mod core_declarations_are_implemented {
             );
         }
         for (core_fn_name, _) in core_type_aliases.iter() {
-            let core_ty_name = name_to_uppercase_js(core_fn_name);
+            let core_ty_name = name_to_uppercase_js_segment(core_fn_name);
             // this is quite approximate
             assert!(
                 core_mjs.contains(&format!("}} {} */", core_ty_name))

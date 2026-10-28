@@ -1,5 +1,5 @@
 
 fn greet<Chars>(name str) span(Chars char)
-    buf-add-str-chars<Chars>("Hello, " str)
-    .buf-span-add-str-chars(name)
-    .buf-span-add("!" char)
+    add-str-chars<Chars>("Hello, " str)
+    .span-add-str-chars(name)
+    .span-add("!" char)

@@ -1,10 +1,11 @@
-fast programming language where indexes know their origin array. An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
+decently fast programming language which uses indexes bound to specific arrays instead of references.
+An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
 fn greet<Chars>(name str) span(Chars char)
-    buf-add-str-chars<Chars>("Hello, " str)
-    .buf-span-add-str-chars(name)
-    .buf-span-add("!" char)
+    add-str-chars<Chars>("Hello, " str)
+    .span-add-str-chars(name)
+    .span-add("!" char)
 ```
 
 Important: The compiler and tooling is not implemented, yet! Once available,
@@ -218,6 +219,12 @@ cargo install --offline --debug --path . slug
 - `.` syntax for piping the first argument
 
 ## TODO
+- actually insert clone() and drop() in js codegen
+- change semantics of buf from linear type to rc<ArrayList>. This enables implicit cloning to always be possible, even for type variables.
+  This is especially important for `buf-item` to work.
+  `buf-to-unset` and `buf-reuse` should be removed, at least temporarily.
+  The documentation of `buf` should be changed to be more clear about "more than value could contain the same buf" but should recommend generally against this
+- go through core.mjs and always "consume" all parameters, which means dropping if necessary
 - clear up: should local variables be able to shadow other local variables?
   It probably makes things harder rather than easier
 - fix the many bugs
