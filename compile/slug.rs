@@ -1186,15 +1186,15 @@ fn parse_project_fn<Expressions, Patterns>(
     parse_slug_whitespace(state);
     let result = parse_expression(state, expressions, patterns);
     Some(SyntaxProjectItem::Fn {
-        fn_keyword_start: fn_keyword_start,
-        name: name,
-        type_parameters: type_parameters,
+        fn_keyword_start,
+        name,
+        type_parameters,
         open_paren_start,
         parameters,
         closed_paren_start,
-        result_type: result_type,
-        documentation: documentation,
-        result: result,
+        result_type,
+        documentation,
+        result,
     })
 }
 pub struct ProjectFnSignature {
@@ -1995,7 +1995,7 @@ fn parse_expression_variant<Expressions, Patterns>(
     Some(SyntaxExpression::Variant {
         open_bracket_start,
         type_: type_argument,
-        name: name,
+        name,
         value: value.map(|argument| expressions.insert(argument)),
         closed_bracket_start,
     })
@@ -3157,7 +3157,7 @@ pub fn syntax_type_to_type(
     match type_ {
         SyntaxType::Variable(name) => Some(Type::Variable(name.value.clone())),
         SyntaxType::Origin { hat_start: _, name } => {
-            name.as_ref().map(|name| Type::Variable(name.value.clone()))
+            name.as_ref().map(|name| Type::Origin(name.value.clone()))
         }
         SyntaxType::Fn {
             fn_keyword_start: _,
@@ -3300,27 +3300,13 @@ pub fn syntax_type_check(
             Some(Type::Origin(name.value.clone()))
         }
         SyntaxType::Fn {
-            fn_keyword_start: _,
-            open_paren_start: _,
-            parameters,
-            closed_paren_start: _,
+            fn_keyword_start,
+            open_paren_start,
+            parameters: syntax_parameters,
+            closed_paren_start,
             result,
         } => {
-            let Some(result) = result else {
-                return None;
-            };
-            let Some(result) = syntax_type_check(
-                result,
-                errors,
-                recursive_type_alias_parameters,
-                using_recursive_type_alias_allowed,
-                type_aliases,
-                records_used,
-                choices_used,
-            ) else {
-                return None;
-            };
-            let Some(parameters) = parameters
+            let Some(parameters) = syntax_parameters
                 .iter()
                 .map(|parameter| {
                     syntax_type_check(
@@ -3335,6 +3321,35 @@ pub fn syntax_type_check(
                 })
                 .collect::<Option<Vec<_>>>()
             else {
+                return None;
+            };
+            let Some(result) = result else {
+                errors.push(ErrorNode {
+                    message: Box::from("missing result type after this fn(..parameters..) here"),
+                    range: closed_paren_start
+                        .map(|closed_paren_start| symbol_range(closed_paren_start, ")"))
+                        .or_else(|| {
+                            syntax_parameters
+                                .last()
+                                .map(|parameter| type_range(parameter))
+                        })
+                        .or_else(|| {
+                            open_paren_start
+                                .map(|open_paren_start| symbol_range(open_paren_start, "("))
+                        })
+                        .unwrap_or_else(|| symbol_range(*fn_keyword_start, "fn")),
+                });
+                return None;
+            };
+            let Some(result) = syntax_type_check(
+                result,
+                errors,
+                recursive_type_alias_parameters,
+                using_recursive_type_alias_allowed,
+                type_aliases,
+                records_used,
+                choices_used,
+            ) else {
                 return None;
             };
             Some(Type::Fn {
@@ -3392,10 +3407,10 @@ pub fn syntax_type_check(
                     )
                 } else {
                     errors.push(ErrorNode {
-                            range: name_range(with_start_position_as_ref(name)),
-                            message: Box::from("recursive type alias. A value of such a directly recursive type has no known maximum size on the stack.
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: Box::from("recursive type alias. A value of such a directly recursive type has no known maximum size on the stack.
 Move nested parts of this data into the heap (using slot/span) to represent such nested data."),
-                        });
+                    });
                     return None;
                 }
             } else if let Some(origin_type_alias) = type_aliases.get(&name.value) {
@@ -4482,7 +4497,7 @@ struct TypeBuf {
 }
 #[derive(Clone, PartialEq, Eq)]
 enum BufReachPathSegment {
-    InVariantValue,
+    InVariantValue(Name),
     InTuplePart(usize),
     InRecordFieldValue(Name),
 }
@@ -4527,13 +4542,15 @@ fn type_reachable_bufs(
         }
         Type::Choice(variants) => {
             if variants.len() == 1
-                && let Some(TypeVariant { name: _, value }) = variants.first()
+                && let Some(TypeVariant { name, value }) = variants.first()
             {
                 type_reachable_bufs(
                     value,
                     path.iter()
                         .cloned()
-                        .chain(std::iter::once(BufReachPathSegment::InVariantValue))
+                        .chain(std::iter::once(BufReachPathSegment::InVariantValue(
+                            name.clone(),
+                        )))
                         .collect(),
                     type_aliases,
                     insert_reachable_buf,
@@ -6054,6 +6071,7 @@ pub fn checked_project_to_js<Expressions, Patterns>(
                 checked_type_alias_name,
                 &checked_type_alias.parameters,
                 checked_aliased_type,
+                &checked_type_aliases,
             );
         }
     }
@@ -6089,6 +6107,7 @@ fn project_type_alias_to_js(
     name: &Name,
     parameters: &[Name],
     aliased_type: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     output.push_str("/** ");
     if let Some(documentation) = maybe_documentation {
@@ -6103,7 +6122,21 @@ fn project_type_alias_to_js(
     type_to_js(output, aliased_type);
     output.push_str("} ");
     output.push_str(&name_to_uppercase_js_segment(name));
-    output.push_str("\n*/\n\n");
+    output.push_str("\n*/\n");
+
+    // can be improved: add @param and @type and @template comment
+    output.push_str("function drop$");
+    output.push_str(&name_to_uppercase_js_segment(name));
+    output.push_str("(it, $) {\n");
+    js_variable_drop(output, "it", aliased_type, type_aliases);
+    output.push_str("}\n");
+
+    // can be improved: add @param and @type and @template comment
+    output.push_str("function clone$");
+    output.push_str(&name_to_uppercase_js_segment(name));
+    output.push_str("(it, $) {\n");
+    js_variable_clone(output, "it", aliased_type, type_aliases);
+    output.push_str("}\n\n");
 }
 fn syntax_project_fn_to_js<Expressions, Patterns>(
     output: &mut String,
@@ -6131,7 +6164,7 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
         type_variables_into(&mut type_parameters, parameter_type);
     }
     type_variables_into(&mut type_parameters, result_type);
-    for type_parameter in type_parameters {
+    for type_parameter in &type_parameters {
         output.push_str("@template ");
         name_to_uppercase_local_js(output, type_parameter);
         output.push(' ');
@@ -6148,20 +6181,31 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
     for (parameter_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
         output.push_str("@param {");
         type_to_js(output, parameter_type);
-        output.push_str("} $");
+        output.push_str("} a");
         use std::fmt::Write as _;
-        _ = write!(output, "{}", parameter_index);
+        _ = write!(output, "{parameter_index}");
         output.push('\n');
     }
     if implicit_bufs.len() >= 1 {
         output.push_str("@param {{");
         for implicit_buf in &implicit_bufs {
-            type_buf_js_variable_name(output, implicit_buf);
+            type_buf_js_variable_name(output, &implicit_buf.origin, &implicit_buf.item);
             output.push_str(": Buf<");
             type_to_js(output, &implicit_buf.origin);
             output.push_str(", ");
             type_to_js(output, &implicit_buf.item);
             output.push_str(">, ");
+        }
+        for type_parameter in type_parameters {
+            output.push_str("drop$");
+            output.push_str(&name_to_uppercase_js_segment(type_parameter));
+            output.push_str(": (_: ");
+            name_to_uppercase_local_js(output, type_parameter);
+            output.push_str(") => void, clone$");
+            output.push_str(&name_to_uppercase_js_segment(type_parameter));
+            output.push_str(": (_: ");
+            name_to_uppercase_local_js(output, type_parameter);
+            output.push_str(") => void, ");
         }
         output.push_str("}} $\n");
     }
@@ -6174,7 +6218,7 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
     output.push_str(&name_to_lowercase_js(name));
     output.push('(');
     for (parameter_index, _) in parameter_types.iter().flatten().enumerate() {
-        output.push('$');
+        output.push('a');
         use std::fmt::Write as _;
         _ = write!(output, "{}", parameter_index);
         output.push_str(", ");
@@ -6182,7 +6226,10 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
     if implicit_bufs.len() >= 1 {
         output.push('$');
     }
-    output.push_str(") {");
+    output.push_str(") {\n");
+    if implicit_bufs.is_empty() {
+        output.push_str("const $ = {};\n")
+    }
     let mut parameter_introduced_variables = std::collections::HashMap::new();
     for (syntax_parameter_index, (syntax_parameter, _)) in syntax_parameters
         .iter()
@@ -6190,12 +6237,13 @@ fn syntax_project_fn_to_js<Expressions, Patterns>(
         .filter(|(_, type_)| type_.is_some())
         .enumerate()
     {
-        output.push('\n');
         syntax_pattern_to_js_destructuring(
             output,
             syntax_parameter,
-            &format!("${}", syntax_parameter_index),
+            None,
+            &format!("a{}", syntax_parameter_index),
             &mut parameter_introduced_variables,
+            type_aliases,
             patterns,
         );
     }
@@ -6370,19 +6418,58 @@ fn syntax_pattern_to_js_matches_condition<'a, Patterns>(
 fn syntax_pattern_to_js_destructuring<'a, Patterns>(
     output: &mut String,
     pattern: &'a SyntaxPattern<Patterns>,
+    expected_type: Option<&'a Type>,
     to_destructure: &str,
-    introduced_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
+    introduced_variables: &mut std::collections::HashMap<&'a Name, JsLocalVariable<'a>>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
 ) {
     match pattern {
         SyntaxPattern::Ignored { .. } => {}
-        SyntaxPattern::Variable { name, type_: _ } => {
+        SyntaxPattern::Variable { name, type_ } => {
             output.push_str("const ");
             name_to_lowercase_local_js_introduced_at(output, &name.value, name.start);
             output.push_str(" = ");
             output.push_str(to_destructure);
             output.push_str(";\n");
-            introduced_variables.insert(&name.value, name.start);
+            let variable_type = expected_type
+                .map(|expected_type| std::borrow::Cow::Borrowed(expected_type))
+                .or_else(|| {
+                    type_
+                        .as_ref()
+                        .and_then(|type_| syntax_type_to_type(type_, type_aliases))
+                        .map(std::borrow::Cow::Owned)
+                });
+            if let Some(variable_type) = &variable_type {
+                let mut reachable_bufs = std::collections::HashMap::new();
+                type_reachable_bufs(
+                    variable_type.as_ref(),
+                    vec![],
+                    type_aliases,
+                    &mut |type_buf, path| {
+                        reachable_bufs.insert(type_buf, path);
+                    },
+                );
+                for (reachable_type_buf, reachable_type_buf_path) in reachable_bufs {
+                    output.push_str("$.");
+                    type_buf_js_variable_name(
+                        output,
+                        &reachable_type_buf.origin,
+                        &reachable_type_buf.item,
+                    );
+                    output.push_str(" = ");
+                    name_to_lowercase_local_js_introduced_at(output, &name.value, name.start);
+                    reachable_type_buf_path_js(output, &reachable_type_buf_path);
+                    output.push_str(";\n");
+                }
+            }
+            introduced_variables.insert(
+                &name.value,
+                JsLocalVariable {
+                    origin_start: name.start,
+                    type_: variable_type,
+                },
+            );
         }
         SyntaxPattern::Variant {
             open_bracket_start: _,
@@ -6396,8 +6483,16 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
                 syntax_pattern_to_js_destructuring(
                     output,
                     patterns.item(value),
+                    match expected_type {
+                        Some(Type::Choice(variants)) => variants
+                            .iter()
+                            .find(|variant| variant.name == name.value)
+                            .map(|variant| &variant.value),
+                        _ => None,
+                    },
                     &format!("{to_destructure}.{}", name_to_lowercase_js(&name.value)),
                     introduced_variables,
+                    type_aliases,
                     patterns,
                 );
             }
@@ -6412,8 +6507,15 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
                 syntax_pattern_to_js_destructuring(
                     output,
                     part,
+                    match expected_type {
+                        Some(Type::Tuple(expected_type_parts)) => {
+                            expected_type_parts.get(part_index)
+                        }
+                        _ => None,
+                    },
                     &format!("{to_destructure}[{part_index}]"),
                     introduced_variables,
+                    type_aliases,
                     patterns,
                 );
             }
@@ -6428,11 +6530,21 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
                     syntax_pattern_to_js_destructuring(
                         output,
                         value,
+                        match expected_type {
+                            Some(Type::Record(expected_type_fields)) => expected_type_fields
+                                .iter()
+                                .find(|expected_type_field| {
+                                    expected_type_field.name == field.name.value
+                                })
+                                .map(|expected_type_field| &expected_type_field.value),
+                            _ => None,
+                        },
                         &format!(
                             "{to_destructure}.{}",
                             name_to_lowercase_js(&field.name.value)
                         ),
                         introduced_variables,
+                        type_aliases,
                         patterns,
                     );
                 }
@@ -6440,15 +6552,20 @@ fn syntax_pattern_to_js_destructuring<'a, Patterns>(
         }
     }
 }
+#[derive(Debug, Clone)]
+struct JsLocalVariable<'a> {
+    origin_start: lsp_types::Position,
+    type_: Option<std::borrow::Cow<'a, Type>>,
+}
 fn syntax_expression_to_js<'a, Expressions, Patterns>(
     output: &mut String,
     project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions, Patterns>>,
     patterns: &'a core::Buf<Patterns, SyntaxPattern<Patterns>>,
-    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
-    local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
+    checked_queries: &'a std::collections::HashMap<lsp_types::Position, CheckedQuery>,
+    checked_calls: &'a std::collections::HashMap<lsp_types::Position, CheckedCall>,
+    local_variables: &mut std::collections::HashMap<&'a Name, JsLocalVariable<'a>>,
     expression: &'a SyntaxExpression<Expressions, Patterns>,
     scope_start: lsp_types::Position,
 ) {
@@ -6528,11 +6645,11 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
         SyntaxExpression::Variable(name) => {
             js_scope_result_variable(output, scope_start);
             output.push_str(" = ");
-            if let Some(&local_variable_introduced_start) = local_variables.get(&name.value) {
+            if let Some(local_variable) = local_variables.get(&name.value) {
                 name_to_lowercase_local_js_introduced_at(
                     output,
                     &name.value,
-                    local_variable_introduced_start,
+                    local_variable.origin_start,
                 );
             } else {
                 name_to_lowercase_local_js(output, &name.value);
@@ -6547,7 +6664,6 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             arguments_rest,
             closed_paren_start: _,
         } => {
-            // TODO call local variables instead when available and no type_arguments
             let maybe_first_argument = first_argument_dot
                 .as_ref()
                 .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
@@ -6570,11 +6686,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     argument_scope_start,
                 );
             }
+            js_scope_result_variable(output, scope_start);
+            output.push_str(" = ");
+            let mut reachable_bufs = std::collections::HashMap::new();
             if let Some(project_fn) = project_fns.get(&name.value)
                 && let Some(checked_call) = checked_calls.get(&name.start)
             {
-                js_scope_result_variable(output, scope_start);
-                output.push_str(" = ");
                 output.push_str(&name_to_lowercase_js(&name.value));
                 output.push('(');
                 let type_arguments = type_arguments
@@ -6609,34 +6726,68 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     );
                     output.push_str(", ");
                 }
-                if implicit_bufs.len() >= 1 {
-                    output.push('{');
-                    for implicit_buf in &implicit_bufs {
-                        type_buf_js_variable_name(output, implicit_buf);
-                        output.push_str(": $.");
-                        let mut specialized_implicit_buf_origin = implicit_buf.origin.clone();
-                        type_replace_variables(
-                            &type_variables_to_substitute,
-                            &mut specialized_implicit_buf_origin,
-                        );
-                        let mut specialized_implicit_buf_item = implicit_buf.item.clone();
-                        type_replace_variables(
-                            &type_variables_to_substitute,
-                            &mut specialized_implicit_buf_item,
-                        );
-                        type_buf_js_variable_name(
-                            output,
-                            &TypeBuf {
-                                origin: specialized_implicit_buf_origin,
-                                item: specialized_implicit_buf_item,
-                            },
-                        );
-                        output.push_str(", ");
-                    }
-                    // TODO add generic clone and drop functions
-                    output.push_str("}");
-                }
+                specialize_implicits_js(
+                    output,
+                    &implicit_bufs,
+                    &type_variables_to_substitute,
+                    type_aliases,
+                );
                 output.push_str(");\n");
+                if let Some(mut call_result_type) = project_fn.result_type.clone() {
+                    type_replace_variables(&type_variables_to_substitute, &mut call_result_type);
+                    type_reachable_bufs(
+                        &call_result_type,
+                        vec![],
+                        type_aliases,
+                        &mut |type_buf, path| {
+                            reachable_bufs.insert(type_buf, path);
+                        },
+                    );
+                }
+            } else if let Some(local_variable) = local_variables.get(&name.value) {
+                name_to_lowercase_local_js_introduced_at(
+                    output,
+                    &name.value,
+                    local_variable.origin_start,
+                );
+                output.push('(');
+                for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
+                    js_scope_result_variable(
+                        output,
+                        expression_end(argument, expressions, patterns),
+                    );
+                    output.push_str(", ");
+                }
+                // no need to specialize $
+                output.push_str("$);\n");
+                if let Some(local_variable_type) = local_variable.type_.as_deref()
+                    && let Type::Fn {
+                        parameters: _,
+                        result: call_result_type,
+                    } =
+                        type_alias_resolve_to_non_alias(local_variable_type, type_aliases).as_ref()
+                {
+                    type_reachable_bufs(
+                        call_result_type,
+                        vec![],
+                        type_aliases,
+                        &mut |type_buf, path| {
+                            reachable_bufs.insert(type_buf, path);
+                        },
+                    );
+                }
+            }
+            for (reachable_type_buf, reachable_type_buf_path) in reachable_bufs {
+                output.push_str("$.");
+                type_buf_js_variable_name(
+                    output,
+                    &reachable_type_buf.origin,
+                    &reachable_type_buf.item,
+                );
+                output.push_str(" = ");
+                js_scope_result_variable(output, scope_start);
+                reachable_type_buf_path_js(output, &reachable_type_buf_path);
+                output.push_str(";\n");
             }
         }
         SyntaxExpression::Variant {
@@ -6686,15 +6837,24 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             result,
         } => {
             js_scope_result_variable(output, scope_start);
-            output.push_str(" = ($) => {\n");
+            output.push_str(" = (");
+            for (parameter_index, _) in parameters.iter().enumerate() {
+                output.push('a');
+                use std::fmt::Write as _;
+                _ = write!(output, "{parameter_index}");
+                output.push_str(", ");
+            }
+            output.push_str("$) => {\n");
             'in_function: {
                 let mut parameter_introduced_variables = std::collections::HashMap::new();
-                for syntax_parameter in parameters {
+                for (parameter_index, syntax_parameter) in parameters.iter().enumerate() {
                     syntax_pattern_to_js_destructuring(
                         output,
                         syntax_parameter,
-                        "$",
+                        None,
+                        &format!("a{parameter_index}"),
                         &mut parameter_introduced_variables,
+                        type_aliases,
                         patterns,
                     );
                 }
@@ -6822,9 +6982,8 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                 }
             }
         }
-
         SyntaxExpression::Destruct {
-            equals_start: _,
+            equals_start,
             pattern,
             queried,
             result,
@@ -6857,8 +7016,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     syntax_pattern_to_js_destructuring(
                         output,
                         pattern,
+                        checked_queries
+                            .get(equals_start)
+                            .map(|checked_query| &checked_query.queried_type),
                         &queried_variable_name,
                         local_variables,
+                        type_aliases,
                         patterns,
                     );
                 }
@@ -6938,8 +7101,12 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
                     syntax_pattern_to_js_destructuring(
                         output,
                         &case.pattern,
+                        checked_queries
+                            .get(if_keyword_start)
+                            .map(|checked_query| &checked_query.queried_type),
                         &queried_variable_name,
                         &mut case_local_variables,
+                        type_aliases,
                         patterns,
                     );
                     match &case.result {
@@ -6974,6 +7141,303 @@ fn syntax_expression_to_js<'a, Expressions, Patterns>(
             }
         }
     }
+}
+fn reachable_type_buf_path_js(output: &mut String, path: &[BufReachPathSegment]) {
+    for path_segment in path {
+        match path_segment {
+            BufReachPathSegment::InVariantValue(variant_name) => {
+                output.push('.');
+                output.push_str(&name_to_lowercase_js(variant_name));
+            }
+            BufReachPathSegment::InTuplePart(part_index) => {
+                use std::fmt::Write as _;
+                _ = write!(output, "[{part_index}]");
+            }
+            BufReachPathSegment::InRecordFieldValue(field_name) => {
+                output.push('.');
+                output.push_str(&name_to_lowercase_js(field_name));
+            }
+        }
+    }
+}
+fn specialize_implicits_js(
+    output: &mut String,
+    implicit_bufs: &std::collections::HashSet<TypeBuf>,
+    type_variables_to_substitute: &std::collections::BTreeMap<Name, Type>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    if type_variables_to_substitute.is_empty() {
+        if !implicit_bufs.is_empty() {
+            output.push('$');
+        }
+    } else {
+        output.push('{');
+        for implicit_buf in implicit_bufs {
+            type_buf_js_variable_name(output, &implicit_buf.origin, &implicit_buf.item);
+            output.push_str(": $.");
+            let mut specialized_implicit_buf_origin = implicit_buf.origin.clone();
+            type_replace_variables(
+                type_variables_to_substitute,
+                &mut specialized_implicit_buf_origin,
+            );
+            let mut specialized_implicit_buf_item = implicit_buf.item.clone();
+            type_replace_variables(
+                type_variables_to_substitute,
+                &mut specialized_implicit_buf_item,
+            );
+            type_buf_js_variable_name(
+                output,
+                &specialized_implicit_buf_origin,
+                &specialized_implicit_buf_item,
+            );
+            output.push_str(", ");
+        }
+        for (type_variable, type_variable_replacement_type) in type_variables_to_substitute {
+            output.push_str("drop$");
+            output.push_str(type_variable);
+            output.push_str(": ");
+            js_drop_function(output, type_variable_replacement_type, type_aliases);
+            output.push_str(", ");
+            output.push_str("clone$");
+            output.push_str(type_variable);
+            output.push_str(": ");
+            js_clone_function(output, type_variable_replacement_type, type_aliases);
+            output.push_str(", ");
+        }
+        output.push_str("}");
+    }
+}
+fn js_variable_drop(
+    output: &mut String,
+    variable_name: &str,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    match type_ {
+        Type::Variable(_) => {
+            output.push_str("$.drop");
+            type_js_variable_name_segment(output, type_);
+            output.push('(');
+            output.push_str(variable_name);
+            output.push_str(");\n");
+        }
+        Type::Origin(_) => {}
+        Type::Tuple(parts) => {
+            for (part_index, part) in parts.iter().enumerate() {
+                js_variable_drop(
+                    output,
+                    &format!("{variable_name}[{part_index}]"),
+                    part,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Record(fields) => {
+            for TypeField { name, value } in fields {
+                js_variable_drop(
+                    output,
+                    &format!("{variable_name}.{}", name_to_lowercase_js(name)),
+                    value,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Choice(variants) => {
+            for TypeVariant { name, value } in variants {
+                output.push_str("if (\"");
+                let variant_name_js = name_to_lowercase_js(name);
+                output.push_str(&variant_name_js);
+                output.push_str("\" in ");
+                output.push_str(variable_name);
+                output.push_str(") {\n");
+                js_variable_drop(
+                    output,
+                    &format!("{variable_name}.{variant_name_js}"),
+                    value,
+                    type_aliases,
+                );
+                output.push_str("} else ");
+            }
+            output.push_str("{}");
+        }
+        Type::CoreConstruct { name, arguments } => {
+            if name == type_slot_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                output.push_str("slot$drop($.");
+                type_buf_js_variable_name(output, origin, item);
+                output.push_str(", ");
+                js_drop_function(output, item, type_aliases);
+                output.push_str(", ");
+                output.push_str(variable_name);
+                output.push_str(");\n");
+            } else if name == type_span_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                output.push_str("span$drop($.");
+                type_buf_js_variable_name(output, origin, item);
+                output.push_str(", ");
+                js_drop_function(output, item, type_aliases);
+                output.push_str(", ");
+                output.push_str(variable_name);
+                output.push_str(");\n");
+            } else {
+                // gc
+            }
+        }
+        Type::Fn { .. } => {}
+        Type::Alias { name, arguments } => {
+            let Some(type_alias_info) = type_aliases.get(name) else {
+                return;
+            };
+            let Some(aliased_type) = &type_alias_info.type_ else {
+                return;
+            };
+            output.push_str("drop$");
+            output.push_str(&name_to_uppercase_js_segment(name));
+            output.push('(');
+            output.push_str(variable_name);
+            output.push_str(", ");
+            let mut implicit_bufs = std::collections::HashSet::new();
+            type_implicit_bufs(aliased_type, type_aliases, &mut implicit_bufs);
+            specialize_implicits_js(
+                output,
+                &implicit_bufs,
+                // can be optimized: avoid cloning
+                &type_alias_info
+                    .parameters
+                    .iter()
+                    .cloned()
+                    .zip(arguments.iter().cloned())
+                    .collect(),
+                type_aliases,
+            );
+            output.push_str(");\n");
+        }
+    }
+}
+fn js_variable_clone(
+    output: &mut String,
+    variable_name: &str,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    match type_ {
+        Type::Variable(_) => {
+            output.push_str("$.clone");
+            type_js_variable_name_segment(output, type_);
+            output.push('(');
+            output.push_str(variable_name);
+            output.push_str(");\n");
+        }
+        Type::Origin(_) => {}
+        Type::Tuple(parts) => {
+            for (part_index, part) in parts.iter().enumerate() {
+                js_variable_clone(
+                    output,
+                    &format!("{variable_name}[{part_index}]"),
+                    part,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Record(fields) => {
+            for TypeField { name, value } in fields {
+                js_variable_clone(
+                    output,
+                    &format!("{variable_name}.{}", name_to_lowercase_js(name)),
+                    value,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Choice(variants) => {
+            for TypeVariant { name, value } in variants {
+                output.push_str("if (\"");
+                let variant_name_js = name_to_lowercase_js(name);
+                output.push_str(&variant_name_js);
+                output.push_str("\" in ");
+                output.push_str(variable_name);
+                output.push_str(") {\n");
+                js_variable_clone(
+                    output,
+                    &format!("{variable_name}.{variant_name_js}"),
+                    value,
+                    type_aliases,
+                );
+                output.push_str("} else ");
+            }
+            output.push_str("{}\n");
+        }
+        Type::CoreConstruct { name, arguments } => {
+            if name == type_slot_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                output.push_str("slot$clone($.");
+                type_buf_js_variable_name(output, origin, item);
+                output.push_str(", ");
+                output.push_str(variable_name);
+                output.push_str(");\n");
+            } else if name == type_span_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                output.push_str("span$clone($.");
+                type_buf_js_variable_name(output, origin, item);
+                output.push_str(", ");
+                output.push_str(variable_name);
+                output.push_str(");\n");
+            } else {
+                // gc
+            }
+        }
+        Type::Fn { .. } => {}
+        Type::Alias { name, arguments } => {
+            let Some(type_alias_info) = type_aliases.get(name) else {
+                return;
+            };
+            let Some(aliased_type) = &type_alias_info.type_ else {
+                return;
+            };
+            output.push_str("clone$");
+            output.push_str(&name_to_uppercase_js_segment(name));
+            output.push('(');
+            output.push_str(variable_name);
+            output.push_str(", ");
+            let mut implicit_bufs = std::collections::HashSet::new();
+            type_implicit_bufs(aliased_type, type_aliases, &mut implicit_bufs);
+            specialize_implicits_js(
+                output,
+                &implicit_bufs,
+                // can be optimized: avoid cloning
+                &type_alias_info
+                    .parameters
+                    .iter()
+                    .cloned()
+                    .zip(arguments.iter().cloned())
+                    .collect(),
+                type_aliases,
+            );
+            output.push_str(");\n");
+        }
+    }
+}
+fn js_drop_function(
+    output: &mut String,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    output.push_str("function(it) {\n");
+    js_variable_drop(output, "it", type_, type_aliases);
+    output.push_str("}");
+}
+fn js_clone_function(
+    output: &mut String,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    output.push_str("function(it) {\n");
+    js_variable_clone(output, "it", type_, type_aliases);
+    output.push_str("}");
 }
 fn js_incomplete_statement() {
     // just don't set the result to anything
@@ -7039,10 +7503,10 @@ fn origin_name_to_uppercase_js(output: &mut String, name: &str) {
     output.push_str(&sanitized);
     output.push_str("$origin");
 }
-fn type_buf_js_variable_name(output: &mut String, type_buf: &TypeBuf) {
+fn type_buf_js_variable_name(output: &mut String, origin: &Type, item: &Type) {
     output.push_str("buf");
-    type_js_variable_name_segment(output, &type_buf.origin);
-    type_js_variable_name_segment(output, &type_buf.item);
+    type_js_variable_name_segment(output, origin);
+    type_js_variable_name_segment(output, item);
 }
 fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
     match type_ {
@@ -7088,7 +7552,7 @@ fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
         }
         Type::Alias { name, arguments } => {
             // should only run for recursive type aliases at this point
-            output.push_str("$alias");
+            output.push_str("$ty");
             output.push_str(&name_to_lowercase_js_variable_segment(name));
             for argument in arguments {
                 output.push_str("$_");
@@ -7436,7 +7900,6 @@ Available variable names are {}",
             arguments_rest: rest_syntax_arguments,
             closed_paren_start: _,
         } => {
-            // TODO handle name being local variable
             if let Some(project_fn_info) = project_fns.get(&name.value) {
                 let Some(project_fn_result_type) = &project_fn_info.result_type else {
                     return None;
@@ -7742,7 +8205,7 @@ If there should only ever by one variant, using a record with a single field is 
             fn_keyword_start,
             open_paren_start,
             parameters,
-            closed_paren_start: closed_bracket_start,
+            closed_paren_start,
             result,
         } => {
             let mut parameter_introduced_variables: std::collections::HashMap<
@@ -7767,7 +8230,7 @@ If there should only ever by one variant, using a record with a single field is 
             }
             let Some(result) = result else {
                 errors.push(ErrorNode {
-                    range: closed_bracket_start
+                    range: closed_paren_start
                         .map(|closed_bracket_start| symbol_range(closed_bracket_start, ")"))
                         .or_else(|| {
                             open_paren_start
@@ -8296,6 +8759,7 @@ fn error_introduced_pattern_variable_is_unused(
     }
 }
 pub struct CheckedCall {
+    // includes even type variables that get translated to a type variable with the same name
     argument_type_variable_replacements: std::collections::BTreeMap<Name, Type>,
 }
 pub struct CheckedLocalFn {
@@ -11555,7 +12019,7 @@ fn syntax_expression_format<Expressions, Patterns>(
             name,
             type_arguments,
             open_paren_start,
-            arguments_rest: arguments,
+            arguments_rest,
             closed_paren_start,
         } => {
             if let Some(first_argument_dot) = first_argument_dot {
@@ -11566,7 +12030,11 @@ fn syntax_expression_format<Expressions, Patterns>(
                     patterns,
                     expressions.item(&first_argument_dot.argument),
                 );
-                linebreak_indented_into(formatted, indent);
+                space_or_linebreak_indented_into(
+                    formatted,
+                    range_line_span(expression_range(expression, expressions, patterns)),
+                    indent,
+                );
                 formatted.push('.');
             }
             formatted.push_str(&name.value);
@@ -11600,7 +12068,7 @@ fn syntax_expression_format<Expressions, Patterns>(
                 formatted.push('>');
             }
             formatted.push('(');
-            if let Some((argument0, argument1_up)) = arguments.split_first() {
+            if let Some((rest_argument0, rest_argument1_up)) = arguments_rest.split_first() {
                 let arguments_line_span = range_line_span(lsp_types::Range {
                     start: open_paren_start
                         .or_else(|| {
@@ -11610,14 +12078,18 @@ fn syntax_expression_format<Expressions, Patterns>(
                         })
                         .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
                     end: closed_paren_start.unwrap_or_else(|| {
-                        expression_end(arguments.last().unwrap_or(argument0), expressions, patterns)
+                        expression_end(
+                            arguments_rest.last().unwrap_or(rest_argument0),
+                            expressions,
+                            patterns,
+                        )
                     }),
                 });
                 if arguments_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
-                syntax_expression_format(formatted, indent, expressions, patterns, argument0);
-                for argument in argument1_up {
+                syntax_expression_format(formatted, indent, expressions, patterns, rest_argument0);
+                for argument in rest_argument1_up {
                     space_or_linebreak_indented_into(formatted, arguments_line_span, indent);
                     syntax_expression_format(formatted, indent, expressions, patterns, argument);
                 }
@@ -11628,7 +12100,7 @@ fn syntax_expression_format<Expressions, Patterns>(
             formatted.push(')');
         }
         SyntaxExpression::Variant {
-            open_bracket_start,
+            open_bracket_start: _,
             type_,
             name,
             value,
@@ -11651,34 +12123,47 @@ fn syntax_expression_format<Expressions, Patterns>(
                     syntax_angled_type_argument_format(formatted, indent, type_);
                 }
             }
+            let line_span = range_line_span(expression_range(expression, expressions, patterns));
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
             if let Some(value) = value {
-                let value = expressions.item(value);
-                space_or_linebreak_indented_into(
+                syntax_expression_format(
                     formatted,
-                    range_line_span(lsp_types::Range {
-                        start: *open_bracket_start,
-                        end: expression_end(value, expressions, patterns),
-                    }),
-                    indent,
+                    next_indent(indent),
+                    expressions,
+                    patterns,
+                    expressions.item(value),
                 );
-                syntax_expression_format(formatted, indent, expressions, patterns, value);
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
             }
+            formatted.push(']');
         }
         SyntaxExpression::Fn {
-            fn_keyword_start: open_bracket_start,
-            open_paren_start: _,
+            fn_keyword_start,
+            open_paren_start,
             parameters,
             closed_paren_start: _,
             result,
         } => {
             formatted.push_str("fn(");
-            // TODO line span across all parameters
-            for parameter in parameters {
-                let parameter_line_span = range_line_span(pattern_range(parameter, patterns));
+            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
+                let parameter_line_span = range_line_span(lsp_types::Range {
+                    start: open_paren_start.unwrap_or(*fn_keyword_start),
+                    end: pattern_end(parameter1_up.last().unwrap_or(parameter0), patterns),
+                });
                 if parameter_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
-                syntax_pattern_format(formatted, next_indent(indent), patterns, parameter);
+                syntax_pattern_format(formatted, next_indent(indent), patterns, parameter0);
+                for parameter in parameter1_up {
+                    space_or_linebreak_indented_into(
+                        formatted,
+                        parameter_line_span,
+                        next_indent(indent),
+                    );
+                    syntax_pattern_format(formatted, next_indent(indent), patterns, parameter);
+                }
                 if parameter_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
                 }
@@ -11688,7 +12173,7 @@ fn syntax_expression_format<Expressions, Patterns>(
                 space_or_linebreak_indented_into(
                     formatted,
                     range_line_span(lsp_types::Range {
-                        start: *open_bracket_start,
+                        start: *fn_keyword_start,
                         end: expression_end(expression, expressions, patterns),
                     }),
                     indent,
@@ -11805,14 +12290,15 @@ fn syntax_expression_format<Expressions, Patterns>(
                         patterns,
                         queried,
                     );
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    let line_span =
+                        range_line_span(expression_range(expression, expressions, patterns));
+                    space_or_linebreak_indented_into(formatted, line_span, indent);
                 }
             }
-            linebreak_indented_into(formatted, indent);
             if let Some(result) = result {
                 syntax_expression_format(
                     formatted,
-                    next_indent(indent),
+                    indent,
                     expressions,
                     patterns,
                     expressions.item(result),

@@ -342,7 +342,7 @@ export function choice_empty_to(never) {
  * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item: (_: $Item) => void }} $
  * @param {Slot<$Origin, $Item>} slot @returns {U32} */
 export function slot_index(slot, $) {
-  slot_drop($.buf$Origin$Item, $.drop$Item, slot);
+  slot$drop($.buf$Origin$Item, $.drop$Item, slot);
   return slot;
 }
 /** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {Span<$Origin, $Item>} */
@@ -357,7 +357,7 @@ export function span_start_index(span) {
  * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span @returns {P32} */
 export function span_length(span, $) {
-  span_drop($.buf$Origin$Item, $.drop$Item, span);
+  span$drop($.buf$Origin$Item, $.drop$Item, span);
   return span.length;
 }
 /** @template $Origin, $Item
@@ -505,7 +505,7 @@ export function opt_span_step_while(span, direction, state, step) {
  * @param {Buf<$Origin, $Item>} buf$Origin$Item
  * @param {Slot<$Origin, $Item>} slot
  * @returns {void} */
-export function slot_clone(buf$Origin$Item, slot) {
+export function slot$clone(buf$Origin$Item, slot) {
   buf$counts_view(buf$Origin$Item)[slot] = Math.min(
     U16$MAX,
     buf$counts_view(buf$Origin$Item)[slot] + 1,
@@ -515,9 +515,9 @@ export function slot_clone(buf$Origin$Item, slot) {
  * @param {Buf<$Origin, $Item>} buf$Origin$Item
  * @param {Span<$Origin, $Item>} span
  * @returns {void} */
-export function span_clone(buf$Origin$Item, span) {
+export function span$clone(buf$Origin$Item, span) {
   for (let i = span.start; i < span.start + span.length; i++) {
-    slot_clone(buf$Origin$Item, i);
+    slot$clone(buf$Origin$Item, i);
   }
 }
 /** @template $Item, $Origin
@@ -525,7 +525,7 @@ export function span_clone(buf$Origin$Item, span) {
  * @param {(item: $Item) => void} drop$Item
  * @param {Slot<$Origin, $Item>} slot
  * @returns {void} */
-export function slot_drop(buf$Origin$Item, drop$Item, slot) {
+export function slot$drop(buf$Origin$Item, drop$Item, slot) {
   if (buf$counts_view(buf$Origin$Item)[slot] === 1) {
     if (slot + 1 < buf$Origin$Item.items.length) {
       const item = /** @type $Item */ (buf$Origin$Item.items.pop());
@@ -549,7 +549,7 @@ export function slot_drop(buf$Origin$Item, drop$Item, slot) {
  * @param {(item: $Item) => void} drop$Item
  * @param{Span<$Origin, $Item>} span
  * @returns {void} */
-export function span_drop(buf$Origin$Item, drop$Item, span) {
+export function span$drop(buf$Origin$Item, drop$Item, span) {
   for (let i = span.start; i < span.start + span.length; i++) {
     if (buf$counts_view(buf$Origin$Item)[i] === 1) {
       drop$Item(buf$Origin$Item.items[i]);

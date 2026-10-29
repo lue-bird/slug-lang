@@ -219,6 +219,7 @@ cargo install --offline --debug --path . slug
 - `.` syntax for piping the first argument
 
 ## TODO
+- when parsing, ignore commas as if they were whitespace
 - actually insert clone() and drop() in js codegen
 - change semantics of buf from linear type to rc<ArrayList>. This enables implicit cloning to always be possible, even for type variables.
   This is especially important for `buf-item` to work.
