@@ -944,7 +944,9 @@ fn parse_slug_keyword_as_start(
     }
 }
 fn parse_slug_whitespace(state: &mut ParseState) {
-    while parse_linebreak(state) || parse_same_line_char_if(state, char::is_whitespace) {}
+    while parse_linebreak(state)
+        || parse_same_line_char_if(state, |c| c.is_whitespace() || c == ',')
+    {}
 }
 fn parse_slug_comments(state: &mut ParseState) -> Option<SyntaxComments> {
     let Some(line0) = parse_slug_comment(state) else {
