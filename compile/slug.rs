@@ -2879,7 +2879,7 @@ fn syntax_project_fn_header_check<'a, Expressions>(
                     .iter()
                     .map(|parameter| with_start_position_as_ref(parameter)),
                 type_variables_exclusively_used_in_result,
-                "Type parameter variables follow after the name and are each enclosed in curly braces, so for example fn No-twice{_a}{_b}",
+                "Type parameter variables follow after the name and are enclosed in angle braces, so for example fn no-twice<A B>",
             );
             CheckedProjectFn {
                 documentation: None,
@@ -10721,21 +10721,21 @@ fn next-non-space(span opt(span(Origin)))
     if
         opt-span-step-while(
             span
-            Up [Down]
+            Up<[Down]>
             *
             fn(slot slot(Origin) *)
             = char item(chars slot)
             if u32-order(char-to-u32(char) char-to-u32(\" \"char)) {
-            Equal Going [Done char] (*)
-            Less Done [Going(*)] char
-            Greater Done [Going(*)] char
+            Equal Going<[Done char]>(*)
+            Less Done<[Going(*)]>(char)
+            Greater Done<[Going(*)]>(char)
             }
         )
     {
     Going(chars)
-        {non-space No opt(char) after No opt(span(Origin))}
+        {non-space No<opt(char)> after No<opt(span(Origin))>}
     Done(non-space span-after)
-        {non-space Yes [No] (non-space) after span-after}
+        {non-space Yes<[No]>(non-space) after span-after}
     }
 ```
 Note that `span-after` does not include any slot given to the step function, even the slot that resulted in `[done]`.

@@ -221,7 +221,6 @@ cargo install --offline --debug --path . slug
 - `.` syntax for piping the first argument
 
 ## TODO
-- update extensions
 - actually insert clone() and drop() in js codegen
 - fix the many bugs
 - implement association checking:

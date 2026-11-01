@@ -12,8 +12,6 @@
 
 (key_symbol_equals) @keyword
 
-(key_symbol_origin) @keyword
-
 (key_symbol_chain) @keyword
 
 (key_symbol_tuple) @keyword
@@ -21,8 +19,6 @@
 (pattern_ignore_untyped) @keyword
 
 (field_name) @property
-
-(expression_variable) @variable
 
 (callable_name) @variable
 
