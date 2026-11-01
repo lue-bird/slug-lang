@@ -1,4 +1,4 @@
-decently fast programming language which uses indexes bound to specific arrays instead of references.
+programming language which uses indexes bound to specific arrays instead of references.
 An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
@@ -221,8 +221,6 @@ cargo install --offline --debug --path . slug
 - `.` syntax for piping the first argument
 
 ## TODO
-- actually insert clone() and drop() in js codegen
-- fix the many bugs
 - implement association checking:
     - implicit arguments are as follows:
         - a bundle of bufs, each passed by (noalias) *mut.
@@ -247,14 +245,12 @@ cargo install --offline --debug --path . slug
     - "reachable origin" (more or less analog for type variables) is defined as:
         - available via implicit parameters
         - any chained result value or pattern variable has a type which in any part but outside of buf items mentions this origin (the first parameter in slot/span)
-- format: directly append the type after text and number literal. This is more obvious when passing multiple arguments and takes up less space
-- reimplement standard library (positional + removing redundant linear stuff)
-- correct full type completions syntax
 - switch away from rust-implementation internal Slot stuff to get rid of core.rs
 - add zig codegen.
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
 - show implicitly passed bufs when hovering a project fn
+- change variable names in js codegen to not include the range because same-block shadowing is disallowed in slug anyway
 - website with online repl
 
 ## implementation details
@@ -280,6 +276,8 @@ cargo install --offline --debug --path . slug
       xy-rid({x second-y y first-y})
   ```  
   So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
+- allow `buf` to be configured to never free slots (acting like an arena). This means no counts are ever recorded (massive for temporary bufs) but also any `item-at-index` stuff outside of `span` is likely to hit dead items and is thus invalid.
+  Question: How to represent in zig?
 
 ## known design weaknesses
 - it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
@@ -287,6 +285,11 @@ cargo install --offline --debug --path . slug
   
   The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
 - building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
+- in retrospect I'm not actually 100% sure that passing bufs implicitly is that great of an idea.
+  For example, if they were explicitly passed
+    - `slot` and `span` would not need a second type parameter (huge)
+    - it's more obvious
+    - `buf` could also be specialized to e.g. `arena`
 
 ## potential improvements in the future
 - consider requiring `:` for parameter pattern variables between the name and type. This is probably more obvious and is a little more robust. Downside: more typing and still not super clear. Format: name: type

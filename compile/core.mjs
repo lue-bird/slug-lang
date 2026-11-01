@@ -349,8 +349,11 @@ export function slot_index(slot, $) {
 export function slot_to_span(slot) {
   return { start: slot, length: 1 };
 }
-/** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {U32} */
-export function span_start_index(span) {
+/** @template $Origin, $Item
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item: (_: $Item) => void }} $
+ * @param {Span<$Origin, $Item>} span @returns {U32} */
+export function span_start_index(span, $) {
+  span$drop($.buf$Origin$Item, $.drop$Item, span);
   return span.start;
 }
 /** @template $Origin, $Item

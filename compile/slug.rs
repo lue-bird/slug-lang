@@ -6154,7 +6154,8 @@ fn syntax_project_fn_to_js<Expressions>(
     if implicit_bufs.is_empty() {
         output.push_str("const $ = {};\n")
     }
-    let mut parameter_introduced_variables = std::collections::HashMap::new();
+    let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
+    let mut parameter_introduced_variables_last_uses = std::collections::HashMap::with_capacity(2);
     for (syntax_parameter_index, (syntax_parameter, _)) in syntax_parameters
         .iter()
         .zip(parameter_types)
@@ -6166,7 +6167,10 @@ fn syntax_project_fn_to_js<Expressions>(
             syntax_parameter,
             None,
             &format!("a{}", syntax_parameter_index),
-            &mut parameter_introduced_variables,
+            &mut |name, type_| {
+                parameter_introduced_variables.insert(name, type_);
+                parameter_introduced_variables_last_uses.insert(name, Vec::with_capacity(1));
+            },
             type_aliases,
         );
     }
@@ -6176,6 +6180,12 @@ fn syntax_project_fn_to_js<Expressions>(
     if result_expression_is_invalid {
         js_incomplete_statement();
     } else {
+        syntax_expression_local_variables_last_uses(
+            syntax_result,
+            expressions,
+            &mut std::collections::HashSet::with_capacity(2),
+            &mut parameter_introduced_variables_last_uses,
+        );
         syntax_expression_to_js(
             output,
             project_fns,
@@ -6184,6 +6194,7 @@ fn syntax_project_fn_to_js<Expressions>(
             checked_queries,
             checked_calls,
             &mut parameter_introduced_variables,
+            &mut parameter_introduced_variables_last_uses,
             syntax_result,
             function_scope_start,
         );
@@ -6360,11 +6371,25 @@ fn syntax_pattern_to_js_destructuring<'a>(
     pattern: &'a SyntaxPattern,
     expected_type: Option<&'a Type>,
     to_destructure: &str,
-    introduced_variables: &mut std::collections::HashMap<&'a Name, JsLocalVariable<'a>>,
+    insert_introduced_variable: &mut impl FnMut(&'a Name, JsLocalVariable<'a>),
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     match pattern {
-        SyntaxPattern::Ignored { .. } => {}
+        SyntaxPattern::Ignored {
+            underscore_start: _,
+            type_,
+        } => {
+            if let Some(to_drop_type) = expected_type
+                .map(|expected_type| std::borrow::Cow::Borrowed(expected_type))
+                .or_else(|| {
+                    type_
+                        .as_ref()
+                        .map(|type_| std::borrow::Cow::Owned(syntax_type_to_type(type_)))
+                })
+            {
+                js_variable_drop(output, to_destructure, &to_drop_type, type_aliases);
+            }
+        }
         SyntaxPattern::Variable { name, type_ } => {
             output.push_str("const ");
             name_to_lowercase_local_js_introduced_at(output, &name.value, name.start);
@@ -6401,7 +6426,7 @@ fn syntax_pattern_to_js_destructuring<'a>(
                     output.push_str(";\n");
                 }
             }
-            introduced_variables.insert(
+            insert_introduced_variable(
                 &name.value,
                 JsLocalVariable {
                     origin_start: name.start,
@@ -6433,7 +6458,7 @@ fn syntax_pattern_to_js_destructuring<'a>(
                     } else {
                         format!("{to_destructure}.{}", name_to_lowercase_js(&name.value))
                     },
-                    introduced_variables,
+                    insert_introduced_variable,
                     type_aliases,
                 );
             }
@@ -6455,7 +6480,7 @@ fn syntax_pattern_to_js_destructuring<'a>(
                         _ => None,
                     },
                     &format!("{to_destructure}[{part_index}]"),
-                    introduced_variables,
+                    insert_introduced_variable,
                     type_aliases,
                 );
             }
@@ -6483,7 +6508,7 @@ fn syntax_pattern_to_js_destructuring<'a>(
                             "{to_destructure}.{}",
                             name_to_lowercase_js(&field.name.value)
                         ),
-                        introduced_variables,
+                        insert_introduced_variable,
                         type_aliases,
                     );
                 }
@@ -6501,10 +6526,11 @@ fn syntax_expression_to_js<'a, Expressions>(
     project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions>>,
-
     checked_queries: &'a std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     checked_calls: &'a std::collections::HashMap<lsp_types::Position, CheckedCall>,
+    // would be nice if those 2 could be combined
     local_variables: &mut std::collections::HashMap<&'a Name, JsLocalVariable<'a>>,
+    local_variables_last_uses: &mut std::collections::HashMap<&'a Name, Vec<lsp_types::Position>>,
     expression: &'a SyntaxExpression<Expressions>,
     scope_start: lsp_types::Position,
 ) {
@@ -6579,17 +6605,28 @@ fn syntax_expression_to_js<'a, Expressions>(
             output.push_str("\";\n");
         }
         SyntaxExpression::Variable(name) => {
+            let Some(local_variable) = local_variables.get(&name.value) else {
+                js_scope_result_variable(output, scope_start);
+                output.push_str(" = ");
+                name_to_lowercase_local_js(output, &name.value);
+                output.push_str(";\n");
+                return;
+            };
+            let mut js_variable_name = String::new();
+            name_to_lowercase_local_js_introduced_at(
+                &mut js_variable_name,
+                &name.value,
+                local_variable.origin_start,
+            );
+            if let Some(last_uses) = local_variables_last_uses.get(&name.value)
+                && !last_uses.contains(&name.start)
+                && let Some(type_) = &local_variable.type_
+            {
+                js_variable_clone(output, &js_variable_name, &type_, type_aliases);
+            }
             js_scope_result_variable(output, scope_start);
             output.push_str(" = ");
-            if let Some(local_variable) = local_variables.get(&name.value) {
-                name_to_lowercase_local_js_introduced_at(
-                    output,
-                    &name.value,
-                    local_variable.origin_start,
-                );
-            } else {
-                name_to_lowercase_local_js(output, &name.value);
-            }
+            output.push_str(&js_variable_name);
             output.push_str(";\n");
         }
         SyntaxExpression::Call {
@@ -6617,6 +6654,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                     checked_queries,
                     checked_calls,
                     local_variables,
+                    local_variables_last_uses,
                     argument,
                     argument_scope_start,
                 );
@@ -6678,6 +6716,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                     );
                 }
             } else if let Some(local_variable) = local_variables.get(&name.value) {
+                // no need to check for clone since functions are always freely copy-able (closures would not be)
                 name_to_lowercase_local_js_introduced_at(
                     output,
                     &name.value,
@@ -6738,6 +6777,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                     checked_queries,
                     checked_calls,
                     local_variables,
+                    local_variables_last_uses,
                     value,
                     value_scope_start,
                 );
@@ -6789,14 +6829,21 @@ fn syntax_expression_to_js<'a, Expressions>(
             }
             output.push_str("$) => {\n");
             'in_function: {
-                let mut parameter_introduced_variables = std::collections::HashMap::new();
+                let mut parameter_introduced_variables =
+                    std::collections::HashMap::with_capacity(2);
+                let mut parameter_introduced_variables_last_uses =
+                    std::collections::HashMap::with_capacity(2);
                 for (parameter_index, syntax_parameter) in parameters.iter().enumerate() {
                     syntax_pattern_to_js_destructuring(
                         output,
                         syntax_parameter,
                         None,
                         &format!("a{parameter_index}"),
-                        &mut parameter_introduced_variables,
+                        &mut |name, type_| {
+                            parameter_introduced_variables.insert(name, type_);
+                            parameter_introduced_variables_last_uses
+                                .insert(name, Vec::with_capacity(1));
+                        },
                         type_aliases,
                     );
                 }
@@ -6809,6 +6856,12 @@ fn syntax_expression_to_js<'a, Expressions>(
                 output.push_str("let ");
                 js_scope_result_variable(output, result_scope_start);
                 output.push_str(";\n");
+                syntax_expression_local_variables_last_uses(
+                    result,
+                    expressions,
+                    &mut std::collections::HashSet::with_capacity(2),
+                    &mut parameter_introduced_variables_last_uses,
+                );
                 syntax_expression_to_js(
                     output,
                     project_fns,
@@ -6817,6 +6870,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                     checked_queries,
                     checked_calls,
                     &mut parameter_introduced_variables,
+                    &mut parameter_introduced_variables_last_uses,
                     result,
                     result_scope_start,
                 );
@@ -6843,6 +6897,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                     checked_queries,
                     checked_calls,
                     local_variables,
+                    local_variables_last_uses,
                     part,
                     expression_start(part, expressions),
                 );
@@ -6874,6 +6929,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                         checked_queries,
                         checked_calls,
                         local_variables,
+                        local_variables_last_uses,
                         value,
                         expression_start(value, expressions),
                     );
@@ -6914,6 +6970,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                         checked_queries,
                         checked_calls,
                         local_variables,
+                        local_variables_last_uses,
                         expressions.item(expression),
                         scope_start,
                     );
@@ -6945,11 +7002,13 @@ fn syntax_expression_to_js<'a, Expressions>(
                     checked_queries,
                     checked_calls,
                     local_variables,
+                    local_variables_last_uses,
                     queried,
                     queried_scope_start,
                 );
                 output.push_str(";\n");
                 if let Some(pattern) = pattern {
+                    let mut destruct_local_variables_last_uses = std::collections::HashMap::new();
                     syntax_pattern_to_js_destructuring(
                         output,
                         pattern,
@@ -6957,27 +7016,39 @@ fn syntax_expression_to_js<'a, Expressions>(
                             .get(equals_start)
                             .map(|checked_query| &checked_query.queried_type),
                         &queried_variable_name,
-                        local_variables,
+                        &mut |name, type_| {
+                            local_variables.insert(name, type_);
+                            destruct_local_variables_last_uses.insert(name, Vec::with_capacity(1));
+                        },
                         type_aliases,
                     );
-                }
-            }
-            match result {
-                None => {
-                    js_incomplete_statement();
-                }
-                Some(result) => {
-                    syntax_expression_to_js(
-                        output,
-                        project_fns,
-                        type_aliases,
-                        expressions,
-                        checked_queries,
-                        checked_calls,
-                        local_variables,
-                        expressions.item(result),
-                        scope_start,
-                    );
+                    match result {
+                        None => {
+                            js_incomplete_statement();
+                        }
+                        Some(result) => {
+                            let result = expressions.item(result);
+                            syntax_expression_local_variables_last_uses(
+                                result,
+                                expressions,
+                                &mut std::collections::HashSet::new(),
+                                &mut destruct_local_variables_last_uses,
+                            );
+                            local_variables_last_uses.extend(destruct_local_variables_last_uses);
+                            syntax_expression_to_js(
+                                output,
+                                project_fns,
+                                type_aliases,
+                                expressions,
+                                checked_queries,
+                                checked_calls,
+                                local_variables,
+                                local_variables_last_uses,
+                                result,
+                                scope_start,
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -7014,6 +7085,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                 checked_queries,
                 checked_calls,
                 local_variables,
+                local_variables_last_uses,
                 queried,
                 queried_scope_start,
             );
@@ -7029,8 +7101,9 @@ fn syntax_expression_to_js<'a, Expressions>(
                         );
                         output.push_str(") {\n");
                     }
-                    // can be optimized by not cloning if only one case exists
+                    // can be optimized
                     let mut case_local_variables = local_variables.clone();
+                    let mut case_local_variables_last_uses = std::collections::HashMap::new();
                     syntax_pattern_to_js_destructuring(
                         output,
                         &case.pattern,
@@ -7038,7 +7111,10 @@ fn syntax_expression_to_js<'a, Expressions>(
                             .get(if_keyword_start)
                             .map(|checked_query| &checked_query.queried_type),
                         &queried_variable_name,
-                        &mut case_local_variables,
+                        &mut |name, type_| {
+                            case_local_variables.insert(name, type_);
+                            case_local_variables_last_uses.insert(name, Vec::with_capacity(1));
+                        },
                         type_aliases,
                     );
                     match &case.result {
@@ -7046,6 +7122,17 @@ fn syntax_expression_to_js<'a, Expressions>(
                             js_incomplete_statement();
                         }
                         Some(case_result) => {
+                            syntax_expression_local_variables_last_uses(
+                                case_result,
+                                expressions,
+                                &mut std::collections::HashSet::new(),
+                                &mut case_local_variables_last_uses,
+                            );
+                            case_local_variables_last_uses.extend(
+                                local_variables_last_uses
+                                    .iter()
+                                    .map(|(name, uses)| (*name, uses.clone())),
+                            );
                             syntax_expression_to_js(
                                 output,
                                 project_fns,
@@ -7054,6 +7141,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                                 checked_queries,
                                 checked_calls,
                                 &mut case_local_variables,
+                                &mut case_local_variables_last_uses,
                                 case_result,
                                 scope_start,
                             );
@@ -7619,6 +7707,167 @@ const js_lowercase_keywords: [&str; 70] = [
     "of",
     "set",
 ];
+fn syntax_expression_local_variables_last_uses<'a, Expressions>(
+    expression: &'a SyntaxExpression<Expressions>,
+    expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions>>,
+    local_variables_used: &mut std::collections::HashSet<&'a Name>,
+    local_variables_last_uses: &mut std::collections::HashMap<&Name, Vec<lsp_types::Position>>,
+) {
+    match expression {
+        SyntaxExpression::Number { .. } => {}
+        SyntaxExpression::Text { .. } => {}
+        SyntaxExpression::Variable(name) => {
+            if let Some(last_uses) = local_variables_last_uses.get_mut(&name.value) {
+                let local_variable_was_unused = local_variables_used.insert(&name.value);
+                if local_variable_was_unused {
+                    last_uses.push(name.start);
+                }
+            }
+        }
+        SyntaxExpression::Call {
+            first_argument_dot,
+            name,
+            type_arguments: _,
+            open_paren_start: _,
+            arguments_rest,
+            closed_paren_start: _,
+        } => {
+            if let Some(last_uses) = local_variables_last_uses.get_mut(&name.value) {
+                let local_variable_was_unused = local_variables_used.insert(&name.value);
+                if local_variable_was_unused {
+                    last_uses.push(name.start);
+                }
+            }
+            for value in first_argument_dot
+                .iter()
+                .map(|first| expressions.item(&first.argument))
+                .chain(arguments_rest)
+                .rev()
+            {
+                syntax_expression_local_variables_last_uses(
+                    value,
+                    expressions,
+                    local_variables_used,
+                    local_variables_last_uses,
+                )
+            }
+        }
+        SyntaxExpression::Variant {
+            name: _,
+            type_: _,
+            values,
+        } => {
+            for value in values.iter().flat_map(|values| &values.values).rev() {
+                syntax_expression_local_variables_last_uses(
+                    value,
+                    expressions,
+                    local_variables_used,
+                    local_variables_last_uses,
+                )
+            }
+        }
+        SyntaxExpression::Fn { .. } => {}
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts.iter().rev() {
+                syntax_expression_local_variables_last_uses(
+                    part,
+                    expressions,
+                    local_variables_used,
+                    local_variables_last_uses,
+                )
+            }
+        }
+        SyntaxExpression::Record {
+            open_curly_start: _,
+            fields,
+            closed_curly_start: _,
+        } => {
+            for SyntaxRecordField { name: _, value } in fields.iter().rev() {
+                if let Some(value) = value {
+                    syntax_expression_local_variables_last_uses(
+                        value,
+                        expressions,
+                        local_variables_used,
+                        local_variables_last_uses,
+                    )
+                }
+            }
+        }
+        SyntaxExpression::Commented {
+            comments: _,
+            expression,
+        } => {
+            if let Some(expression) = expression {
+                syntax_expression_local_variables_last_uses(
+                    expressions.item(expression),
+                    expressions,
+                    local_variables_used,
+                    local_variables_last_uses,
+                )
+            }
+        }
+        SyntaxExpression::Destruct {
+            equals_start: _,
+            pattern: _,
+            queried,
+            result,
+        } => {
+            if let Some(result) = result {
+                syntax_expression_local_variables_last_uses(
+                    expressions.item(result),
+                    expressions,
+                    local_variables_used,
+                    local_variables_last_uses,
+                )
+            }
+            if let Some(queried) = queried {
+                syntax_expression_local_variables_last_uses(
+                    expressions.item(queried),
+                    expressions,
+                    local_variables_used,
+                    local_variables_last_uses,
+                )
+            }
+        }
+        SyntaxExpression::If {
+            if_keyword_start: _,
+            queried,
+            open_curly_start: _,
+            cases,
+            closed_curly_start: _,
+        } => {
+            let mut local_variables_used_across_cases = std::collections::HashSet::new();
+            for SyntaxExpressionIfCase { pattern: _, result } in cases {
+                if let Some(result) = result {
+                    let mut case_local_variables_used = std::collections::HashSet::new();
+                    syntax_expression_local_variables_last_uses(
+                        result,
+                        expressions,
+                        &mut case_local_variables_used,
+                        local_variables_last_uses,
+                    );
+                    local_variables_used_across_cases.extend(case_local_variables_used);
+                }
+            }
+            local_variables_used.retain(|local_variable_used| {
+                !local_variables_used_across_cases.contains(local_variable_used)
+            });
+            if let Some(queried) = queried {
+                syntax_expression_local_variables_last_uses(
+                    expressions.item(queried),
+                    expressions,
+                    local_variables_used,
+                    local_variables_last_uses,
+                )
+            }
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct CheckedLocalVariable {
@@ -7631,7 +7880,6 @@ fn syntax_expression_check<'a, Expressions>(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     expressions: &'a core::Buf<Expressions, SyntaxExpression<Expressions>>,
-
     local_variables: &mut std::collections::HashMap<&'a Name, CheckedLocalVariable>,
     expression: &'a SyntaxExpression<Expressions>,
     checked_calls: &mut std::collections::HashMap<lsp_types::Position, CheckedCall>,
