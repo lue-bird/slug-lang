@@ -923,51 +923,57 @@ export function opt_span_add_own_opt_span(start, end, $) {
   return { yes: span_add_own_span(start.yes, end.yes, $) };
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Str} new_str
  * @returns {Span<$Origin, Char>} */
 export function add_str_chars(new_str, $) {
-  const new_start = $.buf$Origin$tychar.items.length;
+  const new_start = $.buf$Origin$tychar$end.items.length;
   for (const new_char of new_str) {
-    $.buf$Origin$tychar.items.push(new_char);
-    $.buf$Origin$tychar.counts.resize($.buf$Origin$tychar.items.length);
-    buf$counts_view($.buf$Origin$tychar)[$.buf$Origin$tychar.items.length - 1] = 1;
+    $.buf$Origin$tychar$end.items.push(new_char);
+    $.buf$Origin$tychar$end.counts.resize($.buf$Origin$tychar$end.items.length);
+    buf$counts_view($.buf$Origin$tychar$end)[$.buf$Origin$tychar$end.items.length - 1] =
+      1;
   }
-  if ($.buf$Origin$tychar.items.length > U32$MAX)
+  if ($.buf$Origin$tychar$end.items.length > U32$MAX)
     throw Error(
-      "Array length " + $.buf$Origin$tychar.items.length + " not representable as a u32",
+      "Array length " +
+        $.buf$Origin$tychar$end.items.length +
+        " not representable as a u32",
     );
   return {
     start: new_start,
-    length: $.buf$Origin$tychar.items.length - new_start,
+    length: $.buf$Origin$tychar$end.items.length - new_start,
   };
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Span<$Origin, Char>} span
  * @param {Str} new_str
  * @returns {Span<$Origin, Char>} */
 export function span_add_str_chars(span, new_str, $) {
-  if (span.start + span.length < $.buf$Origin$tychar.items.length) {
-    span_move_to_end(span, { buf$Origin$Item: $.buf$Origin$tychar });
+  if (span.start + span.length < $.buf$Origin$tychar$end.items.length) {
+    span_move_to_end(span, { buf$Origin$Item: $.buf$Origin$tychar$end });
   }
-  const new_start = $.buf$Origin$tychar.items.length;
+  const new_start = $.buf$Origin$tychar$end.items.length;
   for (const new_char of new_str) {
-    $.buf$Origin$tychar.items.push(new_char);
-    $.buf$Origin$tychar.counts.resize($.buf$Origin$tychar.items.length);
-    buf$counts_view($.buf$Origin$tychar)[$.buf$Origin$tychar.items.length - 1] = 1;
+    $.buf$Origin$tychar$end.items.push(new_char);
+    $.buf$Origin$tychar$end.counts.resize($.buf$Origin$tychar$end.items.length);
+    buf$counts_view($.buf$Origin$tychar$end)[$.buf$Origin$tychar$end.items.length - 1] =
+      1;
   }
-  if ($.buf$Origin$tychar.items.length > U32$MAX)
+  if ($.buf$Origin$tychar$end.items.length > U32$MAX)
     throw Error(
-      "Array length " + $.buf$Origin$tychar.items.length + " not representable as a u32",
+      "Array length " +
+        $.buf$Origin$tychar$end.items.length +
+        " not representable as a u32",
     );
   return {
     start: new_start - span.length,
-    length: span.length + ($.buf$Origin$tychar.items.length - new_start),
+    length: span.length + ($.buf$Origin$tychar$end.items.length - new_start),
   };
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Opt<Span<$Origin, Char>>} span
  * @param {Str} new_str
  * @returns {Span<$Origin, Char>} */
@@ -978,7 +984,7 @@ export function opt_span_add_str_chars(span, new_str, $) {
   return span_add_str_chars(span.yes, new_str, $);
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Span<$Origin, Char>} span
  * @param {U32} n
  * @returns {Span<$Origin, Char>} */
@@ -986,7 +992,7 @@ export function span_add_u32_chars(span, n, $) {
   return span_add_str_chars(span, n.toString(), $);
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Opt<Span<$Origin, Char>>} span
  * @param {U32} n
  * @returns {Span<$Origin, Char>} */
@@ -994,7 +1000,7 @@ export function opt_span_add_u32_chars(span, n, $) {
   return opt_span_add_str_chars(span, n.toString(), $);
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Span<$Origin, Char>} span
  * @param {I32} n
  * @returns {Span<$Origin, Char>} */
@@ -1002,7 +1008,7 @@ export function span_add_i32_chars(span, n, $) {
   return span_add_str_chars(span, n.toString(), $);
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Opt<Span<$Origin, Char>>} span
  * @param {I32} n
  * @returns {Span<$Origin, Char>} */
@@ -1010,7 +1016,7 @@ export function opt_span_add_i32_chars(span, n, $) {
   return opt_span_add_str_chars(span, n.toString(), $);
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Span<$Origin, Char>} span
  * @param {F32} n
  * @returns {Span<$Origin, Char>} */
@@ -1018,7 +1024,7 @@ export function span_add_f32_chars(span, n, $) {
   return span_add_str_chars(span, f32$to_string(n), $);
 }
 /** @template $Origin
- * @param {{ buf$Origin$tychar: Buf<$Origin, Char> }} $
+ * @param {{ buf$Origin$tychar$end: Buf<$Origin, Char> }} $
  * @param {Opt<Span<$Origin, Char>>} span
  * @param {F32} n
  * @returns {Span<$Origin, Char>} */
