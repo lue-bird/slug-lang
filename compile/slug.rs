@@ -6392,7 +6392,7 @@ fn syntax_pattern_to_js_destructuring<'a>(
         }
         SyntaxPattern::Variable { name, type_ } => {
             output.push_str("const ");
-            name_to_lowercase_local_js_introduced_at(output, &name.value, name.start);
+            name_to_lowercase_local_js(output, &name.value);
             output.push_str(" = ");
             output.push_str(to_destructure);
             output.push_str(";\n");
@@ -6421,7 +6421,7 @@ fn syntax_pattern_to_js_destructuring<'a>(
                         &reachable_type_buf.item,
                     );
                     output.push_str(" = ");
-                    name_to_lowercase_local_js_introduced_at(output, &name.value, name.start);
+                    name_to_lowercase_local_js(output, &name.value);
                     reachable_type_buf_path_js(output, &reachable_type_buf_path);
                     output.push_str(";\n");
                 }
@@ -6429,7 +6429,6 @@ fn syntax_pattern_to_js_destructuring<'a>(
             insert_introduced_variable(
                 &name.value,
                 JsLocalVariable {
-                    origin_start: name.start,
                     type_: variable_type,
                 },
             );
@@ -6518,7 +6517,6 @@ fn syntax_pattern_to_js_destructuring<'a>(
 }
 #[derive(Debug, Clone)]
 struct JsLocalVariable<'a> {
-    origin_start: lsp_types::Position,
     type_: Option<std::borrow::Cow<'a, Type>>,
 }
 fn syntax_expression_to_js<'a, Expressions>(
@@ -6613,11 +6611,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                 return;
             };
             let mut js_variable_name = String::new();
-            name_to_lowercase_local_js_introduced_at(
-                &mut js_variable_name,
-                &name.value,
-                local_variable.origin_start,
-            );
+            name_to_lowercase_local_js(&mut js_variable_name, &name.value);
             if let Some(last_uses) = local_variables_last_uses.get(&name.value)
                 && !last_uses.contains(&name.start)
                 && let Some(type_) = &local_variable.type_
@@ -6717,11 +6711,7 @@ fn syntax_expression_to_js<'a, Expressions>(
                 }
             } else if let Some(local_variable) = local_variables.get(&name.value) {
                 // no need to check for clone since functions are always freely copy-able (closures would not be)
-                name_to_lowercase_local_js_introduced_at(
-                    output,
-                    &name.value,
-                    local_variable.origin_start,
-                );
+                name_to_lowercase_local_js(output, &name.value);
                 output.push('(');
                 for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
                     js_scope_result_variable(output, expression_end(argument, expressions));
@@ -7550,19 +7540,6 @@ fn js_scope_result_variable(output: &mut String, scope_start: lsp_types::Positio
     _ = write!(output, "{}", scope_start.line);
     output.push('_');
     _ = write!(output, "{}", scope_start.character);
-}
-fn name_to_lowercase_local_js_introduced_at(
-    output: &mut String,
-    name: &str,
-    introduced_start: lsp_types::Position,
-) {
-    use std::fmt::Write as _;
-    let sanitized = name_to_lowercase_js_variable_segment(name);
-    output.push_str(&sanitized);
-    output.push('$');
-    _ = write!(output, "{}", introduced_start.line);
-    output.push('_');
-    _ = write!(output, "{}", introduced_start.character);
 }
 
 fn type_buf_js_variable_name(output: &mut String, origin: &Type, item: &Type) {
@@ -10605,7 +10582,7 @@ It's the default round operation implementation in e.g. [C](https://www.open-std
 However, it's slower than `f32-round-nearest-else-even` on most architectures.
 ```slug
 fn age() f32
-    F32-round-nearest-else-away-from-0 68.8f32
+    f32-round-nearest-else-away-from-0(68.8f32)
 ```",
                 type_parameters: vec![],
                 parameters: vec![type_f32] ,
@@ -10691,7 +10668,7 @@ Often called truncate",
 In effect, `f32-round-toward-0-to-i32-clamp` truncates off at the decimal point:
 ```slug
 fn age() f32
-    f32-round-toward-0-to-i32-clamp 68.8f32
+    f32-round-toward-0-to-i32-clamp(68.8f32)
 ```",
                 type_parameters: vec![],
                 parameters: vec![type_f32] ,
@@ -10766,8 +10743,8 @@ the failure variant could never have been created, we can safely unwrap it!
 ```slug
 fn tried-unwrap(tried [Success(Ok) Failure([])]) Ok
     if tried {
-    [Success(ok)] ok
-    [Failure(impossible)] choice-empty-to: Ok (impossible)
+    Success(ok) ok
+    Failure(impossible) choice-empty-to<Ok>(impossible)
     }
 ```
 Another nice use case: Creating a value whose only purpose is transporting type info:
@@ -10786,11 +10763,11 @@ ty weak-slot(Origin)
     {origin type-only(Origin) index u32}
 
 fn index-to-weak-slot<Origin>(index u32) weak-slot(Origin)
-    {index index origin A type-only(Origin)}
+    {index index origin A<type-only(Origin)>}
 
 fn span-start-weak(span span(Origin)) weak-slot(Origin)
     = index span-start-index(span)
-    index-to-weak-slot: Origin (index)
+    index-to-weak-slot<Origin>(index)
 ```
 This `type-only` pattern is very easy to overuse,
 please limit your creativity for the rest of us mortals."#,
@@ -10862,14 +10839,14 @@ Note that to only read the start index you can directly call `span-start-index`"
                 documentation: "Split after a given length with the start half known to have positive length.
 If the length is greater than the given span's length, .start will be the existing span and .after will be empty.
 ```slug
-fn Span-slot-at(span span(Origin) index u32)
+fn span-slot-at(span span(Origin) index u32)
     {
     before opt(span(Origin))
     at slot(Origin)
     after opt(span(Origin))
     }
     = *(until after)
-        span-start-of-length-positive(span p32-add(1 p32 index))
+        span-start-of-length-positive(span 1p32.p32-add(index))
     = *(before at) span-end(until)
     {before before at at after after}
 ```
@@ -11035,9 +11012,9 @@ To modify it, use `buf-pre-allocate-at-least`, `add`, `insert` etc.",
                 documentation: "Initialize a `buf` with 0 items and spare allocated memory from an `Unset-slice`.
 This can be used to recycle `buf` memory from one `buf` with one origin into another `buf` with a different origin.
 ```slug
-fn buf-recycle(old buf(Old-origin Item))
+fn buf-recycle<New-origin>(old buf(Old-origin Item))
     buf(New-origin Item)
-    buf-reuse: New-origin (buf-to-unset(old))
+    buf-reuse<New-origin>(buf-to-unset(old))
 ```",
                 type_parameters: vec![Name::from_static("Origin")],
                 parameters: vec![type_unset_slice(type_variable("Item"))],
@@ -11505,8 +11482,8 @@ pub static core_type_aliases: std::sync::LazyLock<
                 documentation: Some(Box::from(
                     r"A natural number >= 1 (positive integer) with 32 bits.
 ```slug
-fn Answer . : p32 =
-    P32-add-clamp .p 2 p32 .u 40u32
+fn answer() p32
+    p32-add-clamp(2p32 40u32)
 ```",
                 )),
                 parameters: vec![],
@@ -11520,8 +11497,8 @@ fn Answer . : p32 =
                 documentation: Some(Box::from(
                     r"A natural number >= 0 (unsigned integer) with 32 bits.
 ```slug
-fn Answer . : u32 =
-    U32-add-clamp .a 2u32 .b 40u32
+fn answer() u32
+    u32-add-clamp(2u32 40u32)
 ```",
                 )),
                 parameters: vec![],
@@ -11535,8 +11512,8 @@ fn Answer . : u32 =
                 documentation: Some(Box::from(
                     r"A signed whole number (integer) with 32 bits.
 ```slug
-fn Answer . : i32 =
-    I32-add-clamp .a -8 i32 .b 50 i32
+fn answer() i32
+    i32-add-clamp(-8i32 50i32)
 ```",
                 )),
                 parameters: vec![],
@@ -11551,8 +11528,8 @@ fn Answer . : i32 =
                     r"A signed decimal number (floating-point) with 32 bit precision.
 Does not allow infinities or NaN. If you need these error states, explicitly model them with a choice type.
 ```slug
-fn Answer . : f32 =
-    F32-add-clamp .a -8.5 f32 .b 50.5 f32
+fn answer() f32 =
+    f32-add-clamp(-8.5f32 50.5f32)
 ```",
                 )),
                 parameters: vec![],
@@ -11571,7 +11548,7 @@ str-start("🇳🇿"str)
 # = {
 # start "\(1F1FA)"char
 #        Indicator N
-# after [yes opt(str) "\(1F1F8)"str]
+# after Yes "\(1F1F8)"str
 #        Indicator Z
 # }
 ```
@@ -11609,7 +11586,7 @@ When building new strings at runtime, use functions like `opt-span-add-str-chars
                     "Result of a binary comparison.
 ```slug
 u32-order(12u32 20u32)
-# = Less order
+# = Less<order>
 
 fn u32-max(a u32 b u32) u32
     if u32-order(a b) {
@@ -11632,7 +11609,7 @@ fn u32-max(a u32 b u32) u32
             CheckedTypeAlias {
                 name_range: None,
                 documentation: Some(Box::from(
-                    "Either you have some value (yes) or you have nothing (no).",
+                    "Either you have some value (Yes) or you have nothing (No).",
                 )),
                 parameters: vec![Name::from_static("Yes")],
                 type_: Some(type_choice([
@@ -12132,7 +12109,6 @@ fn syntax_expression_format<Expressions>(
     formatted: &mut String,
     indent: usize,
     expressions: &core::Buf<Expressions, SyntaxExpression<Expressions>>,
-
     expression: &SyntaxExpression<Expressions>,
 ) {
     match expression {
@@ -12330,11 +12306,8 @@ fn syntax_expression_format<Expressions>(
             if let Some(result) = result {
                 space_or_linebreak_indented_into(
                     formatted,
-                    range_line_span(lsp_types::Range {
-                        start: *fn_keyword_start,
-                        end: expression_end(expression, expressions),
-                    }),
-                    indent,
+                    range_line_span(expression_range(expression, expressions)),
+                    next_indent(indent),
                 );
                 syntax_expression_format(formatted, indent, expressions, expressions.item(result));
             }

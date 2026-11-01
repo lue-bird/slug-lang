@@ -219,6 +219,7 @@ cargo install --offline --debug --path . slug
 - drop and clone is implicit and happens after the last use. This is possible leak-free because a `slot` knows how to modify the associated `buf` in the scope it's in
 - positional arguments and otherwise familiar syntax
 - `.` syntax for piping the first argument
+- enabling nested origins or even type-identity origins if you don't care about at all
 
 ## TODO
 - implement association checking:
@@ -250,7 +251,7 @@ cargo install --offline --debug --path . slug
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
 - show implicitly passed bufs when hovering a project fn
-- change variable names in js codegen to not include the range because same-block shadowing is disallowed in slug anyway
+- consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 - website with online repl
 
 ## implementation details
