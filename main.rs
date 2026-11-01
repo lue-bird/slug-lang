@@ -2,13 +2,12 @@
 use gen_lsp_types as lsp_types;
 use slug_compile as slug;
 
-struct State<Expressions> {
-    projects: std::collections::HashMap<lsp_types::Uri, ProjectState<Expressions>>,
-    syntax_expressions: slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions>>,
+struct State {
+    projects: std::collections::HashMap<lsp_types::Uri, ProjectState>,
 }
-struct ProjectState<Expressions> {
+struct ProjectState {
     source: String,
-    syntax: slug::SyntaxProject<Expressions>,
+    syntax: slug::SyntaxProject,
     type_aliases: std::collections::HashMap<slug::Name, slug::CheckedTypeAlias>,
     fns: std::collections::HashMap<slug::Name, slug::CheckedProjectFn>,
     queries: std::collections::HashMap<lsp_types::Position, slug::CheckedQuery>,
@@ -312,12 +311,9 @@ fn check_main(maybe_input_file_path: Option<&std::path::Path>) -> Result<(), ()>
         }
         Ok(project_source) => project_source,
     };
-    slug::core::origin_new!(expressions, Expressions);
-    let mut syntax_expressions = slug::core::Buf::new(expressions);
-    let syntax_project = slug::parse_project(&mut syntax_expressions, &project_source);
+    let syntax_project = slug::parse_project(&project_source);
     let mut check_errors: Vec<slug::ErrorNode> = Vec::new();
-    let _checked_info =
-        slug::syntax_project_check(&mut check_errors, &syntax_project, &syntax_expressions);
+    let _checked_info = slug::syntax_project_check(&mut check_errors, &syntax_project);
     if check_errors.is_empty() {
         println!(
             "No errors found. Note that slug <language target> already checks before building."
@@ -374,12 +370,9 @@ fn build_main(
         }
         Ok(project_source) => project_source,
     };
-    slug::core::origin_new!(expressions, Expressions);
-    let mut syntax_expressions = slug::core::Buf::new(expressions);
-    let syntax_project = slug::parse_project(&mut syntax_expressions, &project_source);
+    let syntax_project = slug::parse_project(&project_source);
     let mut check_errors: Vec<slug::ErrorNode> = Vec::new();
-    let checked_project =
-        slug::syntax_project_check(&mut check_errors, &syntax_project, &syntax_expressions);
+    let checked_project = slug::syntax_project_check(&mut check_errors, &syntax_project);
     if !check_errors.is_empty() {
         print_slug_check_errors(input_file_path, &check_errors);
         eprintln!(
@@ -404,7 +397,7 @@ fn build_main(
         return Err(());
     }
     let output_rust_file_string: String =
-        checked_project_to_output_code(output_language, &checked_project, &syntax_expressions);
+        checked_project_to_output_code(output_language, &checked_project, &syntax_project);
     if let Err(write_error) = std::fs::write(output_file_path, output_rust_file_string) {
         eprintln!(
             "tried to write the output into the file {output_file_path:?} but failed: {}",
@@ -418,18 +411,14 @@ fn build_main(
         Err(())
     }
 }
-fn checked_project_to_output_code<Expressions>(
+fn checked_project_to_output_code(
     compile_output_language: CompileOutputLanguage,
-    checked_project: &slug::CheckedSyntaxProject<Expressions>,
-    syntax_expressions: &slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions>>,
+    checked_project: &slug::CheckedSyntaxProject,
+    syntax_project: &slug::SyntaxProject,
 ) -> String {
     match compile_output_language {
-        CompileOutputLanguage::Zig => {
-            slug::checked_project_to_zig(checked_project, syntax_expressions)
-        }
-        CompileOutputLanguage::Js => {
-            slug::checked_project_to_js(checked_project, syntax_expressions)
-        }
+        CompileOutputLanguage::Zig => slug::checked_project_to_zig(checked_project, syntax_project),
+        CompileOutputLanguage::Js => slug::checked_project_to_js(checked_project, syntax_project),
     }
 }
 fn lsp_main() -> Result<(), ()> {
@@ -455,20 +444,16 @@ fn lsp_main_or_error() -> Result<(), Box<dyn std::error::Error>> {
             }),
         })?,
     )?;
-    slug::core::origin_new!(expressions, Expressions);
-    let state = initial_state(expressions);
+    let state = initial_state();
     server_loop(&connection, state)?;
     // shut down gracefully
     drop(connection);
     io_thread.join()?;
     Ok(())
 }
-fn initial_state<Expressions>(
-    expressions: slug::core::Origin<Expressions, slug::core::Record>,
-) -> State<slug::core::Origin<Expressions, slug::core::Record>> {
+fn initial_state() -> State {
     State {
         projects: std::collections::HashMap::with_capacity(1),
-        syntax_expressions: slug::core::Buf::new(expressions),
     }
 }
 fn server_capabilities() -> lsp_types::ServerCapabilities {
@@ -520,9 +505,9 @@ fn server_capabilities() -> lsp_types::ServerCapabilities {
     }
 }
 
-fn server_loop<Expressions>(
+fn server_loop(
     connection: &lsp_server::Connection,
-    mut state: State<Expressions>,
+    mut state: State,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for client_message in &connection.receiver {
         match client_message {
@@ -555,9 +540,9 @@ fn server_loop<Expressions>(
     }
     Ok(())
 }
-fn handle_notification<Expressions>(
+fn handle_notification(
     connection: &lsp_server::Connection,
-    state: &mut State<Expressions>,
+    state: &mut State,
     notification_method: lsp_types::LspNotificationMethod,
     notification_arguments_json: serde_json::Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -589,8 +574,8 @@ fn handle_notification<Expressions>(
     }
     Ok(())
 }
-fn update_state_on_did_open_text_document<Expressions>(
-    state: &mut State<Expressions>,
+fn update_state_on_did_open_text_document(
+    state: &mut State,
     connection: &lsp_server::Connection,
     arguments: lsp_types::DidOpenTextDocumentParams,
 ) {
@@ -606,7 +591,6 @@ fn update_state_on_did_open_text_document<Expressions>(
                     initialize_project_state_from_source(
                         connection,
                         arguments.text_document.uri,
-                        &mut state.syntax_expressions,
                         arguments.text_document.text,
                     ),
                 );
@@ -615,7 +599,6 @@ fn update_state_on_did_open_text_document<Expressions>(
                 *previous_project_state = initialize_project_state_from_source(
                     connection,
                     arguments.text_document.uri,
-                    &mut state.syntax_expressions,
                     arguments.text_document.text,
                 );
             }
@@ -623,9 +606,9 @@ fn update_state_on_did_open_text_document<Expressions>(
     }
 }
 
-fn handle_request<Expressions>(
+fn handle_request(
     connection: &lsp_server::Connection,
-    state: &State<Expressions>,
+    state: &State,
     request_id: lsp_server::RequestId,
     request_method: lsp_types::LspRequestMethod,
     request_arguments_json: serde_json::Value,
@@ -770,12 +753,11 @@ fn publish_diagnostics(
         });
 }
 
-fn update_state_on_did_change_text_document<Expressions>(
-    state: &mut State<Expressions>,
+fn update_state_on_did_change_text_document(
+    state: &mut State,
     connection: &lsp_server::Connection,
     did_change_text_document: lsp_types::DidChangeTextDocumentParams,
 ) {
-    let project_count = state.projects.len();
     if let Some(project_state) = state.projects.get_mut(
         &did_change_text_document
             .text_document
@@ -808,48 +790,26 @@ fn update_state_on_did_change_text_document<Expressions>(
                 }
             }
         }
-        for syntax_project_item in project_state.syntax.items.drain(..) {
-            slug::syntax_project_item_rid(syntax_project_item, &mut state.syntax_expressions);
-        }
-        if project_count == 1 {
-            fn vec_should_be_empty<Origin, Item>(vec: &slug::core::Buf<Origin, Item>) {
-                if !vec.as_slice().is_empty() {
-                    eprintln!(
-                        "vec not empty after rid step. remaining vacant spans ({}): {:?}",
-                        vec.as_slice().len(),
-                        vec.as_slice()
-                            .iter()
-                            .map(|option_item| match option_item {
-                                Some(_) => "y",
-                                None => "n",
-                            })
-                            .collect::<Vec<_>>(),
-                    );
-                }
-            }
-            vec_should_be_empty(&state.syntax_expressions);
-        }
+        // can be optimized by reusing the expressions vec
         *project_state = initialize_project_state_from_source(
             connection,
             did_change_text_document
                 .text_document
                 .text_document_identifier
                 .uri,
-            &mut state.syntax_expressions,
             updated_source,
         );
     }
 }
 
-fn initialize_project_state_from_source<Expressions>(
+fn initialize_project_state_from_source(
     connection: &lsp_server::Connection,
     uri: lsp_types::Uri,
-    expressions: &mut slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions>>,
     source: String,
-) -> ProjectState<Expressions> {
-    let parsed_project = slug::parse_project(expressions, &source);
+) -> ProjectState {
+    let parsed_project = slug::parse_project(&source);
     let mut errors: Vec<slug::ErrorNode> = Vec::new();
-    let checked_project = slug::syntax_project_check(&mut errors, &parsed_project, expressions);
+    let checked_project = slug::syntax_project_check(&mut errors, &parsed_project);
     if let Some(input_file_path) = lsp_uri_to_file_path(&uri) {
         for compile_output_language in compile_output_languages {
             if let output_file_path = default_output_file_path_for_slug_input_file_path(
@@ -862,7 +822,7 @@ fn initialize_project_state_from_source<Expressions>(
                     checked_project_to_output_code(
                         compile_output_language,
                         &checked_project,
-                        expressions,
+                        &parsed_project,
                     ),
                 );
             }
@@ -903,8 +863,8 @@ fn slug_error_node_to_diagnostic(problem: &slug::ErrorNode) -> lsp_types::Diagno
     }
 }
 
-fn respond_to_hover<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_hover(
+    state: &State,
     hover_arguments: &lsp_types::HoverParams,
 ) -> Option<lsp_types::Hover> {
     let Some(project_state) = state.projects.get(
@@ -920,7 +880,6 @@ fn respond_to_hover<Expressions>(
         &project_state.type_aliases,
         &project_state.queries,
         hover_arguments.text_document_position_params.position,
-        &state.syntax_expressions,
     ) else {
         return None;
     };
@@ -1003,8 +962,8 @@ fn respond_to_hover<Expressions>(
     }
 }
 
-fn respond_to_goto_definition<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_goto_definition(
+    state: &State,
     goto_definition_arguments: lsp_types::DefinitionParams,
 ) -> Option<lsp_types::DefinitionResponse> {
     let Some(project_state) = state.projects.get(
@@ -1022,7 +981,6 @@ fn respond_to_goto_definition<Expressions>(
         goto_definition_arguments
             .text_document_position_params
             .position,
-        &state.syntax_expressions,
     ) else {
         return None;
     };
@@ -1042,8 +1000,8 @@ fn respond_to_goto_definition<Expressions>(
     ))
 }
 
-fn respond_to_prepare_rename<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_prepare_rename(
+    state: &State,
     prepare_rename_arguments: &lsp_types::PrepareRenameParams,
 ) -> Option<lsp_types::PrepareRenameResult> {
     let Some(project_state) = state.projects.get(
@@ -1061,7 +1019,6 @@ fn respond_to_prepare_rename<Expressions>(
         prepare_rename_arguments
             .text_document_position_params
             .position,
-        &state.syntax_expressions,
     ) else {
         return None;
     };
@@ -1104,8 +1061,8 @@ fn respond_to_prepare_rename<Expressions>(
     Some(lsp_types::PrepareRenameResult::Range(symbol_range))
 }
 
-fn respond_to_rename<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_rename(
+    state: &State,
     rename_arguments: lsp_types::RenameParams,
 ) -> Option<Vec<lsp_types::DocumentChange>> {
     let Some(project_state) = state.projects.get(
@@ -1121,12 +1078,10 @@ fn respond_to_rename<Expressions>(
         &project_state.type_aliases,
         &project_state.queries,
         rename_arguments.text_document_position_params.position,
-        &state.syntax_expressions,
     ) else {
         return None;
     };
-    let mut symbol_ranges =
-        slug::syntax_project_symbol_uses(&project_state.syntax, &symbol, &state.syntax_expressions);
+    let mut symbol_ranges = slug::syntax_project_symbol_uses(&project_state.syntax, &symbol);
     if let Some(symbol_origin_range) =
         slug::syntax_project_symbol_origin_range(&project_state.syntax, &symbol)
     {
@@ -1156,8 +1111,8 @@ fn respond_to_rename<Expressions>(
     )])
 }
 
-fn respond_to_references<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_references(
+    state: &State,
     references_arguments: &lsp_types::ReferenceParams,
 ) -> Option<Vec<lsp_types::Location>> {
     let Some(project_state) = state.projects.get(
@@ -1173,12 +1128,10 @@ fn respond_to_references<Expressions>(
         &project_state.type_aliases,
         &project_state.queries,
         references_arguments.text_document_position_params.position,
-        &state.syntax_expressions,
     ) else {
         return None;
     };
-    let mut symbol_ranges =
-        slug::syntax_project_symbol_uses(&project_state.syntax, &symbol, &state.syntax_expressions);
+    let mut symbol_ranges = slug::syntax_project_symbol_uses(&project_state.syntax, &symbol);
     if references_arguments.context.include_declaration
         && let Some(symbol_origin_range) =
             slug::syntax_project_symbol_origin_range(&project_state.syntax, &symbol)
@@ -1200,8 +1153,8 @@ fn respond_to_references<Expressions>(
     )
 }
 
-fn respond_to_semantic_tokens_full<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_semantic_tokens_full(
+    state: &State,
     semantic_tokens_arguments: &lsp_types::SemanticTokensParams,
 ) -> Option<lsp_types::SemanticTokens> {
     let Some(project_state) = state
@@ -1217,11 +1170,7 @@ fn respond_to_semantic_tokens_full<Expressions>(
             character: 0,
         },
     };
-    slug::project_highlight(
-        &mut highlight_state,
-        &project_state.syntax,
-        &state.syntax_expressions,
-    );
+    slug::project_highlight(&mut highlight_state, &project_state.syntax);
     Some(lsp_types::SemanticTokens {
         result_id: None,
         data: highlight_state.tokens,
@@ -1238,8 +1187,8 @@ fn lsp_position_add_characters(
     }
 }
 
-fn respond_to_completion<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_completion(
+    state: &State,
     completion_arguments: &lsp_types::CompletionParams,
 ) -> Option<lsp_types::CompletionResponse> {
     let Some(project_state) = state.projects.get(
@@ -1255,7 +1204,6 @@ fn respond_to_completion<Expressions>(
         &project_state.type_aliases,
         &project_state.queries,
         completion_arguments.text_document_position_params.position,
-        &state.syntax_expressions,
     ) else {
         return None;
     };
@@ -1563,18 +1511,15 @@ fn lsp_documentation_markdown(markdown: String) -> lsp_types::Documentation {
     })
 }
 
-fn respond_to_document_formatting<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_document_formatting(
+    state: &State,
     formatting_arguments: &lsp_types::DocumentFormattingParams,
 ) -> Option<Vec<lsp_types::TextEdit>> {
     let Some(project_state) = state.projects.get(&formatting_arguments.text_document.uri) else {
         return None;
     };
-    let formatted: String = slug::syntax_project_format(
-        &project_state.syntax,
-        &project_state.source,
-        &state.syntax_expressions,
-    );
+    let formatted: String =
+        slug::syntax_project_format(&project_state.syntax, &project_state.source);
     // diffing does not seem to be needed here. But maybe it's faster?
     Some(vec![lsp_types::TextEdit {
         range: lsp_types::Range {
@@ -1600,8 +1545,8 @@ fn respond_to_document_formatting<Expressions>(
     }])
 }
 
-fn respond_to_document_symbols<Expressions>(
-    state: &State<Expressions>,
+fn respond_to_document_symbols(
+    state: &State,
     document_symbol_arguments: &lsp_types::DocumentSymbolParams,
 ) -> Option<lsp_types::DocumentSymbolResponse> {
     let project = state
@@ -1671,7 +1616,7 @@ fn respond_to_document_symbols<Expressions>(
                             end: maybe_result
                                 .as_ref()
                                 .map(|result_slot| {
-                                    slug::expression_end(result_slot, &state.syntax_expressions)
+                                    slug::expression_end(result_slot, &project.syntax.expressions)
                                 })
                                 .unwrap_or_else(|| {
                                     slug::name_end(slug::with_start_position_as_ref(name))

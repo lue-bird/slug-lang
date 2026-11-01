@@ -246,7 +246,6 @@ cargo install --offline --debug --path . slug
     - "reachable origin" (more or less analog for type variables) is defined as:
         - available via implicit parameters
         - any chained result value or pattern variable has a type which in any part but outside of buf items mentions this origin (the first parameter in slot/span)
-- switch away from rust-implementation internal Slot stuff to get rid of core.rs
 - add zig codegen.
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
