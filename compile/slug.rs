@@ -137,9 +137,10 @@ pub struct SyntaxPatternVariantValues {
     pub closed_paren_start: Option<lsp_types::Position>,
 }
 #[derive(Debug)]
-pub struct SyntaxColonTypeArguments {
-    pub colon_start: lsp_types::Position,
+pub struct SyntaxExpressionCallTypeArguments {
+    pub open_angle_start: lsp_types::Position,
     pub types: Vec<SyntaxType>,
+    pub closed_angle_start: Option<lsp_types::Position>,
 }
 #[derive(Debug)]
 pub enum SyntaxExpression<Expressions> {
@@ -158,14 +159,14 @@ pub enum SyntaxExpression<Expressions> {
     Call {
         first_argument_dot: Option<SyntaxExpressionArgumentDot<core::Slot<Expressions>>>,
         name: WithStartPosition<Name>,
-        type_arguments: Option<SyntaxColonTypeArguments>,
+        type_arguments: Option<SyntaxExpressionCallTypeArguments>,
         open_paren_start: Option<lsp_types::Position>,
         arguments_rest: Vec<SyntaxExpression<Expressions>>,
         closed_paren_start: Option<lsp_types::Position>,
     },
     Variant {
         name: WithStartPosition<Name>,
-        type_: Option<SyntaxType>,
+        type_: Option<SyntaxExpressionVariantType>,
         values: Option<SyntaxExpressionVariantValues<Expressions>>,
     },
     Fn {
@@ -214,6 +215,12 @@ pub struct SyntaxExpressionVariantValues<Expression> {
     pub open_paren_start: lsp_types::Position,
     pub values: Vec<SyntaxExpression<Expression>>,
     pub closed_paren_start: Option<lsp_types::Position>,
+}
+#[derive(Debug)]
+pub struct SyntaxExpressionVariantType {
+    pub open_angle_start: lsp_types::Position,
+    pub type_: Option<SyntaxType>,
+    pub closed_angle_start: Option<lsp_types::Position>,
 }
 #[derive(Debug)]
 pub struct SyntaxExpressionIfCase<Expressions> {
@@ -497,12 +504,17 @@ pub fn pattern_end(pattern: &SyntaxPattern) -> lsp_types::Position {
             .unwrap_or_else(|| symbol_end(*open_curly_start, "{")),
     }
 }
-pub fn colon_type_arguments_end(type_arguments: &SyntaxColonTypeArguments) -> lsp_types::Position {
-    type_arguments
-        .types
-        .last()
-        .map(|last_type| type_end(last_type))
-        .unwrap_or_else(|| symbol_end(type_arguments.colon_start, ":"))
+pub fn expression_call_type_arguments_end(
+    SyntaxExpressionCallTypeArguments {
+        open_angle_start,
+        types,
+        closed_angle_start,
+    }: &SyntaxExpressionCallTypeArguments,
+) -> lsp_types::Position {
+    closed_angle_start
+        .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
+        .or_else(|| types.last().map(|last_type| type_end(last_type)))
+        .unwrap_or_else(|| symbol_end(*open_angle_start, "<"))
 }
 pub fn expression_range<Expressions>(
     expression: &SyntaxExpression<Expressions>,
@@ -602,7 +614,7 @@ pub fn expression_end<Expressions>(
             .or_else(|| {
                 type_arguments
                     .as_ref()
-                    .map(|type_arguments| colon_type_arguments_end(type_arguments))
+                    .map(|type_arguments| expression_call_type_arguments_end(type_arguments))
             })
             .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
         SyntaxExpression::Variant {
@@ -613,7 +625,15 @@ pub fn expression_end<Expressions>(
             .as_ref()
             .and_then(|values| values.values.last())
             .map(|value| expression_end(value, expressions))
-            .or_else(|| type_.as_ref().map(|type_| type_end(type_)))
+            .or_else(|| {
+                type_.as_ref().map(|type_| {
+                    type_
+                        .closed_angle_start
+                        .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
+                        .or_else(|| type_.type_.as_ref().map(|type_| type_end(type_)))
+                        .unwrap_or(symbol_end(type_.open_angle_start, "<"))
+                })
+            })
             .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
         SyntaxExpression::Fn {
             fn_keyword_start,
@@ -1048,13 +1068,14 @@ fn parse_project_fn<Expressions>(
     parse_slug_whitespace(state);
     let name = parse_slug_lowercase_name_with_start(state);
     parse_slug_whitespace(state);
-    let _ = parse_symbol(state, ":");
+    let _ = parse_symbol(state, "<");
     parse_slug_whitespace(state);
-    let mut type_parameters = Vec::with_capacity(1);
+    let mut type_parameters = Vec::new();
     while let Some(name) = parse_slug_uppercase_name_with_start(state) {
         type_parameters.push(name);
         parse_slug_whitespace(state);
     }
+    let _ = parse_symbol(state, ">");
     parse_slug_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
     parse_slug_whitespace(state);
@@ -1219,19 +1240,22 @@ fn parse_pattern_variant_values(
         closed_paren_start,
     })
 }
-fn parse_colon_type_arguments(state: &mut ParseState) -> Option<SyntaxColonTypeArguments> {
-    let Some(open_angle_start) = parse_symbol_as_start(state, ":") else {
+fn parse_colon_type_arguments(state: &mut ParseState) -> Option<SyntaxExpressionCallTypeArguments> {
+    let Some(open_angle_start) = parse_symbol_as_start(state, "<") else {
         return None;
     };
     parse_slug_whitespace(state);
     let mut types = Vec::with_capacity(1);
+    parse_slug_whitespace(state);
     while let Some(type_) = parse_type(state) {
         types.push(type_);
         parse_slug_whitespace(state);
     }
-    Some(SyntaxColonTypeArguments {
-        colon_start: open_angle_start,
+    let closed_angle_start = parse_symbol_as_start(state, ">");
+    Some(SyntaxExpressionCallTypeArguments {
+        open_angle_start,
         types,
+        closed_angle_start,
     })
 }
 fn parse_parameter_pattern_tuple(state: &mut ParseState) -> Option<SyntaxPattern> {
@@ -1832,13 +1856,31 @@ fn parse_expression_variant<Expressions>(
         return None;
     };
     parse_slug_whitespace(state);
-    let type_ = parse_type(state);
+    // this will parse things like Variant * () as a variant without any parenthesized arguments.
+    // This is fine since either interpretation is invalid
+    let type_ = parse_expression_variant_type_argument(state);
     parse_slug_whitespace(state);
     let values = parse_expression_variant_values(state, expressions);
     Some(SyntaxExpression::Variant {
         name,
         type_,
         values,
+    })
+}
+fn parse_expression_variant_type_argument(
+    state: &mut ParseState,
+) -> Option<SyntaxExpressionVariantType> {
+    let Some(open_angle_start) = parse_symbol_as_start(state, "<") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    let type_ = parse_type(state);
+    parse_slug_whitespace(state);
+    let closed_angle_start = parse_symbol_as_start(state, ">");
+    Some(SyntaxExpressionVariantType {
+        open_angle_start,
+        type_,
+        closed_angle_start,
     })
 }
 fn parse_expression_variant_values<Expressions>(
@@ -5163,7 +5205,7 @@ fn syntax_expression_to_zig<'a, Expressions>(
             type_,
             values,
         } => {
-            let Some(syntax_type) = type_ else {
+            let Some(syntax_type) = type_.as_ref().and_then(|type_| type_.type_.as_ref()) else {
                 zig_incomplete_expression(output);
                 return;
             };
@@ -8019,10 +8061,14 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
             type_: other_variants_type,
             values,
         } => {
-            let Some(syntax_type) = other_variants_type else {
+            let Some(syntax_type) = other_variants_type
+                .as_ref()
+                .and_then(|type_| type_.type_.as_ref())
+            else {
                 errors.push(ErrorNode {
                     range: name_range(with_start_position_as_ref(name)),
-                    message: Box::from("missing type of the remaining variants after this variant name. Examples of valid variants are  Yes [No] \"hi c:\"str  and  Yes opt(str) \"c:\"str.
+                    message: Box::from("missing type of the remaining variants after this variant name, in <angle brackets>.
+Examples of valid variants are  Yes<[No]>(\"hi c:\"str)  and  Yes<opt(str)>(\"c:\"str).
 If there should only ever by one variant, using a record with a single field is recommended over a single variant choice."),
                 });
                 return None;
@@ -8040,10 +8086,10 @@ If there should only ever by one variant, using a record with a single field is 
                 type_alias_resolve_to_non_alias(&checked_type, type_aliases);
             let Type::Choice(origin_choice_type) = checked_type_dealiased.as_ref() else {
                 let mut error_message: String = String::from(
-                    "this variant type should be a choice (for example [a u32  b str]  or  opt(u32)) but it's\n",
+                    "this variant type should be a choice (for example [A(u32) B(str)]  or  opt(u32)) but it's\n",
                 );
                 type_format(&mut error_message, 0, checked_type_dealiased.as_ref());
-                error_message.push_str("\nMaybe you forgot to wrap it in a type like opt?");
+                error_message.push_str("\nMaybe you forgot to wrap it in a type like opt()?");
                 errors.push(ErrorNode {
                     range: type_range(syntax_type),
                     message: error_message.into_boxed_str(),
@@ -11785,12 +11831,14 @@ fn syntax_type_parameters_format(
     formatted: &mut String,
     type_parameters: &Vec<WithStartPosition<Name>>,
 ) {
-    if !type_parameters.is_empty() {
-        formatted.push(' ');
-        for angled_type_parameter in type_parameters {
-            formatted.push_str(&angled_type_parameter.value);
+    if let Some((type_parameter0, type_parameter1_up)) = type_parameters.split_first() {
+        formatted.push('<');
+        formatted.push_str(&type_parameter0.value);
+        for angled_type_parameter in type_parameter1_up {
             formatted.push(' ');
+            formatted.push_str(&angled_type_parameter.value);
         }
+        formatted.push('>');
     }
 }
 
@@ -11886,40 +11934,45 @@ fn syntax_expression_format<Expressions>(
                 formatted.push('.');
             }
             formatted.push_str(&name.value);
-            if let Some(type_arguments) = type_arguments {
-                if let Some((type_argument0, type_argument1_up)) =
+            if let Some(type_arguments) = type_arguments
+                && let Some((type_argument0, type_argument1_up)) =
                     type_arguments.types.split_first()
-                {
-                    formatted.push(':');
-                    let type_arguments_line_span = range_line_span(lsp_types::Range {
-                        start: type_arguments.colon_start,
-                        end: type_end(type_arguments.types.last().unwrap_or(type_argument0)),
-                    });
+            {
+                formatted.push('<');
+                let type_arguments_line_span = range_line_span(lsp_types::Range {
+                    start: type_arguments.open_angle_start,
+                    end: type_arguments
+                        .closed_angle_start
+                        .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
+                        .unwrap_or_else(|| {
+                            type_end(type_arguments.types.last().unwrap_or(type_argument0))
+                        }),
+                });
+                if type_arguments_line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
+                syntax_type_format(formatted, next_indent(indent), type_argument0);
+                for type_argument in type_argument1_up {
                     space_or_linebreak_indented_into(
                         formatted,
                         type_arguments_line_span,
                         next_indent(indent),
                     );
-                    syntax_type_format(formatted, next_indent(indent), type_argument0);
-                    for type_argument in type_argument1_up {
-                        space_or_linebreak_indented_into(
-                            formatted,
-                            type_arguments_line_span,
-                            next_indent(indent),
-                        );
-                        syntax_type_format(formatted, next_indent(indent), type_argument);
-                    }
-                    space_or_linebreak_indented_into(formatted, type_arguments_line_span, indent);
+                    syntax_type_format(formatted, next_indent(indent), type_argument);
                 }
+                if type_arguments_line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                formatted.push('>');
             }
             formatted.push('(');
             if let Some((rest_argument0, rest_argument1_up)) = arguments_rest.split_first() {
                 let arguments_line_span = range_line_span(lsp_types::Range {
                     start: open_paren_start
                         .or_else(|| {
-                            type_arguments
-                                .as_ref()
-                                .map(|type_arguments| colon_type_arguments_end(type_arguments))
+                            type_arguments.as_ref().map(|type_arguments| {
+                                expression_call_type_arguments_end(type_arguments)
+                            })
                         })
                         .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
                     end: closed_paren_start.unwrap_or_else(|| {
@@ -11946,26 +11999,32 @@ fn syntax_expression_format<Expressions>(
             values,
         } => {
             formatted.push_str(&name.value);
-            match type_ {
-                None => {
-                    formatted.push_str(" []");
+            if let Some(type_argument) = type_
+                && let Some(type_) = &type_argument.type_
+            {
+                formatted.push('<');
+                let type_line_span = range_line_span(lsp_types::Range {
+                    start: type_argument.open_angle_start,
+                    end: type_argument
+                        .closed_angle_start
+                        .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
+                        .unwrap_or_else(|| type_end(type_)),
+                });
+                if type_line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
                 }
-                Some(type_) => {
-                    space_or_linebreak_indented_into(
-                        formatted,
-                        range_line_span(type_range(type_)),
-                        next_indent(indent),
-                    );
-                    syntax_type_format(formatted, next_indent(indent), type_);
+                syntax_type_format(formatted, next_indent(indent), type_);
+                if type_line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
                 }
+                formatted.push('>');
             }
             if let Some((value0, value1_up)) = values
                 .as_ref()
                 .and_then(|values| values.values.split_first())
             {
-                let line_span = range_line_span(expression_range(expression, expressions));
-                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
                 formatted.push('(');
+                let line_span = range_line_span(expression_range(expression, expressions));
                 if line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
@@ -12811,7 +12870,17 @@ fn expression_symbol_at_position<'a, Expressions>(
             }
             type_
                 .as_ref()
-                .and_then(|type_| type_symbol_at_position(type_, position, scope))
+                .and_then(
+                    |SyntaxExpressionVariantType {
+                         open_angle_start: _,
+                         type_,
+                         closed_angle_start: _,
+                     }| {
+                        type_
+                            .as_ref()
+                            .and_then(|type_| type_symbol_at_position(type_, position, scope))
+                    },
+                )
                 .or_else(|| {
                     values
                         .iter()
@@ -13967,8 +14036,15 @@ fn syntax_expression_symbol_uses_into<Expressions>(
             {
                 uses.push(name_range(with_start_position_as_ref(name)));
             }
-            if let Some(type_) = type_argument {
-                syntax_type_symbol_uses_into(uses, type_, symbol);
+            if let Some(SyntaxExpressionVariantType {
+                open_angle_start: _,
+                type_,
+                closed_angle_start: _,
+            }) = type_argument
+            {
+                if let Some(type_) = type_ {
+                    syntax_type_symbol_uses_into(uses, type_, symbol);
+                }
             }
             for value in values.iter().flat_map(|values| &values.values) {
                 syntax_expression_symbol_uses_into(
@@ -14558,8 +14634,15 @@ fn syntax_expression_highlight<Expressions>(
             values,
         } => {
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::EnumMember);
-            if let Some(type_) = type_argument {
-                syntax_type_highlight(state, type_);
+            if let Some(SyntaxExpressionVariantType {
+                open_angle_start: _,
+                type_,
+                closed_angle_start: _,
+            }) = type_argument
+            {
+                if let Some(type_) = type_ {
+                    syntax_type_highlight(state, type_);
+                }
             }
             for value in values.iter().flat_map(|values| &values.values) {
                 syntax_expression_highlight(state, expressions, value);
@@ -14720,12 +14803,14 @@ pub fn checked_project_fn_format(
 ) {
     formatted.push_str("fn ");
     formatted.push_str(name);
-    if !project_fn.type_parameters.is_empty() {
-        for angled_type_parameter in &project_fn.type_parameters {
+    if let Some((type_parameter0, type_parameter1_up)) = project_fn.type_parameters.split_first() {
+        formatted.push('<');
+        formatted.push_str(type_parameter0);
+        for angled_type_parameter in type_parameter1_up {
             formatted.push(' ');
             formatted.push_str(angled_type_parameter);
         }
-        formatted.push(' ');
+        formatted.push('>');
     }
     formatted.push('(');
     for fn_parameter_type in project_fn.parameter_types.iter().flatten() {

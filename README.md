@@ -2,8 +2,8 @@ decently fast programming language which uses indexes bound to specific arrays i
 An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet Chars (name str) span(Chars char)
-    add-str-chars: Chars ("Hello, "str)
+fn greet<Chars>(name str) span(Chars char)
+    add-str-chars<Chars>("Hello, "str)
     .span-add-str-chars(name)
     .span-add("!"char)
 ```
@@ -52,8 +52,8 @@ ty state
 
 fn initial-state() state
     {
-    projects No opt(span([Projects] project-state))
-    projects-buf buf-empty: [Projects] project-state ()
+    projects No<opt(span([Projects] project-state))>
+    projects-buf buf-empty<[Projects] project-state>()
     }
 ```
 
@@ -71,7 +71,7 @@ fn initial-state() state
 # unicode scalar of type char
 "a"char
 
-# identifiers. All except type variables start lowercase
+# identifiers. All except type variable and variant names start lowercase
 variable-or-function-or-field-or-variant-or-type-2012
 
 # function call. arguments are separated by space
@@ -80,9 +80,9 @@ some-function(first-argument second-argument)
 # syntax sugar for some-function(first-argument second)
 first-argument.some-function(second)
 
-# some functions require type arguments  : after a colon before the (arguments).
-# Function declarations will explicitly list those  Parameters (see later)
-some-function: type arguments (argument)
+# some functions require type arguments in angle brackets before the (arguments).
+# Function declarations will explicitly list those <Parameters> (see later)
+some-function<type arguments>(arguments)
 
 # tuple, positional group of values
 *(first-value second-value third-value)
@@ -121,7 +121,7 @@ second-query-pattern
 # project function declaration.
 # For type variables in the result that aren't used in the input,
 # functions require appended type parameters: <...>
-fn function-name Type-arguments That-are-only-used-in-the-result (
+fn function-name<Type-arguments That-are-only-used-in-the-result>(
     parameter-patterns-with-types
     another-parameter
 )
@@ -159,8 +159,8 @@ Third-option-multiple-arguments(u32 f32)
 # creating variants.
 # The type in angles can be a type alias or a choice type directly <[... ...]>.
 # The type does not have to include a variant with the currently constructed name
-Third-option-multiple-arguments a-choice-type (its values)
-First-option-no-associated-values a-choice-type
+Third-option-multiple-arguments<a-choice-type>(its values)
+First-option-no-associated-values<a-choice-type>
 
 # variant patterns
 Third-option-multiple-arguments(its values)
@@ -221,12 +221,7 @@ cargo install --offline --debug --path . slug
 - `.` syntax for piping the first argument
 
 ## TODO
-- indent fn result
-- update tree-sitter and extensions:
-    - change variant syntax to `Variant type (a r g s)` and `Variant(a r g s)` for patterns and `<Variant Variant2(a r g s) Variant3(arg)>` for types.
-    - replace `f<t y s>(a r g s)` for type arguments with `f: t y s (a r g s)` or similar,
-      then if desired change tuple syntax from `*()` to `[]` (more consistent and easier to type).
-    - remove `^origin` syntax in favor of `[Origin]`. I love how changing from and to type variables is just a change in brackets
+- update extensions
 - actually insert clone() and drop() in js codegen
 - fix the many bugs
 - implement association checking:
@@ -324,8 +319,7 @@ cargo install --offline --debug --path . slug
 - (soft reject) the option to declare nominal types
 - should the underlying bufs be per-(size+align / bucket) instead of per-type? Per-type feels more reasonable but per-(size+align / bucket) could be more compact, avoid frequent smaller allocations and be leaner on the stack when passing the bufs.
   On the other hand it may (?) be worse for caches (semantically related objects are not necessarily grouped together), debugging, ffi, and memory usage (short-lived item bufs temporarily "pollute" a bigger buf and aren't freed as easily)
-- remove `^origin` syntax in favor of `{origin []}`. This simplifies the language and makes it obvious that any type is allowed as an origin. Rejected because origins are a fairly common type and having 4 parens is distracting.
-  If variants were allowed to have 0 values I may rethink this
+- change tuple syntax from `*()` to `<>` (more consistent and easier to type)
 
 ### explicit share-able view types (outdated syntax)
 All structural types (e.g. char, str, records of structural types, choice types of structural types) are directly compatible with & and can be recombined into & types (for example `&str` is the same as `str`).

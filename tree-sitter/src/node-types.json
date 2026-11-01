@@ -303,7 +303,7 @@
       "required": true,
       "types": [
         {
-          "type": "lower_name",
+          "type": "callable_name",
           "named": true
         }
       ]
@@ -725,10 +725,6 @@
           "named": true
         },
         {
-          "type": "type_origin",
-          "named": true
-        },
-        {
           "type": "type_record",
           "named": true
         },
@@ -862,25 +858,6 @@
     }
   },
   {
-    "type": "type_origin",
-    "named": true,
-    "fields": {},
-    "children": {
-      "multiple": true,
-      "required": true,
-      "types": [
-        {
-          "type": "key_symbol_origin",
-          "named": true
-        },
-        {
-          "type": "lower_name",
-          "named": true
-        }
-      ]
-    }
-  },
-  {
     "type": "type_record",
     "named": true,
     "fields": {},
@@ -957,7 +934,7 @@
       "required": true,
       "types": [
         {
-          "type": "lower_name",
+          "type": "upper_name",
           "named": true
         }
       ]
@@ -1009,10 +986,6 @@
   },
   {
     "type": "key_symbol_equals",
-    "named": true
-  },
-  {
-    "type": "key_symbol_origin",
     "named": true
   },
   {

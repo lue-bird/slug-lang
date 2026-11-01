@@ -6,7 +6,7 @@ ty stack(Origin Item)
     ]
 
 fn stack-cons(tail stack(Origin Item) new-head Item) stack(Origin Item)
-    Filled stack(Origin Item) (new-head insert: Origin (tail))
+    Filled<stack(Origin Item)>(new-head insert<Origin>(tail))
 
 fn stack-step(stack stack(Origin Item) state State step fn(State Item) State) State
     if stack {
@@ -17,8 +17,8 @@ fn stack-step(stack stack(Origin Item) state State step fn(State Item) State) St
     }
 
 fn run() u32
-    = _ buf-empty: [Stack] stack([Stack] u32) ()
-    Empty stack([Stack] u32)
+    = _ buf-empty<[Stack] stack([Stack] u32)>()
+    Empty<stack([Stack] u32)>
     .stack-cons(3u32)
     .stack-cons(39u32)
     .stack-step(0u32 fn(state u32 item u32) state .u32-add-clamp(item))
