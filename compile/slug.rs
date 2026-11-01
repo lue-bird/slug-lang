@@ -6422,7 +6422,17 @@ fn syntax_pattern_to_js_destructuring<'a>(
                             .and_then(|variant| variant.values.get(value_index)),
                         _ => None,
                     },
-                    &format!("{to_destructure}.{}", name_to_lowercase_js(&name.value)),
+                    &if values
+                        .as_ref()
+                        .is_some_and(|values| values.values.len() >= 2)
+                    {
+                        format!(
+                            "{to_destructure}.{}[{value_index}]",
+                            name_to_lowercase_js(&name.value)
+                        )
+                    } else {
+                        format!("{to_destructure}.{}", name_to_lowercase_js(&name.value))
+                    },
                     introduced_variables,
                     type_aliases,
                 );
