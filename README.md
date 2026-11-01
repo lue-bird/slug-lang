@@ -2,10 +2,10 @@ decently fast programming language which uses indexes bound to specific arrays i
 An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet<Chars>(name str) span(Chars char)
-    add-str-chars<Chars>("Hello, " str)
+fn greet Chars (name str) span(Chars char)
+    add-str-chars: Chars ("Hello, "str)
     .span-add-str-chars(name)
-    .span-add("!" char)
+    .span-add("!"char)
 ```
 
 Important: The compiler and tooling is not implemented, yet! Once available,
@@ -22,12 +22,13 @@ cargo install --git https://codeberg.org/lue-bird/slug-lang slug
 ```slug
 ty expression(Expressions Patterns Types)
     [
-    let
+    Let(
         {
         pattern pattern(Patterns Types)
         value slot(Expressions expression(Expressions Patterns Types))
         result slot(Expressions expression(Expressions Patterns Types))
         }
+    )
     ...
     ]
 ```
@@ -37,22 +38,22 @@ Use nested bufs instead of one big one to operate on one chunk in a clear way, e
 ```slug
 ty project-state
     {
-    base-expression expression(^expressions ^patterns ^types)
-    expressions buf(^expressions expression(^expressions ^patterns ^types))
-    patterns buf(^patterns pattern(^patterns ^types))
-    types buf(^types type(^types))
+    base-expression expression([Expressions] [Patterns] [Types])
+    expressions buf([Expressions] expression([Expressions] [Patterns] [Types]))
+    patterns buf([Patterns] pattern([Patterns] [Types]))
+    types buf([Types] type([Types]))
     }
 
 ty state
     {
-    projects opt(span(^projects))
-    projects-buf buf(^projects project-state)
+    projects opt(span([Projects]))
+    projects-buf buf([Projects] project-state)
     }
 
 fn initial-state() state
     {
-    projects [yes<opt(span(^projects))> *]
-    projects-buf projects-buf buf-empty<^projects project-state>()
+    projects No opt(span([Projects] project-state))
+    projects-buf buf-empty: [Projects] project-state ()
     }
 ```
 
@@ -62,13 +63,13 @@ fn initial-state() state
 
 # number (available types: p32, u32, i32, f32).
 # Specifying a type is required
-3.2 f32
+3.2f32
 
 # text of type str
-"hello" str
+"hello"str
 
 # unicode scalar of type char
-"a" char
+"a"char
 
 # identifiers. All except type variables start lowercase
 variable-or-function-or-field-or-variant-or-type-2012
@@ -79,14 +80,14 @@ some-function(first-argument second-argument)
 # syntax sugar for some-function(first-argument second)
 first-argument.some-function(second)
 
-# very rarely functions require type arguments <in angles>.
-# Function declarations will explicitly list those <Parameters> (see later)
-some-function<type arguments>(argument)
+# some functions require type arguments  : after a colon before the (arguments).
+# Function declarations will explicitly list those  Parameters (see later)
+some-function: type arguments (argument)
 
 # tuple, positional group of values
 *(first-value second-value third-value)
 
-# empty tuple. Used for example for variants without a useful value
+# empty tuple. Used for example for empty state while stepping through a span
 *
 
 # record, like a tuple with names for each part. You may know it as "struct"
@@ -104,24 +105,26 @@ some-variable some-type
 # appending a type is only necessary and allowed in function parameters
 _ some-type
 
-# decompose into a pattern.
+# deconstruct into a pattern.
 # Usually used to assign the result of a function to a variable or to ignore a result
-= case-pattern value
+= query-pattern value
 resulting-expression
 
 # pattern match, checked for exhaustiveness
 if value {
-first-case-pattern
+first-query-pattern
     first-result
-second-case-pattern
+second-query-pattern
     second-result
 }
 
 # project function declaration.
 # For type variables in the result that aren't used in the input,
 # functions require appended type parameters: <...>
-fn function-name<Type-arguments That-are-only-used-in-the-result>
-    (parameter-patterns-with-types another-parameter)
+fn function-name Type-arguments That-are-only-used-in-the-result (
+    parameter-patterns-with-types
+    another-parameter
+)
     result-type
 # optional documentation
 # comment
@@ -139,9 +142,6 @@ Type-variable-name
 # function type
 fn(first-parameter-type second) result-type
 
-# identifier of a known origin (a buf which hands out slots and spans)
-^concrete-origin-type
-
 # declare a shorthand for an existing type
 ty point {x i32 y i32}
 
@@ -151,18 +151,20 @@ ty pair(First Second-parameter) type-using-the-type-variables
 # a "choice type" that can come in different shapes ("variants")
 # which each have a unique name and one associated value.
 [
-first-option *
-second-option some(u32)
-third-option {some u32 values f32}
+First-option-no-associated-values
+Second-option(some(u32))
+Third-option-multiple-arguments(u32 f32)
 ]
 
-# creating a variant.
+# creating variants.
 # The type in angles can be a type alias or a choice type directly <[... ...]>.
 # The type does not have to include a variant with the currently constructed name
-[some-variant-name<a-choice-type> its-value]
+Third-option-multiple-arguments a-choice-type (its values)
+First-option-no-associated-values a-choice-type
 
-# variant pattern
-[some-variant its-value]
+# variant patterns
+Third-option-multiple-arguments(its values)
+First-option-no-associated-values
 ```
 
 ## editor setups
@@ -219,22 +221,20 @@ cargo install --offline --debug --path . slug
 - `.` syntax for piping the first argument
 
 ## TODO
+- indent fn result
+- update tree-sitter and extensions:
+    - change variant syntax to `Variant type (a r g s)` and `Variant(a r g s)` for patterns and `<Variant Variant2(a r g s) Variant3(arg)>` for types.
+    - replace `f<t y s>(a r g s)` for type arguments with `f: t y s (a r g s)` or similar,
+      then if desired change tuple syntax from `*()` to `[]` (more consistent and easier to type).
+    - remove `^origin` syntax in favor of `[Origin]`. I love how changing from and to type variables is just a change in brackets
 - actually insert clone() and drop() in js codegen
-- exclude slots and spans with buf in reach from implicit bufs
-- change semantics of buf from linear type to rc<ArrayList>. This enables implicit cloning to always be possible, even for type variables.
-  This is especially important for `buf-item` to work.
-  `buf-to-unset` and `buf-reuse` should be removed, at least temporarily.
-  The documentation of `buf` should be changed to be more clear about "more than value could contain the same buf" but should recommend generally against this
-- go through core.mjs and always "consume" all parameters, which means dropping if necessary
-- clear up: should local variables be able to shadow other local variables?
-  It probably makes things harder rather than easier
 - fix the many bugs
 - implement association checking:
     - implicit arguments are as follows:
         - a bundle of bufs, each passed by (noalias) *mut.
           The bundle contains bufs for at least all reachable slot/span origins,
           minus reachable buf origins
-        - for each type variable a drop fn (but not a clone fn), each taking the bundle of bufs as a *mut
+        - for each type variable a drop and clone fn, each taking the bundle of bufs as a *mut
         - these rules also apply to standard library functions
     - for validity:
         - at the beginning of a scope, the implicit bufs are tracked as reachable.
@@ -248,26 +248,30 @@ cargo install --offline --debug --path . slug
           If existing slots/spans with the same origin are reachable, report an error
         - in addition to reachable origins, reachable type variables are tracked.
           Once the set of reachable type variables is non-empty,
-          no more type variables may get introduced (not even the same type variable).
-          This also means 2 same type variables should not be reachable at the same time, which means cloning is _never_ valid.
+          no more type variables may get introduced (not even the same type variable, except through implicit clone).
+        - each buf is an rc<ArrayList>. This enables implicit cloning to always be possible, even for type variables
     - "reachable origin" (more or less analog for type variables) is defined as:
         - available via implicit parameters
         - any chained result value or pattern variable has a type which in any part but outside of buf items mentions this origin (the first parameter in slot/span)
+- format: directly append the type after text and number literal. This is more obvious when passing multiple arguments and takes up less space
 - reimplement standard library (positional + removing redundant linear stuff)
-- suggest function completions even if no () are present
 - correct full type completions syntax
 - switch away from rust-implementation internal Slot stuff to get rid of core.rs
+- add zig codegen.
+  Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
+- show implicitly passed bufs when hovering a project fn
 - website with online repl
 
 ## implementation details
+- shadowing is disallowed (local functions are an entirely separate context so they allow it)
 - expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
   The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
 - once a `buf` has been "used" (e.g. explicitly passed in and out of a function) it invalidates all prior uses of the origin in the rest of the current scope. E.g. a buf of bufs + a buf of slots with the same origin means you could mix and match willy nilly
 - For functions with type variables, pass in a generic "bundle of bufs" along with drop and clone functions that take and modify that bundle
 - implicitly pass a generic "bundle of bufs" whenever a function does not itself take a buf
 - If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
-- type signatures and type aliases are _not_ (!) checked for origin violations, only actual expression+pattern code is
+- type signatures and type aliases are _not_ checked for origin violations, only actual expression+pattern code is
 - passing bufs is allowed but marks it as "unusable" for implicit passing (which includes clone and drop), which is basically identical to invalidating slots and spans with the same origin
 - type variables are checked as if they contained any number of buf origins and slot/span origins.
   To illustrate why this could otherwise lead to issues, look at
@@ -291,6 +295,7 @@ cargo install --offline --debug --path . slug
 - building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
 
 ## potential improvements in the future
+- consider requiring `:` for parameter pattern variables between the name and type. This is probably more obvious and is a little more robust. Downside: more typing and still not super clear. Format: name: type
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
 - should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.
   Exclusive slots would need to be deeply (I think) cloned while shared slots (`slot-counted`?) are shallow-copied + count increased.
@@ -319,6 +324,8 @@ cargo install --offline --debug --path . slug
 - (soft reject) the option to declare nominal types
 - should the underlying bufs be per-(size+align / bucket) instead of per-type? Per-type feels more reasonable but per-(size+align / bucket) could be more compact, avoid frequent smaller allocations and be leaner on the stack when passing the bufs.
   On the other hand it may (?) be worse for caches (semantically related objects are not necessarily grouped together), debugging, ffi, and memory usage (short-lived item bufs temporarily "pollute" a bigger buf and aren't freed as easily)
+- remove `^origin` syntax in favor of `{origin []}`. This simplifies the language and makes it obvious that any type is allowed as an origin. Rejected because origins are a fairly common type and having 4 parens is distracting.
+  If variants were allowed to have 0 values I may rethink this
 
 ### explicit share-able view types (outdated syntax)
 All structural types (e.g. char, str, records of structural types, choice types of structural types) are directly compatible with & and can be recombined into & types (for example `&str` is the same as `str`).
@@ -330,28 +337,28 @@ If not, they are immediately consumed on next use.
 &-typed values are 
 
 ```slug
-ty buf-span(_origin Item)
-    { buf buf(_origin char) span span(_origin) }
+ty buf-span(Origin Item)
+    { buf buf(Origin char) span span(Origin) }
 
-ty buf-opt-span(_origin Item)
-    { buf buf(_origin char) span opt(span(_origin)) }
+ty buf-opt-span(Origin Item)
+    { buf buf(Origin char) span opt(span(Origin)) }
 
 fn greet
-    string buf-opt-span(_origin char)
+    string buf-opt-span(Origin char)
     name str
-: buf-span(_origin Item)
-    buf-opt-span-add-str(string "Hello, " str) = string
+: buf-span(Origin Item)
+    buf-opt-span-add-str(string "Hello, "str) = string
     buf-span-add-str(string name) = string
-    buf-span-add(string "!" char)
+    buf-span-add(string "!"char)
 
 
 fn times-4-square n& i32 : i32
-    i32-to-power(n 2 i32)
+    i32-to-power(n 2i32)
 ```
 
 problematic: No way to get a & from a buf item:
 ```slug
-fn buf-item buf &buf(_origin Item) slot &slot(_origin) : &Item
+fn buf-item buf &buf(Origin Item) slot &slot(Origin) : &Item
 ```
 as this _requires_ & to be interpreted as "the incoming &s were themselves passed in as a function parameter".
 Arguably the easiest resolution is either

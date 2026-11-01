@@ -2,14 +2,13 @@
 use gen_lsp_types as lsp_types;
 use slug_compile as slug;
 
-struct State<Expressions, Patterns> {
-    projects: std::collections::HashMap<lsp_types::Uri, ProjectState<Expressions, Patterns>>,
-    syntax_expressions: slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions, Patterns>>,
-    syntax_patterns: slug::core::Buf<Patterns, slug::SyntaxPattern<Patterns>>,
+struct State<Expressions> {
+    projects: std::collections::HashMap<lsp_types::Uri, ProjectState<Expressions>>,
+    syntax_expressions: slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions>>,
 }
-struct ProjectState<Expressions, Patterns> {
+struct ProjectState<Expressions> {
     source: String,
-    syntax: slug::SyntaxProject<Expressions, Patterns>,
+    syntax: slug::SyntaxProject<Expressions>,
     type_aliases: std::collections::HashMap<slug::Name, slug::CheckedTypeAlias>,
     fns: std::collections::HashMap<slug::Name, slug::CheckedProjectFn>,
     queries: std::collections::HashMap<lsp_types::Position, slug::CheckedQuery>,
@@ -314,21 +313,11 @@ fn check_main(maybe_input_file_path: Option<&std::path::Path>) -> Result<(), ()>
         Ok(project_source) => project_source,
     };
     slug::core::origin_new!(expressions, Expressions);
-    slug::core::origin_new!(patterns, Patterns);
     let mut syntax_expressions = slug::core::Buf::new(expressions);
-    let mut syntax_patterns = slug::core::Buf::new(patterns);
-    let syntax_project = slug::parse_project(
-        &mut syntax_expressions,
-        &mut syntax_patterns,
-        &project_source,
-    );
+    let syntax_project = slug::parse_project(&mut syntax_expressions, &project_source);
     let mut check_errors: Vec<slug::ErrorNode> = Vec::new();
-    let _checked_info = slug::syntax_project_check(
-        &mut check_errors,
-        &syntax_project,
-        &syntax_expressions,
-        &syntax_patterns,
-    );
+    let _checked_info =
+        slug::syntax_project_check(&mut check_errors, &syntax_project, &syntax_expressions);
     if check_errors.is_empty() {
         println!(
             "No errors found. Note that slug <language target> already checks before building."
@@ -386,21 +375,11 @@ fn build_main(
         Ok(project_source) => project_source,
     };
     slug::core::origin_new!(expressions, Expressions);
-    slug::core::origin_new!(patterns, Patterns);
     let mut syntax_expressions = slug::core::Buf::new(expressions);
-    let mut syntax_patterns = slug::core::Buf::new(patterns);
-    let syntax_project = slug::parse_project(
-        &mut syntax_expressions,
-        &mut syntax_patterns,
-        &project_source,
-    );
+    let syntax_project = slug::parse_project(&mut syntax_expressions, &project_source);
     let mut check_errors: Vec<slug::ErrorNode> = Vec::new();
-    let checked_project = slug::syntax_project_check(
-        &mut check_errors,
-        &syntax_project,
-        &syntax_expressions,
-        &syntax_patterns,
-    );
+    let checked_project =
+        slug::syntax_project_check(&mut check_errors, &syntax_project, &syntax_expressions);
     if !check_errors.is_empty() {
         print_slug_check_errors(input_file_path, &check_errors);
         eprintln!(
@@ -424,12 +403,8 @@ fn build_main(
         );
         return Err(());
     }
-    let output_rust_file_string: String = checked_project_to_output_code(
-        output_language,
-        &checked_project,
-        &syntax_expressions,
-        &syntax_patterns,
-    );
+    let output_rust_file_string: String =
+        checked_project_to_output_code(output_language, &checked_project, &syntax_expressions);
     if let Err(write_error) = std::fs::write(output_file_path, output_rust_file_string) {
         eprintln!(
             "tried to write the output into the file {output_file_path:?} but failed: {}",
@@ -443,21 +418,17 @@ fn build_main(
         Err(())
     }
 }
-fn checked_project_to_output_code<Expressions, Patterns>(
+fn checked_project_to_output_code<Expressions>(
     compile_output_language: CompileOutputLanguage,
-    checked_project: &slug::CheckedSyntaxProject<Expressions, Patterns>,
-    syntax_expressions: &slug::core::Buf<
-        Expressions,
-        slug::SyntaxExpression<Expressions, Patterns>,
-    >,
-    syntax_patterns: &slug::core::Buf<Patterns, slug::SyntaxPattern<Patterns>>,
+    checked_project: &slug::CheckedSyntaxProject<Expressions>,
+    syntax_expressions: &slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions>>,
 ) -> String {
     match compile_output_language {
         CompileOutputLanguage::Zig => {
-            slug::checked_project_to_zig(checked_project, syntax_expressions, syntax_patterns)
+            slug::checked_project_to_zig(checked_project, syntax_expressions)
         }
         CompileOutputLanguage::Js => {
-            slug::checked_project_to_js(checked_project, syntax_expressions, syntax_patterns)
+            slug::checked_project_to_js(checked_project, syntax_expressions)
         }
     }
 }
@@ -485,25 +456,19 @@ fn lsp_main_or_error() -> Result<(), Box<dyn std::error::Error>> {
         })?,
     )?;
     slug::core::origin_new!(expressions, Expressions);
-    slug::core::origin_new!(patterns, Patterns);
-    let state = initial_state(expressions, patterns);
+    let state = initial_state(expressions);
     server_loop(&connection, state)?;
     // shut down gracefully
     drop(connection);
     io_thread.join()?;
     Ok(())
 }
-fn initial_state<Expressions, Patterns>(
+fn initial_state<Expressions>(
     expressions: slug::core::Origin<Expressions, slug::core::Record>,
-    patterns: slug::core::Origin<Patterns, slug::core::Record>,
-) -> State<
-    slug::core::Origin<Expressions, slug::core::Record>,
-    slug::core::Origin<Patterns, slug::core::Record>,
-> {
+) -> State<slug::core::Origin<Expressions, slug::core::Record>> {
     State {
         projects: std::collections::HashMap::with_capacity(1),
         syntax_expressions: slug::core::Buf::new(expressions),
-        syntax_patterns: slug::core::Buf::new(patterns),
     }
 }
 fn server_capabilities() -> lsp_types::ServerCapabilities {
@@ -555,9 +520,9 @@ fn server_capabilities() -> lsp_types::ServerCapabilities {
     }
 }
 
-fn server_loop<Expressions, Patterns>(
+fn server_loop<Expressions>(
     connection: &lsp_server::Connection,
-    mut state: State<Expressions, Patterns>,
+    mut state: State<Expressions>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     for client_message in &connection.receiver {
         match client_message {
@@ -590,9 +555,9 @@ fn server_loop<Expressions, Patterns>(
     }
     Ok(())
 }
-fn handle_notification<Expressions, Patterns>(
+fn handle_notification<Expressions>(
     connection: &lsp_server::Connection,
-    state: &mut State<Expressions, Patterns>,
+    state: &mut State<Expressions>,
     notification_method: lsp_types::LspNotificationMethod,
     notification_arguments_json: serde_json::Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -624,8 +589,8 @@ fn handle_notification<Expressions, Patterns>(
     }
     Ok(())
 }
-fn update_state_on_did_open_text_document<Expressions, Patterns>(
-    state: &mut State<Expressions, Patterns>,
+fn update_state_on_did_open_text_document<Expressions>(
+    state: &mut State<Expressions>,
     connection: &lsp_server::Connection,
     arguments: lsp_types::DidOpenTextDocumentParams,
 ) {
@@ -642,7 +607,6 @@ fn update_state_on_did_open_text_document<Expressions, Patterns>(
                         connection,
                         arguments.text_document.uri,
                         &mut state.syntax_expressions,
-                        &mut state.syntax_patterns,
                         arguments.text_document.text,
                     ),
                 );
@@ -652,7 +616,6 @@ fn update_state_on_did_open_text_document<Expressions, Patterns>(
                     connection,
                     arguments.text_document.uri,
                     &mut state.syntax_expressions,
-                    &mut state.syntax_patterns,
                     arguments.text_document.text,
                 );
             }
@@ -660,9 +623,9 @@ fn update_state_on_did_open_text_document<Expressions, Patterns>(
     }
 }
 
-fn handle_request<Expressions, Patterns>(
+fn handle_request<Expressions>(
     connection: &lsp_server::Connection,
-    state: &State<Expressions, Patterns>,
+    state: &State<Expressions>,
     request_id: lsp_server::RequestId,
     request_method: lsp_types::LspRequestMethod,
     request_arguments_json: serde_json::Value,
@@ -807,8 +770,8 @@ fn publish_diagnostics(
         });
 }
 
-fn update_state_on_did_change_text_document<Expressions, Patterns>(
-    state: &mut State<Expressions, Patterns>,
+fn update_state_on_did_change_text_document<Expressions>(
+    state: &mut State<Expressions>,
     connection: &lsp_server::Connection,
     did_change_text_document: lsp_types::DidChangeTextDocumentParams,
 ) {
@@ -846,11 +809,7 @@ fn update_state_on_did_change_text_document<Expressions, Patterns>(
             }
         }
         for syntax_project_item in project_state.syntax.items.drain(..) {
-            slug::syntax_project_item_rid(
-                syntax_project_item,
-                &mut state.syntax_expressions,
-                &mut state.syntax_patterns,
-            );
+            slug::syntax_project_item_rid(syntax_project_item, &mut state.syntax_expressions);
         }
         if project_count == 1 {
             fn vec_should_be_empty<Origin, Item>(vec: &slug::core::Buf<Origin, Item>) {
@@ -869,7 +828,6 @@ fn update_state_on_did_change_text_document<Expressions, Patterns>(
                 }
             }
             vec_should_be_empty(&state.syntax_expressions);
-            vec_should_be_empty(&state.syntax_patterns);
         }
         *project_state = initialize_project_state_from_source(
             connection,
@@ -878,23 +836,20 @@ fn update_state_on_did_change_text_document<Expressions, Patterns>(
                 .text_document_identifier
                 .uri,
             &mut state.syntax_expressions,
-            &mut state.syntax_patterns,
             updated_source,
         );
     }
 }
 
-fn initialize_project_state_from_source<Expressions, Patterns>(
+fn initialize_project_state_from_source<Expressions>(
     connection: &lsp_server::Connection,
     uri: lsp_types::Uri,
-    expressions: &mut slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions, Patterns>>,
-    patterns: &mut slug::core::Buf<Patterns, slug::SyntaxPattern<Patterns>>,
+    expressions: &mut slug::core::Buf<Expressions, slug::SyntaxExpression<Expressions>>,
     source: String,
-) -> ProjectState<Expressions, Patterns> {
-    let parsed_project = slug::parse_project(expressions, patterns, &source);
+) -> ProjectState<Expressions> {
+    let parsed_project = slug::parse_project(expressions, &source);
     let mut errors: Vec<slug::ErrorNode> = Vec::new();
-    let checked_project =
-        slug::syntax_project_check(&mut errors, &parsed_project, expressions, patterns);
+    let checked_project = slug::syntax_project_check(&mut errors, &parsed_project, expressions);
     if let Some(input_file_path) = lsp_uri_to_file_path(&uri) {
         for compile_output_language in compile_output_languages {
             if let output_file_path = default_output_file_path_for_slug_input_file_path(
@@ -908,7 +863,6 @@ fn initialize_project_state_from_source<Expressions, Patterns>(
                         compile_output_language,
                         &checked_project,
                         expressions,
-                        patterns,
                     ),
                 );
             }
@@ -949,8 +903,8 @@ fn slug_error_node_to_diagnostic(problem: &slug::ErrorNode) -> lsp_types::Diagno
     }
 }
 
-fn respond_to_hover<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_hover<Expressions>(
+    state: &State<Expressions>,
     hover_arguments: &lsp_types::HoverParams,
 ) -> Option<lsp_types::Hover> {
     let Some(project_state) = state.projects.get(
@@ -967,7 +921,6 @@ fn respond_to_hover<Expressions, Patterns>(
         &project_state.queries,
         hover_arguments.text_document_position_params.position,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     ) else {
         return None;
     };
@@ -1050,8 +1003,8 @@ fn respond_to_hover<Expressions, Patterns>(
     }
 }
 
-fn respond_to_goto_definition<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_goto_definition<Expressions>(
+    state: &State<Expressions>,
     goto_definition_arguments: lsp_types::DefinitionParams,
 ) -> Option<lsp_types::DefinitionResponse> {
     let Some(project_state) = state.projects.get(
@@ -1070,7 +1023,6 @@ fn respond_to_goto_definition<Expressions, Patterns>(
             .text_document_position_params
             .position,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     ) else {
         return None;
     };
@@ -1090,8 +1042,8 @@ fn respond_to_goto_definition<Expressions, Patterns>(
     ))
 }
 
-fn respond_to_prepare_rename<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_prepare_rename<Expressions>(
+    state: &State<Expressions>,
     prepare_rename_arguments: &lsp_types::PrepareRenameParams,
 ) -> Option<lsp_types::PrepareRenameResult> {
     let Some(project_state) = state.projects.get(
@@ -1110,7 +1062,6 @@ fn respond_to_prepare_rename<Expressions, Patterns>(
             .text_document_position_params
             .position,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     ) else {
         return None;
     };
@@ -1153,8 +1104,8 @@ fn respond_to_prepare_rename<Expressions, Patterns>(
     Some(lsp_types::PrepareRenameResult::Range(symbol_range))
 }
 
-fn respond_to_rename<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_rename<Expressions>(
+    state: &State<Expressions>,
     rename_arguments: lsp_types::RenameParams,
 ) -> Option<Vec<lsp_types::DocumentChange>> {
     let Some(project_state) = state.projects.get(
@@ -1171,16 +1122,11 @@ fn respond_to_rename<Expressions, Patterns>(
         &project_state.queries,
         rename_arguments.text_document_position_params.position,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     ) else {
         return None;
     };
-    let mut symbol_ranges = slug::syntax_project_symbol_uses(
-        &project_state.syntax,
-        &symbol,
-        &state.syntax_expressions,
-        &state.syntax_patterns,
-    );
+    let mut symbol_ranges =
+        slug::syntax_project_symbol_uses(&project_state.syntax, &symbol, &state.syntax_expressions);
     if let Some(symbol_origin_range) =
         slug::syntax_project_symbol_origin_range(&project_state.syntax, &symbol)
     {
@@ -1210,8 +1156,8 @@ fn respond_to_rename<Expressions, Patterns>(
     )])
 }
 
-fn respond_to_references<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_references<Expressions>(
+    state: &State<Expressions>,
     references_arguments: &lsp_types::ReferenceParams,
 ) -> Option<Vec<lsp_types::Location>> {
     let Some(project_state) = state.projects.get(
@@ -1228,16 +1174,11 @@ fn respond_to_references<Expressions, Patterns>(
         &project_state.queries,
         references_arguments.text_document_position_params.position,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     ) else {
         return None;
     };
-    let mut symbol_ranges = slug::syntax_project_symbol_uses(
-        &project_state.syntax,
-        &symbol,
-        &state.syntax_expressions,
-        &state.syntax_patterns,
-    );
+    let mut symbol_ranges =
+        slug::syntax_project_symbol_uses(&project_state.syntax, &symbol, &state.syntax_expressions);
     if references_arguments.context.include_declaration
         && let Some(symbol_origin_range) =
             slug::syntax_project_symbol_origin_range(&project_state.syntax, &symbol)
@@ -1259,8 +1200,8 @@ fn respond_to_references<Expressions, Patterns>(
     )
 }
 
-fn respond_to_semantic_tokens_full<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_semantic_tokens_full<Expressions>(
+    state: &State<Expressions>,
     semantic_tokens_arguments: &lsp_types::SemanticTokensParams,
 ) -> Option<lsp_types::SemanticTokens> {
     let Some(project_state) = state
@@ -1280,7 +1221,6 @@ fn respond_to_semantic_tokens_full<Expressions, Patterns>(
         &mut highlight_state,
         &project_state.syntax,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     );
     Some(lsp_types::SemanticTokens {
         result_id: None,
@@ -1298,8 +1238,8 @@ fn lsp_position_add_characters(
     }
 }
 
-fn respond_to_completion<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_completion<Expressions>(
+    state: &State<Expressions>,
     completion_arguments: &lsp_types::CompletionParams,
 ) -> Option<lsp_types::CompletionResponse> {
     let Some(project_state) = state.projects.get(
@@ -1316,7 +1256,6 @@ fn respond_to_completion<Expressions, Patterns>(
         &project_state.queries,
         completion_arguments.text_document_position_params.position,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     ) else {
         return None;
     };
@@ -1446,19 +1385,16 @@ fn respond_to_completion<Expressions, Patterns>(
                     documentation: _,
                     result: _,
                 } => {
-                    if let Some(type_parameters) = type_parameters {
-                        for type_parameter in &type_parameters.names {
-                            if type_parameter.start == use_start {
-                                return None;
-                            }
-                            available_existing_variables.insert(&type_parameter.value);
+                    for type_parameter in type_parameters {
+                        if type_parameter.start == use_start {
+                            return None;
                         }
+                        available_existing_variables.insert(&type_parameter.value);
                     }
                     for parameter in parameters {
                         slug::syntax_pattern_type_variables_into(
                             &mut available_existing_variables,
                             parameter,
-                            &state.syntax_patterns,
                         );
                     }
                     if let Some(result_type) = result_type {
@@ -1627,8 +1563,8 @@ fn lsp_documentation_markdown(markdown: String) -> lsp_types::Documentation {
     })
 }
 
-fn respond_to_document_formatting<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_document_formatting<Expressions>(
+    state: &State<Expressions>,
     formatting_arguments: &lsp_types::DocumentFormattingParams,
 ) -> Option<Vec<lsp_types::TextEdit>> {
     let Some(project_state) = state.projects.get(&formatting_arguments.text_document.uri) else {
@@ -1638,7 +1574,6 @@ fn respond_to_document_formatting<Expressions, Patterns>(
         &project_state.syntax,
         &project_state.source,
         &state.syntax_expressions,
-        &state.syntax_patterns,
     );
     // diffing does not seem to be needed here. But maybe it's faster?
     Some(vec![lsp_types::TextEdit {
@@ -1665,8 +1600,8 @@ fn respond_to_document_formatting<Expressions, Patterns>(
     }])
 }
 
-fn respond_to_document_symbols<Expressions, Patterns>(
-    state: &State<Expressions, Patterns>,
+fn respond_to_document_symbols<Expressions>(
+    state: &State<Expressions>,
     document_symbol_arguments: &lsp_types::DocumentSymbolParams,
 ) -> Option<lsp_types::DocumentSymbolResponse> {
     let project = state
@@ -1736,11 +1671,7 @@ fn respond_to_document_symbols<Expressions, Patterns>(
                             end: maybe_result
                                 .as_ref()
                                 .map(|result_slot| {
-                                    slug::expression_end(
-                                        result_slot,
-                                        &state.syntax_expressions,
-                                        &state.syntax_patterns,
-                                    )
+                                    slug::expression_end(result_slot, &state.syntax_expressions)
                                 })
                                 .unwrap_or_else(|| {
                                     slug::name_end(slug::with_start_position_as_ref(name))

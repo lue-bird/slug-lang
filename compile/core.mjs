@@ -1025,10 +1025,12 @@ export function span_add_f32_chars(span, n, $) {
 export function opt_span_add_f32_chars(span, n, $) {
   return opt_span_add_str_chars(span, f32$to_string(n), $);
 }
-/** @template $Item, $Origin @param {Buf<$Origin, $Item>} buf$Origin$Item @returns {Unset_slice<$Item>} */
-export function buf_to_unset(buf$Origin$Item) {
-  buf$Origin$Item.items.length = 0;
-  return buf$Origin$Item.items;
+/** @template $Item, $Origin @param {Buf<$Origin, $Item>} _ @returns {Unset_slice<$Item>} */
+export function buf_to_unset(_) {
+  // preferably we would reuse the allocation but since Bufs can be shared
+  // and we can't determine if it's the only instance left we can't do this.
+  // (technically we could add a ref count to Buf but this seems annoying for FFI for example)
+  return [];
 }
 
 /** @template $Item @param {U32} length @returns {Unset_slice<$Item>} */

@@ -1,24 +1,24 @@
 
 ty stack(Origin Item)
     [
-    empty *
-    filled *(Item slot(Origin stack(Origin Item)))
+    Empty
+    Filled(Item slot(Origin stack(Origin Item)))
     ]
 
 fn stack-cons(tail stack(Origin Item) new-head Item) stack(Origin Item)
-    [filled<stack(Origin Item)> *(new-head insert<Origin>(tail))]
+    Filled stack(Origin Item) (new-head insert: Origin (tail))
 
 fn stack-step(stack stack(Origin Item) state State step fn(State Item) State) State
     if stack {
-    [empty *] state
-    [filled *(head tail)]
+    Empty state
+    Filled(head tail)
         item(tail)
         .stack-step(step(state head) step)
     }
 
 fn run() u32
-    = _ buf-empty<^stack stack(^stack u32)>()
-    [empty<stack(^stack u32)> *]
-    .stack-cons(3 u32)
-    .stack-cons(39 u32)
-    .stack-step(0 u32 fn(state u32 item u32) state .u32-add-clamp(item))
+    = _ buf-empty: [Stack] stack([Stack] u32) ()
+    Empty stack([Stack] u32)
+    .stack-cons(3u32)
+    .stack-cons(39u32)
+    .stack-step(0u32 fn(state u32 item u32) state .u32-add-clamp(item))
