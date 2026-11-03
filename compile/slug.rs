@@ -9012,6 +9012,7 @@ fn expression_query_check_for_missing_result_bufs(
             type_format(&mut error_message, 4, &type_buf(origin, item));
         }
         errors.push(ErrorNode {
+            // is there a nicer place to put it?
             range: expression_range(result, expressions),
             message: format!(
                 "
@@ -10145,14 +10146,12 @@ fn place_pattern_type_diff_errors(
 ) {
     match pattern {
         SyntaxPattern::Variable { .. } => {
-            // TODO can be refined
             errors.push(ErrorNode {
                 range: pattern_range(pattern),
                 message: type_diff_error_message(type_diff).into_boxed_str(),
             });
         }
         SyntaxPattern::Ignored { .. } => {
-            // TODO can be refined
             errors.push(ErrorNode {
                 range: pattern_range(pattern),
                 message: type_diff_error_message(type_diff).into_boxed_str(),
@@ -10291,7 +10290,6 @@ fn sorted_variant_names<'a>(variant_names: impl Iterator<Item = &'a Name>) -> Ve
 }
 
 const fn type_variable(name: &'static str) -> Type {
-    // TODO to upper or crash
     Type::Variable(Name::from_static(name))
 }
 fn type_tuple(fields: impl IntoIterator<Item = Type>) -> Type {
@@ -10306,7 +10304,6 @@ fn type_choice(variants: impl IntoIterator<Item = (&'static str, Vec<Type>)>) ->
         variants
             .into_iter()
             .map(|(variant_name, variant_value)| TypeVariant {
-                // TODO crash if not uppercase
                 name: Name::from_static(variant_name),
                 values: variant_value,
             })
@@ -10345,7 +10342,7 @@ fn type_opt(yes: Type) -> Type {
     }
 }
 const type_order: Type = Type::Alias {
-    name: Name::from_static("opt"),
+    name: Name::from_static("order"),
     arguments: vec![],
 };
 fn type_fn(in_: Vec<Type>, out: Type) -> Type {
@@ -10873,9 +10870,9 @@ fn span-start-weak(span span(Origin)) weak-slot(Origin)
 ```
 This `type-only` pattern is very easy to overuse,
 please limit your creativity for the rest of us mortals."#,
-                type_parameters: vec![Name::from_static("result")],
+                type_parameters: vec![Name::from_static("Result")],
                 parameters: vec![type_choice_empty],
-                result: type_variable("result")
+                result: type_variable("Result")
             },
             CoreFnInfo {
                 name: "slot-index",
@@ -11556,9 +11553,9 @@ which is a bit of a stinker. The reasons are:
   For growing alignments, this is only possible at runtime
   when the slice pointer happens to align correctly
 - slug has a simple type system so I'm happy such a compromise can exist at all"#,
-                type_parameters: vec![Name::from_static("new-item")],
+                type_parameters: vec![Name::from_static("New-item")],
                 parameters: vec![type_unset_slice(type_variable("Item"))],
-                result: type_unset_slice(type_variable("new-item"))
+                result: type_unset_slice(type_variable("New-item"))
             },
         ].map(|core_fn_info| {
             (
