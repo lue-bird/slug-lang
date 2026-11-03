@@ -5153,68 +5153,99 @@ fn syntax_expression_to_zig<'a>(
             arguments_rest,
             closed_paren_start: _,
         } => {
-            let Some(called_function) = project_fns.get(&name.value) else {
-                zig_incomplete_expression(output);
-                return;
-            };
-            let Some(checked_call) = checked_calls.get(&name.start) else {
-                zig_incomplete_expression(output);
-                return;
-            };
-            // can be optimized by avoiding the alloction
-            let mut type_variable_arguments =
-                checked_call.argument_type_variable_replacements.clone();
-            type_variable_arguments.extend(
-                called_function.type_parameters.iter().cloned().zip(
-                    type_arguments
-                        .iter()
-                        .flat_map(|type_arguments| &type_arguments.types)
-                        .map(|type_argument| syntax_type_to_type(type_argument)),
-                ),
-            );
-            if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
-                zig_break_start(output, label);
-            }
-            if is_core_fn_that_can_run_out_of_memory_in_zig(&name.value)
-                || !core_fns.contains_key(&name.value)
-            {
-                output.push_str("try ");
-            }
-            output.push_str(&name_to_lowercase_zig(&name.value));
-            output.push('(');
-            for type_variable_argument in type_variable_arguments.into_values() {
-                type_to_zig(output, &type_variable_argument);
-                output.push_str(", ");
-            }
-            if is_core_fn_taking_allocator_in_zig(&name.value)
-                || !core_fns.contains_key(&name.value)
-            {
-                zig_allocator_variable(output, function_scope_start);
-                output.push_str(", ");
-            }
             let maybe_first_argument = first_argument_dot
                 .as_ref()
                 .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
-            for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
-                syntax_expression_to_zig(
-                    output,
-                    type_aliases,
-                    project_fns,
-                    expressions,
-                    checked_calls,
-                    checked_local_fns,
-                    checked_queries,
-                    local_variables,
-                    argument,
-                    function_scope_start,
-                    ZigReturnContext::Expression,
+            if let Some(called_function) = project_fns.get(&name.value)
+                && let Some(checked_call) = checked_calls.get(&name.start)
+            {
+                // can be optimized by avoiding the alloction
+                let mut type_variable_arguments =
+                    checked_call.argument_type_variable_replacements.clone();
+                type_variable_arguments.extend(
+                    called_function.type_parameters.iter().cloned().zip(
+                        type_arguments
+                            .iter()
+                            .flat_map(|type_arguments| &type_arguments.types)
+                            .map(|type_argument| syntax_type_to_type(type_argument)),
+                    ),
                 );
-                output.push_str(", ");
-            }
-            output.push(')');
-            if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
-                zig_break_end(output);
-            }
+                if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
+                    zig_break_start(output, label);
+                }
+                if is_core_fn_that_can_run_out_of_memory_in_zig(&name.value)
+                    || !core_fns.contains_key(&name.value)
+                {
+                    output.push_str("try ");
+                }
+                output.push_str(&name_to_lowercase_zig(&name.value));
+                output.push('(');
+                for type_variable_argument in type_variable_arguments.into_values() {
+                    type_to_zig(output, &type_variable_argument);
+                    output.push_str(", ");
+                }
+                if is_core_fn_taking_allocator_in_zig(&name.value)
+                    || !core_fns.contains_key(&name.value)
+                {
+                    zig_allocator_variable(output, function_scope_start);
+                    output.push_str(", ");
+                }
+                for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
+                    syntax_expression_to_zig(
+                        output,
+                        type_aliases,
+                        project_fns,
+                        expressions,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
+                        local_variables,
+                        argument,
+                        function_scope_start,
+                        ZigReturnContext::Expression,
+                    );
+                    output.push_str(", ");
+                }
+                output.push(')');
+                if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
+                    zig_break_end(output);
+                }
+            } else if let Some(&local_variable_introduced_start) = local_variables.get(&name.value)
+            {
+                if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
+                    zig_break_start(output, label);
+                }
+                output.push_str("try ");
+                name_to_lowercase_local_zig_introduced_at(
+                    output,
+                    &name.value,
+                    local_variable_introduced_start,
+                );
+                output.push('(');
+                for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
+                    syntax_expression_to_zig(
+                        output,
+                        type_aliases,
+                        project_fns,
+                        expressions,
+                        checked_calls,
+                        checked_local_fns,
+                        checked_queries,
+                        local_variables,
+                        argument,
+                        function_scope_start,
+                        ZigReturnContext::Expression,
+                    );
+                    output.push_str(", ");
+                }
+                output.push(')');
+                if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
+                    zig_break_end(output);
+                }
+            } else {
+                zig_incomplete_expression(output);
+                return;
+            };
         }
         SyntaxExpression::Variant {
             name,
@@ -8106,6 +8137,9 @@ Available variable names are {}",
             arguments_rest: rest_syntax_arguments,
             closed_paren_start: _,
         } => {
+            let maybe_first_argument = first_argument_dot
+                .as_ref()
+                .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
             if let Some(project_fn_info) = project_fns.get(&name.value) {
                 let Some(project_fn_result_type) = &project_fn_info.result_type else {
                     return None;
@@ -8145,7 +8179,12 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                 else {
                     return None;
                 };
-                let mut expected_argument_types = project_fn_info.parameter_types.clone();
+                let expected_argument_types = project_fn_info
+                    .parameter_types
+                    .iter()
+                    .flatten()
+                    .cloned()
+                    .collect::<Vec<Type>>();
                 let mut result_type = project_fn_result_type.clone();
                 let mut type_variable_replacements = project_fn_info
                     .type_parameters
@@ -8153,12 +8192,14 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     .cloned()
                     .zip(type_arguments)
                     .collect();
-                let maybe_first_argument = first_argument_dot
-                    .as_ref()
-                    .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
-                // TODO(important) compare actual to expected argument count and repeat extraneous and missing arguments
-                for (expected_argument_type, syntax_argument) in
-                    expected_argument_types.iter_mut().flatten().zip(
+                expression_call_check_for_mismathching_arguments(
+                    errors,
+                    with_start_position_as_ref(name),
+                    maybe_first_argument.map(|_| 1).unwrap_or(0) + rest_syntax_arguments.len(),
+                    &expected_argument_types,
+                );
+                for (mut expected_argument_type, syntax_argument) in
+                    expected_argument_types.into_iter().zip(
                         maybe_first_argument
                             .into_iter()
                             .chain(rest_syntax_arguments),
@@ -8184,7 +8225,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         type_replace_variables(
                             &type_variable_replacements,
                             &mut expected_argument_type,
-                        );
+                        ); // is this really necessary?
                         type_collect_variables_that_are_concrete_into(
                             &mut type_variable_replacements,
                             &expected_argument_type,
@@ -8192,10 +8233,15 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                             type_aliases,
                         );
                     }
-                    type_replace_variables(&type_variable_replacements, expected_argument_type);
-                    if let Some(argument_variable_input_type_diff) =
-                        type_diff(expected_argument_type, &checked_argument_type, type_aliases)
-                    {
+                    type_replace_variables(
+                        &type_variable_replacements,
+                        &mut expected_argument_type,
+                    );
+                    if let Some(argument_variable_input_type_diff) = type_diff(
+                        &expected_argument_type,
+                        &checked_argument_type,
+                        type_aliases,
+                    ) {
                         place_expression_type_diff_errors(
                             errors,
                             syntax_argument,
@@ -8238,10 +8284,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     });
                     return None;
                 };
-                let maybe_first_argument = first_argument_dot
-                    .as_ref()
-                    .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
-                // TODO(important) compare actual to expected argument count and repeat extraneous and missing arguments
                 for (expected_argument_type, syntax_argument) in expected_argument_types.iter().zip(
                     maybe_first_argument
                         .into_iter()
@@ -8274,12 +8316,11 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         return None;
                     }
                 }
-                // TODO this should be removed eventually once not every call expects this to be present
-                checked_calls.insert(
-                    name.start,
-                    CheckedCall {
-                        argument_type_variable_replacements: std::collections::BTreeMap::new(),
-                    },
+                expression_call_check_for_mismathching_arguments(
+                    errors,
+                    with_start_position_as_ref(name),
+                    maybe_first_argument.map(|_| 1).unwrap_or(0) + rest_syntax_arguments.len(),
+                    &expected_argument_types,
                 );
                 Some(*result_type)
             } else {
@@ -8968,6 +9009,41 @@ If not, add patterns for the cases above"
                 },
             );
             Some(checked_query_result_type)
+        }
+    }
+}
+fn expression_call_check_for_mismathching_arguments(
+    errors: &mut Vec<ErrorNode>,
+    function_name: WithStartPosition<&Name>,
+    argument_count: usize,
+    parameter_types: &[Type],
+) {
+    match argument_count.cmp(&parameter_types.len()) {
+        std::cmp::Ordering::Equal => {}
+        std::cmp::Ordering::Greater => {
+            errors.push(ErrorNode {
+                range: name_range(function_name),
+                message: format!(
+                    "{} arguments too many (expected {}, found {argument_count}). Remove the extra ones",
+                    argument_count - parameter_types.len(),
+                    parameter_types.len()
+                ).into_boxed_str()
+            });
+        }
+        std::cmp::Ordering::Less => {
+            let mut error_message = format!(
+                "{} arguments missing (expected {}, found {argument_count}). Their expected parameter types are\n",
+                parameter_types.len() - argument_count,
+                parameter_types.len()
+            );
+            for parameter_type in parameter_types.iter().skip(argument_count) {
+                error_message.push_str("\n  - ");
+                type_format(&mut error_message, 4, parameter_type);
+            }
+            errors.push(ErrorNode {
+                range: name_range(function_name),
+                message: error_message.into_boxed_str(),
+            });
         }
     }
 }
