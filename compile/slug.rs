@@ -5248,8 +5248,6 @@ fn syntax_expression_to_zig<'a>(
             output.push_str("const ");
             let values_variable_label = name_end(with_start_position_as_ref(name));
             values_variable_name(output, values_variable_label);
-            // TODO {} if values.len() == 0
-            // TODO no .{} if values.len() == 1
             output.push_str(" = ");
             match values
                 .as_ref()
@@ -8159,10 +8157,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     .as_ref()
                     .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
                 // TODO(important) compare actual to expected argument count and repeat extraneous and missing arguments
-                // TODO verify that the result has no reachable buf that overlaps with reachable_bufs
-                //     (sadly I think this has to be done in a separate step because reachable bufs
-                //      are only known once e.g. local function result expression types are known
-                //     )
                 for (expected_argument_type, syntax_argument) in
                     expected_argument_types.iter_mut().flatten().zip(
                         maybe_first_argument
@@ -8582,7 +8576,6 @@ If there should only ever by one variant, using a record with a single field is 
             queried,
             result,
         } => {
-            // TODO scope "return values" must include all bufs that they depend upon that were introdduced in the same scope
             let Some(queried) = queried else {
                 errors.push(ErrorNode {
                     range: symbol_range(*equals_start, "="),
@@ -13765,8 +13758,11 @@ fn type_symbol_at_position<'a>(
             open_curly_start: _,
             fields,
             closed_curly_start: _,
-        } => fields_find_symbol_at_position(fields, |_, value| {
-            type_symbol_at_position(value, position, scope)
+        } => fields.iter().find_map(|field| {
+            field
+                .value
+                .as_ref()
+                .and_then(|field_value| type_symbol_at_position(field_value, position, scope))
         }),
         SyntaxType::Choice {
             open_bracket_start: _,
@@ -13778,18 +13774,6 @@ fn type_symbol_at_position<'a>(
             .flat_map(|values| &values.values)
             .find_map(|value| type_symbol_at_position(value, position, scope)),
     }
-}
-// TODO inline or fix closure type
-fn fields_find_symbol_at_position<'a, Value>(
-    fields: &'a [SyntaxRecordField<Value>],
-    mut value_symbol_at_position: impl FnMut(Option<&Name>, &'a Value) -> Option<SyntaxSymbol<'a>>,
-) -> Option<SyntaxSymbol<'a>> {
-    fields.iter().find_map(|field| {
-        field
-            .value
-            .as_ref()
-            .and_then(|field_value| value_symbol_at_position(Some(&field.name.value), field_value))
-    })
 }
 
 pub fn syntax_project_symbol_origin_range(
