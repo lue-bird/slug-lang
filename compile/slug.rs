@@ -2266,11 +2266,18 @@ Choose a different ty name.",
     for (&project_fn_graph_node, project_fn_info) in project_fn_by_graph_node.iter() {
         let project_fn_graph: &mut strongly_connected_components::Neighbors = &mut project_fn_graph;
         if let Some(result_node) = project_fn_info.result {
+            let mut parameter_variables = Vec::with_capacity(2);
+            for parameter in project_fn_info.parameters {
+                syntax_parameter_pattern_variables_for_each(parameter, &mut |name, _type| {
+                    parameter_variables.push(name.value);
+                });
+            }
             let mut project_fn_referenced_vertexes = std::collections::BTreeSet::new();
             syntax_expression_connect_fns_in_graph_from(
                 &project_fn_graph_node_by_name,
                 expressions,
                 result_node,
+                &mut parameter_variables,
                 &mut project_fn_referenced_vertexes,
             );
             project_fn_graph[project_fn_graph_node] = project_fn_referenced_vertexes;
@@ -2520,26 +2527,21 @@ fn syntax_type_connect_type_names_in_graph_from(
         }
     }
 }
-// TODO collect variables and exclude them
-fn syntax_expression_connect_fns_in_graph_from(
+fn syntax_expression_connect_fns_in_graph_from<'a>(
     project_fn_graph_node_by_name: &std::collections::HashMap<
         &Name,
         strongly_connected_components::Vertex,
     >,
-    expressions: &Buf<Expressions, SyntaxExpression>,
-    expression: &SyntaxExpression,
+    expressions: &'a Buf<Expressions, SyntaxExpression>,
+    expression: &'a SyntaxExpression,
+    // after the call the Vec contents will be the same as before
+    local_variables: &mut Vec<&'a Name>,
     project_fn_graph: &mut std::collections::BTreeSet<strongly_connected_components::Vertex>,
 ) {
     match expression {
         SyntaxExpression::Number { .. } => {}
         SyntaxExpression::Text { .. } => {}
-        SyntaxExpression::Variable(name) => {
-            if let Some(referenced_fn_graph_node) =
-                project_fn_graph_node_by_name.get(&name.value).copied()
-            {
-                project_fn_graph.insert(referenced_fn_graph_node);
-            }
-        }
+        SyntaxExpression::Variable(_) => {}
         SyntaxExpression::Call {
             first_argument_dot,
             name,
@@ -2548,8 +2550,9 @@ fn syntax_expression_connect_fns_in_graph_from(
             arguments_rest: arguments,
             closed_paren_start: _,
         } => {
-            if let Some(referenced_fn_graph_node) =
-                project_fn_graph_node_by_name.get(&name.value).copied()
+            if !local_variables.contains(&&name.value)
+                && let Some(referenced_fn_graph_node) =
+                    project_fn_graph_node_by_name.get(&name.value).copied()
             {
                 project_fn_graph.insert(referenced_fn_graph_node);
             }
@@ -2562,6 +2565,7 @@ fn syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(argument),
+                    local_variables,
                     project_fn_graph,
                 );
             }
@@ -2570,6 +2574,7 @@ fn syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     argument,
+                    local_variables,
                     project_fn_graph,
                 );
             }
@@ -2584,6 +2589,7 @@ fn syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     value,
+                    local_variables,
                     project_fn_graph,
                 );
             }
@@ -2591,15 +2597,22 @@ fn syntax_expression_connect_fns_in_graph_from(
         SyntaxExpression::Fn {
             fn_keyword_start: _,
             open_paren_start: _,
-            parameters: _,
+            parameters,
             closed_paren_start: _,
             result,
         } => {
             if let Some(result) = result {
+                let mut parameter_introduced_variables = Vec::new();
+                for parameter in parameters {
+                    syntax_parameter_pattern_variables_for_each(parameter, &mut |name, _type| {
+                        parameter_introduced_variables.push(name.value);
+                    });
+                }
                 syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(result),
+                    &mut parameter_introduced_variables,
                     project_fn_graph,
                 );
             }
@@ -2615,6 +2628,7 @@ fn syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     part,
+                    local_variables,
                     project_fn_graph,
                 );
             }
@@ -2630,6 +2644,7 @@ fn syntax_expression_connect_fns_in_graph_from(
                         project_fn_graph_node_by_name,
                         expressions,
                         value,
+                        local_variables,
                         project_fn_graph,
                     );
                 }
@@ -2644,13 +2659,14 @@ fn syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(expression),
+                    local_variables,
                     project_fn_graph,
                 );
             }
         }
         SyntaxExpression::Destruct {
             equals_start: _,
-            pattern: _,
+            pattern,
             queried,
             result,
         } => {
@@ -2659,16 +2675,25 @@ fn syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(queried),
+                    local_variables,
                     project_fn_graph,
                 );
             }
             if let Some(result) = result {
+                let local_variables_count_without_destruct_pattern = local_variables.len();
+                if let Some(pattern) = pattern {
+                    syntax_parameter_pattern_variables_for_each(pattern, &mut |name, _type| {
+                        local_variables.push(name.value);
+                    });
+                }
                 syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(result),
+                    local_variables,
                     project_fn_graph,
                 );
+                local_variables.truncate(local_variables_count_without_destruct_pattern);
             }
         }
         SyntaxExpression::If {
@@ -2683,17 +2708,27 @@ fn syntax_expression_connect_fns_in_graph_from(
                     project_fn_graph_node_by_name,
                     expressions,
                     expressions.item(queried),
+                    local_variables,
                     project_fn_graph,
                 );
             }
             for case in cases {
                 if let Some(result) = &case.result {
+                    let local_variables_count_without_case_pattern = local_variables.len();
+                    syntax_parameter_pattern_variables_for_each(
+                        &case.pattern,
+                        &mut |name, _type| {
+                            local_variables.push(name.value);
+                        },
+                    );
                     syntax_expression_connect_fns_in_graph_from(
                         project_fn_graph_node_by_name,
                         expressions,
                         result,
+                        local_variables,
                         project_fn_graph,
                     );
+                    local_variables.truncate(local_variables_count_without_case_pattern);
                 }
             }
         }
@@ -2955,7 +2990,7 @@ fn syntax_project_fn_check<'a>(
     };
     let mut parameter_introduced_variables = std::collections::HashMap::new();
     for syntax_parameter in project_fn.parameters {
-        syntax_parameter_pattern_variables_fold(syntax_parameter, (), &mut |(), name, type_| {
+        syntax_parameter_pattern_variables_for_each(syntax_parameter, &mut |name, type_| {
             parameter_introduced_variables.insert(
                 name.value,
                 CheckedLocalVariable {
@@ -13115,10 +13150,9 @@ pub fn project_symbol_at_position<'a>(
                     result.as_ref().and_then(|result| {
                         let mut local_variables = std::collections::HashMap::new();
                         for parameter in parameters {
-                            syntax_parameter_pattern_variables_fold(
+                            syntax_parameter_pattern_variables_for_each(
                                 parameter,
-                                (),
-                                &mut |(), parameter_variable_name, parameter_variable_type| {
+                                &mut |parameter_variable_name, parameter_variable_type| {
                                     local_variables.insert(
                                         parameter_variable_name.value,
                                         LocalVariableSymbolOrigin {
@@ -13317,10 +13351,9 @@ fn expression_symbol_at_position<'a>(
                 .or_else(|| {
                     result.as_ref().and_then(|result| {
                         for parameter in parameters {
-                            syntax_parameter_pattern_variables_fold(
+                            syntax_parameter_pattern_variables_for_each(
                                 parameter,
-                                (),
-                                &mut |(), name, type_| {
+                                &mut |name, type_| {
                                     local_variables.insert(
                                         name.value,
                                         LocalVariableSymbolOrigin {
@@ -13431,11 +13464,10 @@ fn expression_symbol_at_position<'a>(
                             return None;
                         };
                         if let Some(pattern) = pattern {
-                            syntax_query_pattern_variables_fold(
+                            syntax_query_pattern_variables_for_each(
                                 pattern,
                                 expected_pattern_type,
-                                (),
-                                &mut |(), name, type_| {
+                                &mut |name, type_| {
                                     local_variables.insert(
                                         name.value,
                                         LocalVariableSymbolOrigin {
@@ -13521,11 +13553,10 @@ fn expression_if_case_symbol_at_position<'a>(
         if !range_includes_position(expression_range(result, expressions), position) {
             return None;
         }
-        syntax_query_pattern_variables_fold(
+        syntax_query_pattern_variables_for_each(
             &case.pattern,
             expected_pattern_type,
-            (),
-            &mut |(), name, type_| {
+            &mut |name, type_| {
                 local_variables.insert(
                     name.value,
                     LocalVariableSymbolOrigin {
@@ -13547,67 +13578,63 @@ fn expression_if_case_symbol_at_position<'a>(
         )
     })
 }
-fn syntax_parameter_pattern_variables_fold<'a, State>(
+fn syntax_parameter_pattern_variables_for_each<'a>(
     pattern: &'a SyntaxPattern,
-    state: State,
-    reduce: &mut impl FnMut(State, WithStartPosition<&'a Name>, Option<&'a SyntaxType>) -> State,
-) -> State {
+    step_variable: &mut impl FnMut(WithStartPosition<&'a Name>, Option<&'a SyntaxType>),
+) {
     match pattern {
         SyntaxPattern::Ignored {
             underscore_start: _,
             type_: _,
-        } => state,
+        } => {}
         SyntaxPattern::Variable { name, type_ } => {
-            reduce(state, with_start_position_as_ref(name), type_.as_ref())
+            step_variable(with_start_position_as_ref(name), type_.as_ref())
         }
-        SyntaxPattern::Variant { name: _, values } => values
-            .iter()
-            .flat_map(|values| &values.values)
-            .fold(state, |state, value| {
-                syntax_parameter_pattern_variables_fold(value, state, reduce)
-            }),
+        SyntaxPattern::Variant { name: _, values } => {
+            for value in values.iter().flat_map(|values| &values.values) {
+                syntax_parameter_pattern_variables_for_each(value, step_variable);
+            }
+        }
         SyntaxPattern::Tuple {
             star_start: _,
             open_paren_start: _,
             parts,
             closed_paren_start: _,
-        } => parts.iter().fold(state, |state, part| {
-            syntax_parameter_pattern_variables_fold(part, state, reduce)
-        }),
+        } => {
+            for part in parts {
+                syntax_parameter_pattern_variables_for_each(part, step_variable);
+            }
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
             closed_curly_start: _,
-        } => fields
-            .iter()
-            .fold(state, |state, field| match &field.value {
-                None => state,
-                Some(value) => syntax_parameter_pattern_variables_fold(value, state, reduce),
-            }),
+        } => {
+            for field in fields {
+                if let Some(value) = &field.value {
+                    syntax_parameter_pattern_variables_for_each(value, step_variable);
+                }
+            }
+        }
     }
 }
-fn syntax_query_pattern_variables_fold<'a, State>(
+fn syntax_query_pattern_variables_for_each<'a>(
     pattern: &'a SyntaxPattern,
     expected_type: Option<&Type>,
-    state: State,
-    reduce: &mut impl FnMut(State, WithStartPosition<&'a Name>, Option<Type>) -> State,
-) -> State {
+    step_variable: &mut impl FnMut(WithStartPosition<&'a Name>, Option<Type>),
+) {
     match pattern {
         SyntaxPattern::Ignored {
             underscore_start: _,
             type_: _,
-        } => state,
-        SyntaxPattern::Variable { name, type_: _ } => reduce(
-            state,
-            with_start_position_as_ref(name),
-            expected_type.cloned(),
-        ),
-        SyntaxPattern::Variant { name, values } => values
-            .iter()
-            .flat_map(|values| &values.values)
-            .enumerate()
-            .fold(state, |state, (value_index, value)| {
-                syntax_query_pattern_variables_fold(
+        } => {}
+        SyntaxPattern::Variable { name, type_: _ } => {
+            step_variable(with_start_position_as_ref(name), expected_type.cloned())
+        }
+        SyntaxPattern::Variant { name, values } => {
+            for (value_index, value) in values.iter().flat_map(|values| &values.values).enumerate()
+            {
+                syntax_query_pattern_variables_for_each(
                     value,
                     expected_type.and_then(|expected_type| match expected_type {
                         Type::Choice(expected_variants) => expected_variants
@@ -13616,51 +13643,49 @@ fn syntax_query_pattern_variables_fold<'a, State>(
                             .and_then(|variant| variant.values.get(value_index)),
                         _ => None,
                     }),
-                    state,
-                    reduce,
-                )
-            }),
+                    step_variable,
+                );
+            }
+        }
         SyntaxPattern::Tuple {
             star_start: _,
             open_paren_start: _,
             parts,
             closed_paren_start: _,
-        } => parts
-            .iter()
-            .enumerate()
-            .fold(state, |state, (part_index, part)| {
-                syntax_query_pattern_variables_fold(
+        } => {
+            for (part_index, part) in parts.iter().enumerate() {
+                syntax_query_pattern_variables_for_each(
                     part,
                     match expected_type {
                         Some(Type::Tuple(expected_parts)) => expected_parts.get(part_index),
                         _ => None,
                     },
-                    state,
-                    reduce,
-                )
-            }),
+                    step_variable,
+                );
+            }
+        }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
             closed_curly_start: _,
-        } => fields
-            .iter()
-            .fold(state, |state, field| match &field.value {
-                None => state,
-                Some(value) => syntax_query_pattern_variables_fold(
-                    value,
-                    expected_type
-                        .and_then(|expected_type| match expected_type {
-                            Type::Record(expected_fields) => expected_fields
-                                .iter()
-                                .find(|expected_field| field.name.value == expected_field.name),
-                            _ => None,
-                        })
-                        .map(|field| &field.value),
-                    state,
-                    reduce,
-                ),
-            }),
+        } => {
+            for field in fields {
+                if let Some(value) = &field.value {
+                    syntax_query_pattern_variables_for_each(
+                        value,
+                        expected_type
+                            .and_then(|expected_type| match expected_type {
+                                Type::Record(expected_fields) => expected_fields
+                                    .iter()
+                                    .find(|expected_field| field.name.value == expected_field.name),
+                                _ => None,
+                            })
+                            .map(|field| &field.value),
+                        step_variable,
+                    );
+                }
+            }
+        }
     }
 }
 fn pattern_symbol_at_position<'a>(
@@ -14134,10 +14159,9 @@ pub fn syntax_project_symbol_uses(
                             let mut parameter_introduced_variables =
                                 std::collections::HashSet::new();
                             for parameter in parameters {
-                                syntax_parameter_pattern_variables_fold(
+                                syntax_parameter_pattern_variables_for_each(
                                     parameter,
-                                    (),
-                                    &mut |(), parameter_introduced_variable_name, _type_| {
+                                    &mut |parameter_introduced_variable_name, _type_| {
                                         parameter_introduced_variables
                                             .insert(parameter_introduced_variable_name.value);
                                     },
@@ -14457,10 +14481,9 @@ fn syntax_expression_symbol_uses_into(
                 let mut parameter_pattern_variables = std::collections::HashSet::new();
                 for parameter in parameters {
                     syntax_pattern_symbol_uses_into(uses, parameter, symbol);
-                    syntax_parameter_pattern_variables_fold(
+                    syntax_parameter_pattern_variables_for_each(
                         parameter,
-                        (),
-                        &mut |(), pattern_variable_name, _type_| {
+                        &mut |pattern_variable_name, _type_| {
                             parameter_pattern_variables.insert(pattern_variable_name.value);
                         },
                     );
@@ -14540,10 +14563,9 @@ fn syntax_expression_symbol_uses_into(
             if let Some(result) = result {
                 let mut local_variables = std::borrow::Cow::Borrowed(local_variables);
                 if let Some(pattern) = pattern {
-                    syntax_parameter_pattern_variables_fold(
+                    syntax_parameter_pattern_variables_for_each(
                         pattern,
-                        (),
-                        &mut |(), pattern_variable_name, _type_| {
+                        &mut |pattern_variable_name, _type_| {
                             local_variables.to_mut().insert(pattern_variable_name.value);
                         },
                     );
@@ -14577,11 +14599,10 @@ fn syntax_expression_symbol_uses_into(
                 if let Some(result) = &case.result {
                     let mut local_variables = std::borrow::Cow::Borrowed(local_variables);
                     syntax_pattern_symbol_uses_into(uses, &case.pattern, symbol);
-                    syntax_query_pattern_variables_fold(
+                    syntax_query_pattern_variables_for_each(
                         &case.pattern,
                         None,
-                        (),
-                        &mut |(), pattern_variable_name, _type_| {
+                        &mut |pattern_variable_name, _type_| {
                             local_variables.to_mut().insert(pattern_variable_name.value);
                         },
                     );
