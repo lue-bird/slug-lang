@@ -3011,6 +3011,7 @@ fn syntax_project_fn_check<'a>(
             result_expression_is_invalid: true,
         };
     }
+    // TODO go through the whole expression again to find clashing introduced reachable bufs
     CheckedProjectFn {
         documentation: documentation,
         type_parameters: checked_header.type_parameters,
@@ -3891,7 +3892,8 @@ fn syntax_query_pattern_check<'a>(
     expected_type: &Type,
     errors: &mut Vec<ErrorNode>,
     introduced_variables: &mut std::collections::HashMap<&'a Name, CheckedLocalVariable>,
-
+    introduced_reachable_bufs: &mut std::collections::HashSet<TypeBuf>,
+    // consider moving checking for existing local variables to the callsite
     existing_local_variables: &std::collections::HashMap<&Name, CheckedLocalVariable>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
@@ -3933,6 +3935,14 @@ fn syntax_query_pattern_check<'a>(
                     ).into_boxed_str(),
                 });
             }
+            type_reachable_bufs(
+                expected_type,
+                vec![],
+                type_aliases,
+                &mut |type_buf, _path| {
+                    introduced_reachable_bufs.insert(type_buf);
+                },
+            );
         }
         SyntaxPattern::Ignored {
             underscore_start: _,
@@ -3942,10 +3952,18 @@ fn syntax_query_pattern_check<'a>(
                 errors.push(ErrorNode {
                     range: type_range(actual_type),
                     message: Box::from(
-                        "ignored if patterns cannot specify an explicit type. Remove it",
+                        "ignored query patterns cannot specify an explicit type. Remove it",
                     ),
                 });
             }
+            type_reachable_bufs(
+                expected_type,
+                vec![],
+                type_aliases,
+                &mut |type_buf, _path| {
+                    introduced_reachable_bufs.insert(type_buf);
+                },
+            );
         }
         SyntaxPattern::Variant { name, values } => {
             let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
@@ -3991,6 +4009,7 @@ fn syntax_query_pattern_check<'a>(
                     expected_value_type,
                     errors,
                     introduced_variables,
+                    introduced_reachable_bufs,
                     existing_local_variables,
                     type_aliases,
                 );
@@ -4038,6 +4057,7 @@ fn syntax_query_pattern_check<'a>(
                     expected_type_part,
                     errors,
                     introduced_variables,
+                    introduced_reachable_bufs,
                     existing_local_variables,
                     type_aliases,
                 );
@@ -4095,6 +4115,7 @@ Otherwise, you might have intended this pattern to belong to a different if. Use
                     &expected_type_field.value,
                     errors,
                     introduced_variables,
+                    introduced_reachable_bufs,
                     existing_local_variables,
                     type_aliases,
                 );
@@ -4395,15 +4416,17 @@ fn type_reachable_bufs(
         }
     }
 }
-fn function_signature_implicit_bufs(
-    parameters: &[Option<Type>],
+fn function_signature_implicit_bufs<'a>(
+    // not +Clone but + Copy in theory
+    // but rust doesn't implement Copy "because footgun"
+    parameters: impl Iterator<Item = &'a Type> + Clone,
     result: Option<&Type>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) -> std::collections::HashSet<TypeBuf> {
     let mut type_bufs = std::collections::HashSet::new();
     {
         let mut parameter_type_bufs_to_ignore = std::collections::HashSet::new();
-        for parameter in parameters.iter().flatten() {
+        for parameter in parameters.clone() {
             type_reachable_bufs(
                 parameter,
                 vec![],
@@ -4413,7 +4436,7 @@ fn function_signature_implicit_bufs(
                 },
             );
         }
-        for parameter in parameters.iter().flatten() {
+        for parameter in parameters {
             type_implicit_bufs(
                 parameter,
                 &parameter_type_bufs_to_ignore,
@@ -6092,8 +6115,11 @@ fn syntax_project_fn_to_js(
         output.push(' ');
     }
 
-    let implicit_bufs =
-        function_signature_implicit_bufs(parameter_types, Some(result_type), type_aliases);
+    let implicit_bufs = function_signature_implicit_bufs(
+        parameter_types.iter().flatten(),
+        Some(result_type),
+        type_aliases,
+    );
     for (parameter_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
         output.push_str("@param {");
         type_to_js(output, parameter_type);
@@ -6371,7 +6397,7 @@ fn syntax_pattern_to_js_destructuring<'a>(
             underscore_start: _,
             type_,
         } => {
-            if let Some(to_drop_type) = expected_type
+            if let Some(ignored_type) = expected_type
                 .map(|expected_type| std::borrow::Cow::Borrowed(expected_type))
                 .or_else(|| {
                     type_
@@ -6379,7 +6405,29 @@ fn syntax_pattern_to_js_destructuring<'a>(
                         .map(|type_| std::borrow::Cow::Owned(syntax_type_to_type(type_)))
                 })
             {
-                js_variable_drop(output, to_destructure, &to_drop_type, type_aliases);
+                let mut reachable_bufs = std::collections::HashMap::new();
+                type_reachable_bufs(
+                    &ignored_type,
+                    vec![],
+                    type_aliases,
+                    &mut |type_buf, path| {
+                        reachable_bufs.insert(type_buf, path);
+                    },
+                );
+                for (reachable_type_buf, reachable_type_buf_path) in reachable_bufs {
+                    output.push_str("$.");
+                    type_buf_js_variable_name(
+                        output,
+                        &reachable_type_buf.origin,
+                        &reachable_type_buf.item,
+                    );
+                    output.push_str(" = ");
+                    output.push_str(to_destructure);
+                    reachable_type_buf_path_js(output, &reachable_type_buf_path);
+                    output.push_str(";\n");
+                }
+                // okay because bufs are not dropped but garbage collected
+                js_variable_drop(output, to_destructure, &ignored_type, type_aliases);
             }
         }
         SyntaxPattern::Variable { name, type_ } => {
@@ -6647,7 +6695,6 @@ fn syntax_expression_to_js<'a>(
             }
             js_scope_result_variable(output, scope_start);
             output.push_str(" = ");
-            let mut reachable_bufs = std::collections::HashMap::new();
             if let Some(project_fn) = project_fns.get(&name.value)
                 && let Some(checked_call) = checked_calls.get(&name.start)
             {
@@ -6675,7 +6722,7 @@ fn syntax_expression_to_js<'a>(
                     )
                     .collect::<std::collections::BTreeMap<Name, Type>>();
                 let implicit_bufs = function_signature_implicit_bufs(
-                    &project_fn.parameter_types,
+                    project_fn.parameter_types.iter().flatten(),
                     project_fn.result_type.as_ref(),
                     type_aliases,
                 );
@@ -6690,18 +6737,7 @@ fn syntax_expression_to_js<'a>(
                     type_aliases,
                 );
                 output.push_str(");\n");
-                if let Some(mut call_result_type) = project_fn.result_type.clone() {
-                    type_replace_variables(&type_variables_to_substitute, &mut call_result_type);
-                    type_reachable_bufs(
-                        &call_result_type,
-                        vec![],
-                        type_aliases,
-                        &mut |type_buf, path| {
-                            reachable_bufs.insert(type_buf, path);
-                        },
-                    );
-                }
-            } else if let Some(local_variable) = local_variables.get(&name.value) {
+            } else if let Some(_local_variable) = local_variables.get(&name.value) {
                 // no need to check for clone since functions are always freely copy-able (closures would not be)
                 name_to_lowercase_local_js(output, &name.value);
                 output.push('(');
@@ -6711,34 +6747,6 @@ fn syntax_expression_to_js<'a>(
                 }
                 // no need to specialize $
                 output.push_str("$);\n");
-                if let Some(local_variable_type) = local_variable.type_.as_deref()
-                    && let Type::Fn {
-                        parameters: _,
-                        result: call_result_type,
-                    } =
-                        type_alias_resolve_to_non_alias(local_variable_type, type_aliases).as_ref()
-                {
-                    type_reachable_bufs(
-                        call_result_type,
-                        vec![],
-                        type_aliases,
-                        &mut |type_buf, path| {
-                            reachable_bufs.insert(type_buf, path);
-                        },
-                    );
-                }
-            }
-            for (reachable_type_buf, reachable_type_buf_path) in reachable_bufs {
-                output.push_str("$.");
-                type_buf_js_variable_name(
-                    output,
-                    &reachable_type_buf.origin,
-                    &reachable_type_buf.item,
-                );
-                output.push_str(" = ");
-                js_scope_result_variable(output, scope_start);
-                reachable_type_buf_path_js(output, &reachable_type_buf_path);
-                output.push_str(";\n");
             }
         }
         SyntaxExpression::Variant {
@@ -8123,21 +8131,22 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     });
                     return None;
                 }
-                let mut type_arguments = Vec::new();
-                for syntax_type_argument in
-                    syntax_type_arguments.iter().flat_map(|args| &args.types)
-                {
-                    let Some(type_argument) = syntax_type_check_not_in_type_alias(
-                        syntax_type_argument,
-                        errors,
-                        type_aliases,
-                        records_used,
-                        choices_used,
-                    ) else {
-                        return None;
-                    };
-                    type_arguments.push(type_argument);
-                }
+                let Some(type_arguments) = syntax_type_arguments
+                    .iter()
+                    .flat_map(|args| &args.types)
+                    .map(|syntax_type_argument| {
+                        syntax_type_check_not_in_type_alias(
+                            syntax_type_argument,
+                            errors,
+                            type_aliases,
+                            records_used,
+                            choices_used,
+                        )
+                    })
+                    .collect::<Option<Vec<Type>>>()
+                else {
+                    return None;
+                };
                 let mut expected_argument_types = project_fn_info.parameter_types.clone();
                 let mut result_type = project_fn_result_type.clone();
                 let mut type_variable_replacements = project_fn_info
@@ -8150,6 +8159,10 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     .as_ref()
                     .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
                 // TODO(important) compare actual to expected argument count and repeat extraneous and missing arguments
+                // TODO verify that the result has no reachable buf that overlaps with reachable_bufs
+                //     (sadly I think this has to be done in a separate step because reachable bufs
+                //      are only known once e.g. local function result expression types are known
+                //     )
                 for (expected_argument_type, syntax_argument) in
                     expected_argument_types.iter_mut().flatten().zip(
                         maybe_first_argument
@@ -8186,7 +8199,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         );
                     }
                     type_replace_variables(&type_variable_replacements, expected_argument_type);
-                    type_replace_variables(&type_variable_replacements, &mut result_type);
                     if let Some(argument_variable_input_type_diff) =
                         type_diff(expected_argument_type, &checked_argument_type, type_aliases)
                     {
@@ -8199,6 +8211,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         return None;
                     }
                 }
+                type_replace_variables(&type_variable_replacements, &mut result_type);
                 checked_calls.insert(
                     name.start,
                     CheckedCall {
@@ -8396,21 +8409,23 @@ If there should only ever by one variant, using a record with a single field is 
                 &Name,
                 CheckedLocalVariable,
             > = std::collections::HashMap::new();
-            let mut parameter_types = Vec::with_capacity(parameters.len());
-            for parameter in parameters {
-                let Some(checked_parmeter_type) = syntax_parameter_pattern_check(
-                    parameter,
-                    errors,
-                    &mut parameter_introduced_variables,
-                    type_aliases,
-                    &std::collections::HashMap::new(),
-                    records_used,
-                    choices_used,
-                ) else {
-                    return None;
-                };
-                parameter_types.push(checked_parmeter_type);
-            }
+            let Some(parameter_types) = parameters
+                .iter()
+                .map(|parameter| {
+                    syntax_parameter_pattern_check(
+                        parameter,
+                        errors,
+                        &mut parameter_introduced_variables,
+                        type_aliases,
+                        &std::collections::HashMap::new(),
+                        records_used,
+                        choices_used,
+                    )
+                })
+                .collect::<Option<Vec<Type>>>()
+            else {
+                return None;
+            };
             let Some(result) = result else {
                 errors.push(ErrorNode {
                     range: closed_paren_start
@@ -8567,6 +8582,7 @@ If there should only ever by one variant, using a record with a single field is 
             queried,
             result,
         } => {
+            // TODO scope "return values" must include all bufs that they depend upon that were introdduced in the same scope
             let Some(queried) = queried else {
                 errors.push(ErrorNode {
                     range: symbol_range(*equals_start, "="),
@@ -8604,15 +8620,14 @@ If there should only ever by one variant, using a record with a single field is 
                 });
                 return None;
             };
-            let mut pattern_introduced_variables: std::collections::HashMap<
-                &Name,
-                CheckedLocalVariable,
-            > = std::collections::HashMap::new();
+            let mut pattern_introduced_variables = std::collections::HashMap::new();
+            let mut case_pattern_introduced_bufs = std::collections::HashSet::new();
             syntax_query_pattern_check(
                 pattern,
                 &checked_queried_type,
                 errors,
                 &mut pattern_introduced_variables,
+                &mut case_pattern_introduced_bufs,
                 local_variables,
                 type_aliases,
             );
@@ -8631,13 +8646,14 @@ If there should only ever by one variant, using a record with a single field is 
                     .iter()
                     .map(|(binding, info)| (*binding, info.clone())),
             );
+            let result = expressions.item(result);
             let Some(checked_result_type) = syntax_expression_check(
                 errors,
                 type_aliases,
                 project_fns,
                 expressions,
                 local_variables,
-                expressions.item(result),
+                result,
                 checked_calls,
                 checked_local_fns,
                 checked_queries,
@@ -8674,9 +8690,46 @@ If there should only ever by one variant, using a record with a single field is 
                     message: (error_message + "
 
 A destruct pattern must cover all possible cases, otherwise the program would need to crash if such a value was matched on.
-If you want to handle cases in separate branches, use an if like  if option { [yes n] n [no *] 0u32 }"
+If you want to handle cases in separate branches, use an if like  if option { Yes(n) n  No 0u32 }"
                         ).into_boxed_str(),
                 });
+            }
+            let mut destruct_result_required_additional_implicit_bufs =
+                std::collections::HashSet::new();
+            type_implicit_bufs(
+                &checked_result_type,
+                &std::collections::HashSet::new(),
+                type_aliases,
+                &mut destruct_result_required_additional_implicit_bufs,
+            );
+            if case_pattern_introduced_bufs
+                .iter()
+                .any(|pattern_newly_reachable_buf| {
+                    destruct_result_required_additional_implicit_bufs
+                        .contains(&pattern_newly_reachable_buf)
+                })
+            {
+                let mut error_message =
+                    "The result of this destruct needs to include these bufs:".to_string();
+                for TypeBuf { origin, item } in
+                    case_pattern_introduced_bufs
+                        .into_iter()
+                        .filter(|pattern_newly_reachable_buf| {
+                            destruct_result_required_additional_implicit_bufs
+                                .contains(pattern_newly_reachable_buf)
+                        })
+                {
+                    error_message.push_str("\n  - ");
+                    type_format(&mut error_message, 4, &type_buf(origin, item));
+                }
+                errors.push(ErrorNode {
+                    range: expression_range(result, expressions),
+                    message: format!(
+                        "
+Without these additional bufs, the resulting slots/spans would have no way to be passed to functions, dropped or cloned."
+                    )
+                    .into_boxed_str(),
+                })
             }
             checked_queries.insert(
                 *equals_start,
@@ -8698,7 +8751,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
             let Some(queried) = queried else {
                 errors.push(ErrorNode {
                     range: symbol_range(*if_keyword_start, "if"),
-                    message: Box::from("missing queried expression after this if keyword. An example of a if is if option { [yes n] n [no *] 0u32 }")
+                    message: Box::from("missing queried expression after this if keyword. An example of a if is if option { Yes(n) n  No 0u32 }")
                 });
                 return None;
             };
@@ -8706,7 +8759,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
             let Some((case0, case1_up)) = cases.split_first() else {
                 errors.push(ErrorNode {
                     range: symbol_range(*if_keyword_start, "if"),
-                    message: Box::from("missing case(s) after the queried expression. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no *] 0u32 }")
+                    message: Box::from("missing case(s) after the queried expression. Cases look like  pattern result-expression. An example of a if is if option { Yes(n) n  No 0u32 }")
                 });
                 return None;
             };
@@ -8728,19 +8781,18 @@ If you want to handle cases in separate branches, use an if like  if option { [y
             let Some(case0_result) = &case0.result else {
                 errors.push(ErrorNode {
                     range: pattern_range(&case0.pattern),
-                    message: Box::from("missing result expression after this if case pattern. Cases look like  pattern result-expression. An example of a if is if option { [yes n] n [no *] 0u32 }")
+                    message: Box::from("missing result expression after this if case pattern. Cases look like  pattern result-expression. An example of a if is if option { Yes(n) n  No 0u32 }")
                 });
                 return None;
             };
-            let mut case0_pattern_introduced_variables: std::collections::HashMap<
-                &Name,
-                CheckedLocalVariable,
-            > = std::collections::HashMap::new();
+            let mut case0_pattern_introduced_variables = std::collections::HashMap::new();
+            let mut case0_pattern_introduced_bufs = std::collections::HashSet::new();
             syntax_query_pattern_check(
                 &case0.pattern,
                 &checked_queried_type,
                 errors,
                 &mut case0_pattern_introduced_variables,
+                &mut case0_pattern_introduced_bufs,
                 local_variables,
                 type_aliases,
             );
@@ -8787,21 +8839,28 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     ));
                 }
             }
+            expression_query_check_for_missing_result_bufs(
+                errors,
+                case0_pattern_introduced_bufs,
+                case0_result,
+                &checked_query_result_type,
+                expressions,
+                type_aliases,
+            );
             let mut invalid_case_indexes = Vec::new();
             'checking_case1_up: for (case_index, case) in case1_up
                 .iter()
                 .enumerate()
                 .map(|(i_in_1up, case)| (i_in_1up + 1, case))
             {
-                let mut case_pattern_introduced_variables: std::collections::HashMap<
-                    &Name,
-                    CheckedLocalVariable,
-                > = std::collections::HashMap::new();
+                let mut case_pattern_introduced_variables = std::collections::HashMap::new();
+                let mut case_pattern_introduced_bufs = std::collections::HashSet::new();
                 syntax_query_pattern_check(
                     &case.pattern,
                     &checked_queried_type,
                     errors,
                     &mut case_pattern_introduced_variables,
+                    &mut case_pattern_introduced_bufs,
                     local_variables,
                     type_aliases,
                 );
@@ -8824,7 +8883,7 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                 let Some(case_result) = &case.result else {
                     errors.push(ErrorNode {
                         range: pattern_range(&case.pattern),
-                        message: Box::from("missing result expression after this if case pattern. Cases are written as  pattern result-expression. An example of a if is if option { [yes n] n [no *] 0u32 }")
+                        message: Box::from("missing result expression after this if case pattern. Cases are written as  pattern result-expression. An example of a if is if option { Yes(n) n  No 0u32 }")
                     });
                     continue 'checking_case1_up;
                 };
@@ -8874,6 +8933,14 @@ If you want to handle cases in separate branches, use an if like  if option { [y
                     );
                     invalid_case_indexes.push(case_index);
                 }
+                expression_query_check_for_missing_result_bufs(
+                    errors,
+                    case_pattern_introduced_bufs,
+                    case_result,
+                    &checked_query_result_type,
+                    expressions,
+                    type_aliases,
+                );
             }
             if !remaining_specific_pattern_catch_possibilities.is_empty()
                 && invalid_case_indexes.is_empty()
@@ -8909,6 +8976,49 @@ If not, add patterns for the cases above"
             );
             Some(checked_query_result_type)
         }
+    }
+}
+fn expression_query_check_for_missing_result_bufs(
+    errors: &mut Vec<ErrorNode>,
+    pattern_introduced_bufs: std::collections::HashSet<TypeBuf>,
+    result: &SyntaxExpression,
+    result_type: &Type,
+    expressions: &Buf<Expressions, SyntaxExpression>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    let mut result_required_additional_implicit_bufs = std::collections::HashSet::new();
+    type_implicit_bufs(
+        &result_type,
+        &std::collections::HashSet::new(),
+        type_aliases,
+        &mut result_required_additional_implicit_bufs,
+    );
+    if pattern_introduced_bufs
+        .iter()
+        .any(|pattern_newly_reachable_buf| {
+            result_required_additional_implicit_bufs.contains(&pattern_newly_reachable_buf)
+        })
+    {
+        let mut error_message =
+            "The result of this destruct needs to include these bufs:".to_string();
+        for TypeBuf { origin, item } in
+            pattern_introduced_bufs
+                .into_iter()
+                .filter(|pattern_newly_reachable_buf| {
+                    result_required_additional_implicit_bufs.contains(pattern_newly_reachable_buf)
+                })
+        {
+            error_message.push_str("\n  - ");
+            type_format(&mut error_message, 4, &type_buf(origin, item));
+        }
+        errors.push(ErrorNode {
+            range: expression_range(result, expressions),
+            message: format!(
+                "
+Without these additional bufs, the resulting slots/spans would have no way to be passed to functions, dropped or cloned."
+            )
+            .into_boxed_str(),
+        });
     }
 }
 fn error_introduced_pattern_variable_is_unused(

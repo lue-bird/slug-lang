@@ -222,30 +222,9 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins if you don't care about at all
 
 ## TODO
-- implement association checking:
-    - implicit arguments are as follows:
-        - a bundle of bufs, each passed by (noalias) *mut.
-          The bundle contains bufs for at least all reachable slot/span origins,
-          minus reachable buf origins
-        - for each type variable a drop and clone fn, each taking the bundle of bufs as a *mut
-        - these rules also apply to standard library functions
-    - for validity:
-        - at the beginning of a scope, the implicit bufs are tracked as reachable.
-          introducing or passing bufs modifies the list of bufs tracked as reachable
-        - attempting to use a function which has an implicit buf prameter that is not part of the reachable bufs list
-          is a compile error
-        - destruct, if and function calll results may introduce new bufs.
-          If a buf with the same origin already exists, report an error.
-          If existing slots/spans with the same origin are reachable, report an error (only possible after the original buf is not reachable anymore).
-        - function call results may introduce slots/spans.
-          If existing slots/spans with the same origin are reachable, report an error
-        - in addition to reachable origins, reachable type variables are tracked.
-          Once the set of reachable type variables is non-empty,
-          no more type variables may get introduced (not even the same type variable, except through implicit clone).
-        - each buf is an rc<ArrayList>. This enables implicit cloning to always be possible, even for type variables
-    - "reachable origin" (more or less analog for type variables) is defined as:
-        - available via implicit parameters
-        - any chained result value or pattern variable has a type which in any part but outside of buf items mentions this origin (the first parameter in slot/span)
+- check that expression call results and if query patterns don't overlap with existing reachable bufs.
+  This must also be checked inter-query-pattern
+- fix all remaining TODO comments, especially TODO(important)
 - add zig codegen.
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples

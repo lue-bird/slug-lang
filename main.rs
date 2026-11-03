@@ -596,6 +596,7 @@ fn update_state_on_did_open_text_document(
                 );
             }
             Some(previous_project_state) => {
+                // can be optimized by reusing the vec
                 *previous_project_state = initialize_project_state_from_source(
                     connection,
                     arguments.text_document.uri,
