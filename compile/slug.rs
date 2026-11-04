@@ -3046,7 +3046,30 @@ fn syntax_project_fn_check<'a>(
             result_expression_is_invalid: true,
         };
     }
-    // TODO go through the whole expression again to find clashing introduced reachable bufs
+    let mut reachable_bufs = function_signature_implicit_bufs(
+        checked_header.parameter_types.iter().flatten(),
+        Some(&checked_result_expression_type),
+        type_aliases,
+    );
+    for parameter in project_fn.parameters {
+        parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
+            errors,
+            parameter,
+            &mut reachable_bufs,
+            type_aliases,
+        );
+    }
+    syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+        errors,
+        syntax_result,
+        &mut reachable_bufs,
+        checked_calls,
+        checked_queries,
+        checked_local_fns,
+        expressions,
+        project_fns,
+        type_aliases,
+    );
     CheckedProjectFn {
         documentation: documentation,
         type_parameters: checked_header.type_parameters,
@@ -5183,7 +5206,7 @@ fn syntax_expression_to_zig<'a>(
         SyntaxExpression::Call {
             first_argument_dot,
             name,
-            type_arguments,
+            type_arguments: _,
             open_paren_start: _,
             arguments_rest,
             closed_paren_start: _,
@@ -5191,20 +5214,7 @@ fn syntax_expression_to_zig<'a>(
             let maybe_first_argument = first_argument_dot
                 .as_ref()
                 .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
-            if let Some(called_function) = project_fns.get(&name.value)
-                && let Some(checked_call) = checked_calls.get(&name.start)
-            {
-                // can be optimized by avoiding the alloction
-                let mut type_variable_arguments =
-                    checked_call.argument_type_variable_replacements.clone();
-                type_variable_arguments.extend(
-                    called_function.type_parameters.iter().cloned().zip(
-                        type_arguments
-                            .iter()
-                            .flat_map(|type_arguments| &type_arguments.types)
-                            .map(|type_argument| syntax_type_to_type(type_argument)),
-                    ),
-                );
+            if let Some(checked_call) = checked_calls.get(&name.start) {
                 if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
                     zig_break_start(output, label);
                 }
@@ -5215,8 +5225,8 @@ fn syntax_expression_to_zig<'a>(
                 }
                 output.push_str(&name_to_lowercase_zig(&name.value));
                 output.push('(');
-                for type_variable_argument in type_variable_arguments.into_values() {
-                    type_to_zig(output, &type_variable_argument);
+                for type_variable_argument in checked_call.type_variable_replacements.values() {
+                    type_to_zig(output, type_variable_argument);
                     output.push_str(", ");
                 }
                 if is_core_fn_taking_allocator_in_zig(&name.value)
@@ -6730,7 +6740,7 @@ fn syntax_expression_to_js<'a>(
         SyntaxExpression::Call {
             first_argument_dot,
             name,
-            type_arguments,
+            type_arguments: _,
             open_paren_start: _,
             arguments_rest,
             closed_paren_start: _,
@@ -6764,27 +6774,6 @@ fn syntax_expression_to_js<'a>(
             {
                 output.push_str(&name_to_lowercase_js(&name.value));
                 output.push('(');
-                let type_arguments = type_arguments
-                    .iter()
-                    .flat_map(|type_arguments| {
-                        type_arguments
-                            .types
-                            .iter()
-                            .map(|type_argument| syntax_type_to_type(type_argument))
-                    })
-                    .collect::<Vec<Type>>();
-                let type_variables_to_substitute = checked_call
-                    .argument_type_variable_replacements
-                    .iter()
-                    .map(|(var, replacement)| (var.clone(), replacement.clone()))
-                    .chain(
-                        project_fn
-                            .type_parameters
-                            .iter()
-                            .cloned()
-                            .zip(type_arguments),
-                    )
-                    .collect::<std::collections::BTreeMap<Name, Type>>();
                 let implicit_bufs = function_signature_implicit_bufs(
                     project_fn.parameter_types.iter().flatten(),
                     project_fn.result_type.as_ref(),
@@ -6797,7 +6786,7 @@ fn syntax_expression_to_js<'a>(
                 specialize_implicits_js(
                     output,
                     &implicit_bufs,
-                    &type_variables_to_substitute,
+                    &checked_call.type_variable_replacements,
                     type_aliases,
                 );
                 output.push_str(");\n");
@@ -7916,6 +7905,23 @@ struct CheckedLocalVariable {
     type_: Option<Type>,
     used: bool,
 }
+#[derive(Debug)]
+pub struct CheckedCall {
+    // includes <explicit type arguments>
+    // includes even type variables that get translated to a type variable with the same name
+    type_variable_replacements: std::collections::BTreeMap<Name, Type>,
+}
+#[derive(Debug)]
+pub struct CheckedLocalFn {
+    pub parameter_types: Vec<Type>,
+    pub result_type: Type,
+}
+#[derive(Debug)]
+pub struct CheckedQuery {
+    pub is_exhaustive: bool,
+    pub queried_type: Type,
+    pub invalid_case_indexes: Vec<usize>,
+}
 fn syntax_expression_check<'a>(
     errors: &mut Vec<ErrorNode>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
@@ -8290,7 +8296,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                 checked_calls.insert(
                     name.start,
                     CheckedCall {
-                        argument_type_variable_replacements: type_variable_replacements,
+                        type_variable_replacements,
                     },
                 );
                 Some(result_type)
@@ -9140,18 +9146,489 @@ fn error_introduced_pattern_variable_is_unused(
         ),
     }
 }
-pub struct CheckedCall {
-    // includes even type variables that get translated to a type variable with the same name
-    argument_type_variable_replacements: std::collections::BTreeMap<Name, Type>,
+fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+    errors: &mut Vec<ErrorNode>,
+    expression: &SyntaxExpression,
+    reachable_bufs: &mut std::collections::HashSet<TypeBuf>,
+    checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
+    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
+    checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
+    expressions: &Buf<Expressions, SyntaxExpression>,
+    project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    match expression {
+        SyntaxExpression::Number { .. } => {}
+        SyntaxExpression::Text { .. } => {}
+        SyntaxExpression::Variable(_) => {}
+        SyntaxExpression::Call {
+            first_argument_dot,
+            name,
+            type_arguments: _,
+            open_paren_start: _,
+            arguments_rest,
+            closed_paren_start: _,
+        } => {
+            if let Some(project_fn) = project_fns.get(&name.value)
+                && let Some(result_type) = &project_fn.result_type
+                && let Some(checked_call) = checked_calls.get(&name.start)
+            {
+                let mut type_bufs = std::collections::HashSet::new();
+                let mut result_type = result_type.clone();
+                type_replace_variables(&checked_call.type_variable_replacements, &mut result_type);
+                type_check_introduced_bufs_do_not_overlap(
+                    errors,
+                    || expression_range(expression, expressions),
+                    &result_type,
+                    &mut type_bufs,
+                    type_aliases,
+                );
+            }
+            for argument in first_argument_dot
+                .iter()
+                .map(|first| expressions.item(&first.argument))
+                .chain(arguments_rest)
+            {
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    argument,
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxExpression::Variant {
+            name: _,
+            type_: _,
+            values,
+        } => {
+            for value in values.iter().flat_map(|values| &values.values) {
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    value,
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxExpression::Fn {
+            fn_keyword_start,
+            open_paren_start: _,
+            parameters,
+            closed_paren_start: _,
+            result,
+        } => {
+            if let Some(result) = result
+                && let Some(checked_fn) = checked_local_fns.get(fn_keyword_start)
+            {
+                let mut reachable_bufs = function_signature_implicit_bufs(
+                    checked_fn.parameter_types.iter(),
+                    Some(&checked_fn.result_type),
+                    type_aliases,
+                );
+                for parameter in parameters {
+                    parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                        errors,
+                        parameter,
+                        &mut reachable_bufs,
+                        type_aliases,
+                    );
+                }
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    expressions.item(result),
+                    &mut reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxExpression::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    part,
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxExpression::Record {
+            open_curly_start: _,
+            fields,
+            closed_curly_start: _,
+        } => {
+            for field_value in fields.iter().filter_map(|field| field.value.as_ref()) {
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    field_value,
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxExpression::Commented {
+            comments: _,
+            expression,
+        } => {
+            if let Some(expression) = expression {
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    expressions.item(expression),
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxExpression::Destruct {
+            equals_start,
+            pattern,
+            queried,
+            result,
+        } => {
+            if let Some(queried) = queried {
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    expressions.item(queried),
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+            if let Some(result) = result {
+                if let Some(pattern) = pattern
+                    && let Some(checked_query) = checked_queries.get(equals_start)
+                {
+                    query_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                        errors,
+                        pattern,
+                        &checked_query.queried_type,
+                        reachable_bufs,
+                        type_aliases,
+                    );
+                }
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    expressions.item(result),
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxExpression::If {
+            if_keyword_start,
+            queried,
+            open_curly_start: _,
+            cases,
+            closed_curly_start: _,
+        } => {
+            if let Some(queried) = queried {
+                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    errors,
+                    expressions.item(queried),
+                    reachable_bufs,
+                    checked_calls,
+                    checked_queries,
+                    checked_local_fns,
+                    expressions,
+                    project_fns,
+                    type_aliases,
+                );
+            }
+            let checked_query = checked_queries.get(if_keyword_start);
+            for case in cases {
+                if let Some(case_result) = &case.result {
+                    if let Some(checked_query) = checked_query {
+                        query_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                            errors,
+                            &case.pattern,
+                            &checked_query.queried_type,
+                            reachable_bufs,
+                            type_aliases,
+                        );
+                    }
+                    syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                        errors,
+                        case_result,
+                        reachable_bufs,
+                        checked_calls,
+                        checked_queries,
+                        checked_local_fns,
+                        expressions,
+                        project_fns,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+    }
 }
-pub struct CheckedLocalFn {
-    pub parameter_types: Vec<Type>,
-    pub result_type: Type,
+fn parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
+    errors: &mut Vec<ErrorNode>,
+    pattern: &SyntaxPattern,
+    reachable_bufs: &mut std::collections::HashSet<TypeBuf>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    match pattern {
+        SyntaxPattern::Ignored {
+            underscore_start,
+            type_,
+        } => {
+            if let Some(type_) = type_ {
+                pattern_type_add_introduced_bufs_and_check_do_not_overlap(
+                    errors,
+                    || symbol_range(*underscore_start, "_"),
+                    &syntax_type_to_type(type_),
+                    reachable_bufs,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxPattern::Variable { name, type_ } => {
+            if let Some(type_) = type_ {
+                pattern_type_add_introduced_bufs_and_check_do_not_overlap(
+                    errors,
+                    || name_range(with_start_position_as_ref(name)),
+                    &syntax_type_to_type(type_),
+                    reachable_bufs,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxPattern::Variant { name: _, values } => {
+            for value in values.iter().flat_map(|values| &values.values) {
+                parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                    errors,
+                    value,
+                    reachable_bufs,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            for part in parts {
+                parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                    errors,
+                    part,
+                    reachable_bufs,
+                    type_aliases,
+                );
+            }
+        }
+        SyntaxPattern::Record {
+            open_curly_start: _,
+            fields,
+            closed_curly_start: _,
+        } => {
+            for field in fields {
+                if let Some(value) = &field.value {
+                    parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                        errors,
+                        value,
+                        reachable_bufs,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+    }
 }
-pub struct CheckedQuery {
-    pub is_exhaustive: bool,
-    pub queried_type: Type,
-    pub invalid_case_indexes: Vec<usize>,
+fn query_pattern_add_introduced_bufs_and_check_do_not_overlap(
+    errors: &mut Vec<ErrorNode>,
+    pattern: &SyntaxPattern,
+    expected_type: &Type,
+    reachable_bufs: &mut std::collections::HashSet<TypeBuf>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    match pattern {
+        SyntaxPattern::Ignored {
+            underscore_start,
+            type_: _,
+        } => {
+            pattern_type_add_introduced_bufs_and_check_do_not_overlap(
+                errors,
+                || symbol_range(*underscore_start, "_"),
+                &expected_type,
+                reachable_bufs,
+                type_aliases,
+            );
+        }
+        SyntaxPattern::Variable { name, type_: _ } => {
+            pattern_type_add_introduced_bufs_and_check_do_not_overlap(
+                errors,
+                || name_range(with_start_position_as_ref(name)),
+                &expected_type,
+                reachable_bufs,
+                type_aliases,
+            );
+        }
+        SyntaxPattern::Variant { name, values } => {
+            let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
+            let Some(expected_value_types) = (match expected_type.as_ref() {
+                Type::Choice(expected_variants) => expected_variants
+                    .iter()
+                    .find(|expected_variant| name.value == expected_variant.name)
+                    .map(|variant| &variant.values),
+                _ => None,
+            }) else {
+                return;
+            };
+            for (value_index, value) in values.iter().flat_map(|values| &values.values).enumerate()
+            {
+                if let Some(expected_type) = expected_value_types.get(value_index) {
+                    query_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                        errors,
+                        value,
+                        expected_type,
+                        reachable_bufs,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+        SyntaxPattern::Tuple {
+            star_start: _,
+            open_paren_start: _,
+            parts,
+            closed_paren_start: _,
+        } => {
+            let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
+            let Type::Tuple(expected_part_types) = expected_type.as_ref() else {
+                return;
+            };
+            for (part_index, part) in parts.iter().enumerate() {
+                if let Some(expected_type) = expected_part_types.get(part_index) {
+                    query_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                        errors,
+                        part,
+                        expected_type,
+                        reachable_bufs,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+        SyntaxPattern::Record {
+            open_curly_start: _,
+            fields,
+            closed_curly_start: _,
+        } => {
+            let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
+            let Type::Record(expected_field_types) = expected_type.as_ref() else {
+                return;
+            };
+            for field in fields {
+                if let Some(value) = &field.value
+                    && let Some(expected_field_type) = expected_field_types
+                        .iter()
+                        .find(|expected_field| field.name.value == expected_field.name)
+                {
+                    query_pattern_add_introduced_bufs_and_check_do_not_overlap(
+                        errors,
+                        value,
+                        &expected_field_type.value,
+                        reachable_bufs,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+    }
+}
+fn pattern_type_add_introduced_bufs_and_check_do_not_overlap(
+    errors: &mut Vec<ErrorNode>,
+    error_range: impl Fn() -> lsp_types::Range,
+    type_: &Type,
+    reachable_bufs: &mut std::collections::HashSet<TypeBuf>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    type_reachable_bufs(type_, vec![], type_aliases, &mut |reachable_buf, _path| {
+        let introduced_buf_was_not_reachable_before = reachable_bufs.insert(reachable_buf);
+        if !introduced_buf_was_not_reachable_before {
+            errors.push(ErrorNode {
+                range: error_range(),
+                message: introduced_reachable_buf_overlaps_error_message(),
+            })
+        }
+    });
+}
+fn type_check_introduced_bufs_do_not_overlap(
+    errors: &mut Vec<ErrorNode>,
+    error_range: impl Fn() -> lsp_types::Range,
+    type_: &Type,
+    reachable_bufs: &std::collections::HashSet<TypeBuf>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    let mut type_inner_reachable_bufs = std::collections::HashSet::new();
+    type_reachable_bufs(type_, vec![], type_aliases, &mut |reachable_buf, _path| {
+        if reachable_bufs.contains(&reachable_buf) {
+            errors.push(ErrorNode {
+                range: error_range(),
+                message: introduced_reachable_buf_overlaps_error_message(),
+            })
+        } else {
+            let introduced_buf_was_not_reachable_before_inner =
+                type_inner_reachable_bufs.insert(reachable_buf);
+            if !introduced_buf_was_not_reachable_before_inner {
+                errors.push(ErrorNode {
+                    range: error_range(),
+                    message: introduced_reachable_buf_overlaps_error_message(),
+                })
+            }
+        }
+    });
+}
+fn introduced_reachable_buf_overlaps_error_message() -> Box<str> {
+    Box::from("A buf with the same origin and is already reachable here:
+Having 2 possibly different bufs of the same type could allow accessing slots/spans from one buf at a different buf")
 }
 
 pub fn syntax_type_variables_into<'a>(
@@ -13477,6 +13954,7 @@ fn expression_symbol_at_position<'a>(
                                         },
                                     );
                                 },
+                                type_aliases,
                             );
                         }
                         expression_symbol_at_position(
@@ -13566,6 +14044,7 @@ fn expression_if_case_symbol_at_position<'a>(
                     },
                 );
             },
+            type_aliases,
         );
         expression_symbol_at_position(
             result,
@@ -13622,7 +14101,9 @@ fn syntax_query_pattern_variables_for_each<'a>(
     pattern: &'a SyntaxPattern,
     expected_type: Option<&Type>,
     step_variable: &mut impl FnMut(WithStartPosition<&'a Name>, Option<Type>),
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
+    // TODO peel type aliases if necessary
     match pattern {
         SyntaxPattern::Ignored {
             underscore_start: _,
@@ -13632,18 +14113,23 @@ fn syntax_query_pattern_variables_for_each<'a>(
             step_variable(with_start_position_as_ref(name), expected_type.cloned())
         }
         SyntaxPattern::Variant { name, values } => {
+            let expected_type = expected_type
+                .map(|expected_type| type_alias_resolve_to_non_alias(expected_type, type_aliases));
+            let expected_value_types = match expected_type.as_deref() {
+                Some(Type::Choice(expected_variants)) => expected_variants
+                    .iter()
+                    .find(|expected_variant| name.value == expected_variant.name)
+                    .map(|variant| &variant.values),
+                _ => None,
+            };
             for (value_index, value) in values.iter().flat_map(|values| &values.values).enumerate()
             {
                 syntax_query_pattern_variables_for_each(
                     value,
-                    expected_type.and_then(|expected_type| match expected_type {
-                        Type::Choice(expected_variants) => expected_variants
-                            .iter()
-                            .find(|expected_variant| name.value == expected_variant.name)
-                            .and_then(|variant| variant.values.get(value_index)),
-                        _ => None,
-                    }),
+                    expected_value_types
+                        .and_then(|expected_value_types| expected_value_types.get(value_index)),
                     step_variable,
+                    type_aliases,
                 );
             }
         }
@@ -13653,14 +14139,19 @@ fn syntax_query_pattern_variables_for_each<'a>(
             parts,
             closed_paren_start: _,
         } => {
+            let expected_type = expected_type
+                .map(|expected_type| type_alias_resolve_to_non_alias(expected_type, type_aliases));
+            let expected_part_types = match expected_type.as_deref() {
+                Some(Type::Tuple(expected_part_types)) => Some(expected_part_types),
+                _ => None,
+            };
             for (part_index, part) in parts.iter().enumerate() {
                 syntax_query_pattern_variables_for_each(
                     part,
-                    match expected_type {
-                        Some(Type::Tuple(expected_parts)) => expected_parts.get(part_index),
-                        _ => None,
-                    },
+                    expected_part_types
+                        .and_then(|expected_part_types| expected_part_types.get(part_index)),
                     step_variable,
+                    type_aliases,
                 );
             }
         }
@@ -13669,19 +14160,24 @@ fn syntax_query_pattern_variables_for_each<'a>(
             fields,
             closed_curly_start: _,
         } => {
+            let expected_type = expected_type
+                .map(|expected_type| type_alias_resolve_to_non_alias(expected_type, type_aliases));
+            let expected_field_types = match expected_type.as_deref() {
+                Some(Type::Record(expected_field_types)) => Some(expected_field_types),
+                _ => None,
+            };
             for field in fields {
                 if let Some(value) = &field.value {
                     syntax_query_pattern_variables_for_each(
                         value,
-                        expected_type
-                            .and_then(|expected_type| match expected_type {
-                                Type::Record(expected_fields) => expected_fields
-                                    .iter()
-                                    .find(|expected_field| field.name.value == expected_field.name),
-                                _ => None,
-                            })
-                            .map(|field| &field.value),
+                        expected_field_types.and_then(|expected_field_types| {
+                            expected_field_types
+                                .iter()
+                                .find(|expected_field| field.name.value == expected_field.name)
+                                .map(|field| &field.value)
+                        }),
                         step_variable,
+                        type_aliases,
                     );
                 }
             }
@@ -13976,6 +14472,7 @@ pub fn syntax_project_symbol_origin_range(
 pub fn syntax_project_symbol_uses(
     project: &SyntaxProject,
     symbol: &SyntaxSymbol,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) -> Vec<lsp_types::Range> {
     let mut uses = Vec::with_capacity(2);
     match symbol {
@@ -14017,8 +14514,9 @@ pub fn syntax_project_symbol_uses(
                         &mut uses,
                         result,
                         symbol,
-                        &project.expressions,
                         &std::collections::HashSet::new(),
+                        &project.expressions,
+                        type_aliases,
                     );
                 }
             }
@@ -14035,8 +14533,9 @@ pub fn syntax_project_symbol_uses(
                     &mut uses,
                     scope,
                     symbol,
-                    &project.expressions,
                     &std::collections::HashSet::new(),
+                    &project.expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14068,8 +14567,9 @@ pub fn syntax_project_symbol_uses(
                                 &mut uses,
                                 result,
                                 symbol,
-                                &project.expressions,
                                 &std::collections::HashSet::new(),
+                                &project.expressions,
+                                type_aliases,
                             );
                         }
                     }
@@ -14114,8 +14614,9 @@ pub fn syntax_project_symbol_uses(
                                 &mut uses,
                                 result,
                                 symbol,
-                                &project.expressions,
                                 &std::collections::HashSet::new(),
+                                &project.expressions,
+                                type_aliases,
                             );
                         }
                     }
@@ -14171,8 +14672,9 @@ pub fn syntax_project_symbol_uses(
                                 &mut uses,
                                 result,
                                 symbol,
-                                &project.expressions,
                                 &parameter_introduced_variables,
+                                &project.expressions,
+                                type_aliases,
                             );
                         }
                     }
@@ -14325,9 +14827,9 @@ fn syntax_expression_symbol_uses_into(
     uses: &mut Vec<lsp_types::Range>,
     expression: &SyntaxExpression,
     symbol: &SyntaxSymbol,
-    expressions: &Buf<Expressions, SyntaxExpression>,
-
     local_variables: &std::collections::HashSet<&Name>,
+    expressions: &Buf<Expressions, SyntaxExpression>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     match expression {
         SyntaxExpression::Number { value: _, type_ } => {
@@ -14415,8 +14917,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     expressions.item(&first_argument_dot.argument),
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
             for argument in arguments {
@@ -14424,8 +14927,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     argument,
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14454,8 +14958,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     value,
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14492,8 +14997,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     expressions.item(result),
                     symbol,
-                    expressions,
                     &parameter_pattern_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14508,8 +15014,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     part,
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14523,8 +15030,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     field,
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14537,8 +15045,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     expressions.item(expression),
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14553,8 +15062,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     expressions.item(queried),
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
             if let Some(pattern) = pattern {
@@ -14574,8 +15084,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     expressions.item(result),
                     symbol,
-                    expressions,
                     &local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
         }
@@ -14591,8 +15102,9 @@ fn syntax_expression_symbol_uses_into(
                     uses,
                     expressions.item(queried),
                     symbol,
-                    expressions,
                     local_variables,
+                    expressions,
+                    type_aliases,
                 );
             }
             for case in cases {
@@ -14605,13 +15117,15 @@ fn syntax_expression_symbol_uses_into(
                         &mut |pattern_variable_name, _type_| {
                             local_variables.to_mut().insert(pattern_variable_name.value);
                         },
+                        type_aliases,
                     );
                     syntax_expression_symbol_uses_into(
                         uses,
                         result,
                         symbol,
-                        expressions,
                         &local_variables,
+                        expressions,
+                        type_aliases,
                     );
                 }
             }
@@ -14622,12 +15136,19 @@ fn syntax_expression_record_field_symbol_uses_into(
     uses: &mut Vec<lsp_types::Range>,
     field: &SyntaxRecordField<SyntaxExpression>,
     symbol: &SyntaxSymbol,
-    expressions: &Buf<Expressions, SyntaxExpression>,
-
     local_variables: &std::collections::HashSet<&Name>,
+    expressions: &Buf<Expressions, SyntaxExpression>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     if let Some(field_value) = &field.value {
-        syntax_expression_symbol_uses_into(uses, field_value, symbol, expressions, local_variables);
+        syntax_expression_symbol_uses_into(
+            uses,
+            field_value,
+            symbol,
+            local_variables,
+            expressions,
+            type_aliases,
+        );
     }
 }
 

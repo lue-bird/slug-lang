@@ -1082,7 +1082,11 @@ fn respond_to_rename(
     ) else {
         return None;
     };
-    let mut symbol_ranges = slug::syntax_project_symbol_uses(&project_state.syntax, &symbol);
+    let mut symbol_ranges = slug::syntax_project_symbol_uses(
+        &project_state.syntax,
+        &symbol,
+        &project_state.type_aliases,
+    );
     if let Some(symbol_origin_range) =
         slug::syntax_project_symbol_origin_range(&project_state.syntax, &symbol)
     {
@@ -1132,7 +1136,11 @@ fn respond_to_references(
     ) else {
         return None;
     };
-    let mut symbol_ranges = slug::syntax_project_symbol_uses(&project_state.syntax, &symbol);
+    let mut symbol_ranges = slug::syntax_project_symbol_uses(
+        &project_state.syntax,
+        &symbol,
+        &project_state.type_aliases,
+    );
     if references_arguments.context.include_declaration
         && let Some(symbol_origin_range) =
             slug::syntax_project_symbol_origin_range(&project_state.syntax, &symbol)

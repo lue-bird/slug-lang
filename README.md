@@ -222,12 +222,11 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins if you don't care about at all
 
 ## TODO
-- check that expression call results and if query patterns don't overlap with existing reachable bufs.
-  This must also be checked inter-query-pattern
-- fix all remaining TODO comments, especially TODO(important)
+- fix all remaining TODO comments
 - add zig codegen.
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
+- check if `if containing-never-type {}` is handled correctly. It should either report an error and recommend using `Choice-empty-to<>` or return `[]`
 - show implicitly passed bufs when hovering a project fn
 - consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 - website with online repl
