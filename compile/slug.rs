@@ -3272,8 +3272,6 @@ pub fn syntax_type_check(
                 return None;
             };
             let argument_count = argument_types.len();
-            // TODO also check for recursive type aliases
-            // TODO set using_recursive_type_alias_allowed to true
             let (origin_type_parameters, checked_type) = if let Some(origin_core_type) =
                 core_type_aliases.get(&name.value)
             {
@@ -3324,9 +3322,10 @@ Move nested parts of this data into the heap (using slot/span) to represent such
                     errors.push(ErrorNode {
                         range: name_range(with_start_position_as_ref(name)),
                         message: format!(
-                            "this core type has {} less parameters than arguments are provided here.",
+                            "this type has {} less parameters than arguments are provided here.",
                             argument_count - origin_type_parameters.len(),
-                        ).into_boxed_str()
+                        )
+                        .into_boxed_str(),
                     });
                     return None;
                 }
@@ -3513,6 +3512,84 @@ fn type_alias_resolve_to_non_alias_or_error<'a>(
             }
         }
         _ => Some(std::borrow::Cow::Borrowed(type_)),
+    }
+}
+fn type_fully_resolve_aliases(
+    type_: &mut Type,
+    // will have the same items after the call as they were before
+    type_aliases_to_keep_unresolved: &mut Vec<Name>,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    match type_ {
+        Type::Variable(_) => {}
+        Type::Tuple(parts) => {
+            for part in parts {
+                type_fully_resolve_aliases(part, type_aliases_to_keep_unresolved, type_aliases);
+            }
+        }
+        Type::Record(fields) => {
+            for field in fields {
+                type_fully_resolve_aliases(
+                    &mut field.value,
+                    type_aliases_to_keep_unresolved,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Choice(variants) => {
+            for variant in variants {
+                for variant_value in &mut variant.values {
+                    type_fully_resolve_aliases(
+                        variant_value,
+                        type_aliases_to_keep_unresolved,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+        Type::CoreConstruct { name, arguments } => {
+            if (name == type_span_name || name == type_slot_name)
+                && let [origin, _item] = arguments.as_mut_slice()
+            {
+                type_fully_resolve_aliases(origin, type_aliases_to_keep_unresolved, type_aliases);
+            } else {
+                for argument in arguments {
+                    type_fully_resolve_aliases(
+                        argument,
+                        type_aliases_to_keep_unresolved,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+        Type::Fn { parameters, result } => {
+            for parameter in parameters {
+                type_fully_resolve_aliases(
+                    parameter,
+                    type_aliases_to_keep_unresolved,
+                    type_aliases,
+                );
+            }
+            type_fully_resolve_aliases(result, type_aliases_to_keep_unresolved, type_aliases);
+        }
+        Type::Alias { name, arguments } => {
+            if !type_aliases_to_keep_unresolved.contains(&name)
+                && let Some(actual_origin_type_alias) = type_aliases.get(name)
+                && let Some(mut actual_resolved_alias) = type_construct_resolve_type_alias(
+                    actual_origin_type_alias,
+                    arguments.iter().cloned(),
+                )
+            {
+                type_aliases_to_keep_unresolved.push(name.clone());
+                type_fully_resolve_aliases(
+                    &mut actual_resolved_alias,
+                    type_aliases_to_keep_unresolved,
+                    type_aliases,
+                );
+                *type_ = actual_resolved_alias;
+                type_aliases_to_keep_unresolved.pop();
+            }
+        }
     }
 }
 fn type_construct_resolve_type_alias(
@@ -4453,11 +4530,22 @@ fn type_reachable_bufs(
             if name == type_buf_name
                 && let [origin, item] = arguments.as_slice()
             {
-                // we should probably de-alias origin and item until recursion
+                let mut otigin_fully_dealiased = origin.clone();
+                type_fully_resolve_aliases(
+                    &mut otigin_fully_dealiased,
+                    &mut Vec::new(),
+                    type_aliases,
+                );
+                let mut item_fully_dealiased = item.clone();
+                type_fully_resolve_aliases(
+                    &mut item_fully_dealiased,
+                    &mut Vec::new(),
+                    type_aliases,
+                );
                 insert_reachable_buf(
                     TypeBuf {
-                        origin: origin.clone(),
-                        item: item.clone(),
+                        origin: otigin_fully_dealiased,
+                        item: item_fully_dealiased,
                     },
                     path,
                 );
@@ -4569,10 +4657,20 @@ fn type_implicit_bufs(
             if (name == type_slot_name || name == type_span_name)
                 && let [origin, item] = arguments.as_slice()
             {
-                // TODO de-alias origin and item until recursion
-                let item_fully_dealiased = item.clone();
+                let mut item_fully_dealiased = item.clone();
+                type_fully_resolve_aliases(
+                    &mut item_fully_dealiased,
+                    &mut Vec::new(),
+                    type_aliases,
+                );
+                let origin_fully_dealiased = origin.clone();
+                type_fully_resolve_aliases(
+                    &mut item_fully_dealiased,
+                    &mut Vec::new(),
+                    type_aliases,
+                );
                 let new_type_buf = TypeBuf {
-                    origin: origin.clone(),
+                    origin: origin_fully_dealiased,
                     item: item_fully_dealiased,
                 };
                 if type_bufs_to_ignore.contains(&new_type_buf) {
@@ -7250,10 +7348,20 @@ fn specialize_implicits_js(
                 type_variables_to_substitute,
                 &mut specialized_implicit_buf_origin,
             );
+            type_fully_resolve_aliases(
+                &mut specialized_implicit_buf_origin,
+                &mut Vec::new(),
+                type_aliases,
+            );
             let mut specialized_implicit_buf_item = implicit_buf.item.clone();
             type_replace_variables(
                 type_variables_to_substitute,
                 &mut specialized_implicit_buf_item,
+            );
+            type_fully_resolve_aliases(
+                &mut specialized_implicit_buf_item,
+                &mut Vec::new(),
+                type_aliases,
             );
             type_buf_js_variable_name(
                 output,
@@ -7284,9 +7392,9 @@ fn js_variable_drop(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     match type_ {
-        Type::Variable(_) => {
+        Type::Variable(type_variable) => {
             output.push_str("$.drop");
-            type_js_variable_name_segment(output, type_);
+            name_to_uppercase_local_js(output, type_variable);
             output.push('(');
             output.push_str(variable_name);
             output.push_str(");\n");
@@ -7339,8 +7447,12 @@ fn js_variable_drop(
             if name == type_slot_name
                 && let [origin, item] = arguments.as_slice()
             {
+                let mut origin_dealiased = origin.clone();
+                type_fully_resolve_aliases(&mut origin_dealiased, &mut Vec::new(), type_aliases);
+                let mut item_dealiased = item.clone();
+                type_fully_resolve_aliases(&mut item_dealiased, &mut Vec::new(), type_aliases);
                 output.push_str("slot$drop($.");
-                type_buf_js_variable_name(output, origin, item);
+                type_buf_js_variable_name(output, &origin_dealiased, &item_dealiased);
                 output.push_str(", ");
                 js_drop_function(output, item, type_aliases);
                 output.push_str(", ");
@@ -7349,8 +7461,12 @@ fn js_variable_drop(
             } else if name == type_span_name
                 && let [origin, item] = arguments.as_slice()
             {
+                let mut origin_dealiased = origin.clone();
+                type_fully_resolve_aliases(&mut origin_dealiased, &mut Vec::new(), type_aliases);
+                let mut item_dealiased = item.clone();
+                type_fully_resolve_aliases(&mut item_dealiased, &mut Vec::new(), type_aliases);
                 output.push_str("span$drop($.");
-                type_buf_js_variable_name(output, origin, item);
+                type_buf_js_variable_name(output, &origin_dealiased, &item_dealiased);
                 output.push_str(", ");
                 js_drop_function(output, item, type_aliases);
                 output.push_str(", ");
@@ -7469,16 +7585,24 @@ fn js_variable_clone(
             if name == type_slot_name
                 && let [origin, item] = arguments.as_slice()
             {
+                let mut origin = origin.clone();
+                type_fully_resolve_aliases(&mut origin, &mut Vec::new(), type_aliases);
+                let mut item = item.clone();
+                type_fully_resolve_aliases(&mut item, &mut Vec::new(), type_aliases);
                 output.push_str("slot$clone($.");
-                type_buf_js_variable_name(output, origin, item);
+                type_buf_js_variable_name(output, &origin, &item);
                 output.push_str(", ");
                 output.push_str(variable_name);
                 output.push_str(");\n");
             } else if name == type_span_name
                 && let [origin, item] = arguments.as_slice()
             {
+                let mut origin = origin.clone();
+                type_fully_resolve_aliases(&mut origin, &mut Vec::new(), type_aliases);
+                let mut item = item.clone();
+                type_fully_resolve_aliases(&mut item, &mut Vec::new(), type_aliases);
                 output.push_str("span$clone($.");
-                type_buf_js_variable_name(output, origin, item);
+                type_buf_js_variable_name(output, &origin, &item);
                 output.push_str(", ");
                 output.push_str(variable_name);
                 output.push_str(");\n");
@@ -7626,7 +7750,7 @@ fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
         Type::Choice(variants) => {
             output.push_str("$choice");
             for variant in variants {
-                output.push_str("$variant");
+                output.push_str("$or");
                 output.push_str(&name_to_lowercase_js_variable_segment(&variant.name));
                 for variant_value in &variant.values {
                     output.push_str("$_");
@@ -14103,7 +14227,6 @@ fn syntax_query_pattern_variables_for_each<'a>(
     step_variable: &mut impl FnMut(WithStartPosition<&'a Name>, Option<Type>),
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
-    // TODO peel type aliases if necessary
     match pattern {
         SyntaxPattern::Ignored {
             underscore_start: _,
