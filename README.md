@@ -222,8 +222,13 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins if you don't care about at all
 
 ## TODO
-- fix all remaining TODO comments
-- add zig codegen.
+- check that moving spans does a clone if necessary
+- make sure buf pre-allocation primitives work currectly since it takes type variables which do not (!) appear in the result type
+- switch to whereever necessary var @"%buf_mut" = ctx.@"buf(Origin Item)";
+- switch to whereever necessary from ctx to @"%allocator": std.mem.Allocator,
+- when adding items (e.g. optSpanAdd), make sure to drop the item
+- represent zig Buf as Buf=Rc(BufInner) and pass reachable bufs as *BufInner 
+- add zig codegen
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
 - check if `if containing-never-type {}` is handled correctly. It should either report an error and recommend using `Choice-empty-to<>` or return `[]`

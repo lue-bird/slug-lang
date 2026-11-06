@@ -4939,8 +4939,8 @@ fn syntax_project_fn_to_zig(
         name_to_uppercase_local_zig(output, type_parameter);
         output.push_str(": type, ");
     }
-    zig_allocator_variable(output, function_scope_start);
-    output.push_str(": std.mem.Allocator");
+    zig_context_variable(output, function_scope_start);
+    output.push_str(": anytype");
     for (parameter_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
         output.push_str(", @\"%");
         use std::fmt::Write as _;
@@ -4948,10 +4948,10 @@ fn syntax_project_fn_to_zig(
         output.push_str("\": ");
         type_to_zig(output, parameter_type);
     }
-    output.push_str(") error{OutOfMemory}!");
+    output.push_str(") Error!");
     type_to_zig(output, result_type);
     output.push_str(" {\n_ = @TypeOf(");
-    zig_allocator_variable(output, function_scope_start);
+    zig_context_variable(output, function_scope_start);
     output.push_str(");\n");
     let mut parameter_introduced_variables = std::collections::HashMap::new();
     for (parameter_index, (syntax_parameter, _)) in syntax_parameters
@@ -4960,14 +4960,12 @@ fn syntax_project_fn_to_zig(
         .filter(|(_, parameter_type)| parameter_type.is_some())
         .enumerate()
     {
-        {
-            syntax_pattern_to_zig_destructuring(
-                output,
-                syntax_parameter,
-                &format!("@\"%{}\"", parameter_index),
-                &mut parameter_introduced_variables,
-            );
-        }
+        syntax_pattern_to_zig_destructuring(
+            output,
+            syntax_parameter,
+            &format!("@\"%{}\"", parameter_index),
+            &mut parameter_introduced_variables,
+        );
     }
     output.push_str("return ");
     if result_expression_is_invalid {
@@ -4989,9 +4987,9 @@ fn syntax_project_fn_to_zig(
     }
     output.push_str(";\n}\n\n");
 }
-fn zig_allocator_variable(output: &mut String, scope_start: lsp_types::Position) {
+fn zig_context_variable(output: &mut String, scope_start: lsp_types::Position) {
     use std::fmt::Write as _;
-    output.push_str("@\"%allocator:");
+    output.push_str("@\"%ctx:");
     _ = write!(output, "{}", scope_start.line);
     output.push(':');
     _ = write!(output, "{}", scope_start.character);
@@ -5157,7 +5155,6 @@ fn syntax_expression_to_zig<'a>(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     project_fns: &std::collections::HashMap<Name, CheckedProjectFn>,
     expressions: &'a Buf<Expressions, SyntaxExpression>,
-
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
@@ -5323,16 +5320,14 @@ fn syntax_expression_to_zig<'a>(
                 }
                 output.push_str(&name_to_lowercase_zig(&name.value));
                 output.push('(');
+
                 for type_variable_argument in checked_call.type_variable_replacements.values() {
                     type_to_zig(output, type_variable_argument);
                     output.push_str(", ");
                 }
-                if is_core_fn_taking_allocator_in_zig(&name.value)
-                    || !core_fns.contains_key(&name.value)
-                {
-                    zig_allocator_variable(output, function_scope_start);
-                    output.push_str(", ");
-                }
+                // TODO specialize context like for js output if name is not local variable
+                zig_context_variable(output, function_scope_start);
+                output.push_str(", ");
                 for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
                     syntax_expression_to_zig(
                         output,
@@ -5365,6 +5360,8 @@ fn syntax_expression_to_zig<'a>(
                     local_variable_introduced_start,
                 );
                 output.push('(');
+                zig_context_variable(output, function_scope_start);
+                output.push_str(", ");
                 for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
                     syntax_expression_to_zig(
                         output,
@@ -5544,16 +5541,16 @@ fn syntax_expression_to_zig<'a>(
             if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
                 zig_break_start(output, label);
             }
-            // TODO
-            output.push_str("@as(Fn(");
+            output.push_str("@as(*const fn(anytype, ");
             for parameter_type in &checked_local_fn.parameter_types {
                 type_to_zig(output, parameter_type);
                 output.push_str(", ");
             }
+            output.push_str(",) Error!");
             type_to_zig(output, &checked_local_fn.result_type);
-            output.push_str(",), struct {\npub fn f(");
-            zig_allocator_variable(output, local_function_scope_start);
-            output.push_str(": std.mem.Allocator, ");
+            output.push_str(", struct {\npub fn f(");
+            zig_context_variable(output, local_function_scope_start);
+            output.push_str(": anytype, ");
             for (parameter, parameter_type) in
                 parameters.iter().zip(&checked_local_fn.parameter_types)
             {
@@ -5562,11 +5559,11 @@ fn syntax_expression_to_zig<'a>(
                 type_to_zig(output, parameter_type);
                 output.push(',');
             }
-            output.push_str(") error{OutOfMemory}!");
+            output.push_str(") Error!");
             type_to_zig(output, &checked_local_fn.result_type);
             output.push_str(" {\n");
             output.push_str("_ = @TypeOf(");
-            zig_allocator_variable(output, local_function_scope_start);
+            zig_context_variable(output, local_function_scope_start);
             output.push_str(");\n");
             let mut parameter_introduced_variables = std::collections::HashMap::new();
             for syntax_parameter in parameters {
@@ -5994,12 +5991,12 @@ fn type_to_zig(output: &mut String, type_: &Type) {
             }
         }
         Type::Fn { parameters, result } => {
-            output.push_str("fn(std.mem.Allocator, ");
+            output.push_str("*const fn(anytype, ");
             for parameter in parameters {
                 type_to_zig(output, parameter);
                 output.push_str(", ");
             }
-            output.push_str(") error{OutOfMemory}!");
+            output.push_str(",) Error!");
             type_to_zig(output, result);
         }
     }
@@ -12616,10 +12613,10 @@ pub fn is_core_fn_that_can_run_out_of_memory_in_zig(fn_name: &str) -> bool {
         | "span-add-own-opt-span"
         | "opt-span-add-own-span"
         | "span-add-own-span"
-        | "opt-span-add-buf-span"
-        | "opt-span-add-buf-opt-span"
-        | "span-add-buf-span"
-        | "span-add-buf-opt-span"
+        | "opt-span-add-span"
+        | "opt-span-add-opt-span"
+        | "span-add-span"
+        | "span-add-opt-span"
         | "opt-span-add-f32-chars"
         | "span-add-f32-chars"
         | "opt-span-add-i32-chars"
