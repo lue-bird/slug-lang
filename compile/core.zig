@@ -36,6 +36,25 @@ pub fn Record(@"%struct_type": type) type {
 pub fn record(@"%struct_value": anytype) Record(@TypeOf(@"%struct_value")) {
     return RecordWithFieldNames(@typeInfo(@TypeOf(@"%struct_value")).@"struct".field_names).withFieldValuesOf(@"%struct_value");
 }
+fn StructMerge(a: type, b: type) type {
+    return @Struct(
+        .auto,
+        null,
+        @typeInfo(a).@"struct".field_names ++ @typeInfo(b).@"struct".field_names,
+        @typeInfo(a).@"struct".field_types ++ @typeInfo(b).@"struct".field_types,
+        @typeInfo(a).@"struct".field_attrs ++ @typeInfo(b).@"struct".field_attrs,
+    );
+}
+fn structMerge(a: anytype, b: anytype) StructMerge(@TypeOf(a), @TypeOf(b)) {
+    var combined: StructMerge(@TypeOf(a), @TypeOf(b)) = undefined;
+    inline for (@typeInfo(@TypeOf(a)).@"struct".field_names) |a_field_name| {
+        @field(combined, a_field_name) = @field(a, a_field_name);
+    }
+    inline for (@typeInfo(@TypeOf(b)).@"struct".field_names) |b_field_name| {
+        @field(combined, b_field_name) = @field(b, b_field_name);
+    }
+    return combined;
+}
 
 // If you're wondering about the strange names:
 // - @"'variant_a'variant_b": since zig removed
@@ -180,29 +199,33 @@ fn mathOrderToOrder(@"%order": std.math.Order) Order {
     };
 }
 
-pub fn Slot(@"%Origin": type, @"%Item": type) type {
-    return struct {
-        index: u32,
-        pub const origin = @"%Origin";
-        pub const item = @"%Item";
-        pub fn toSpan(@"%slot": @This()) Span(@"%Origin", @"%Item") {
-            return .{ .start = @"%slot".index, .length = P32.one };
-        }
-    };
+/// sadly origin and item type tags will not make different Slots different unique types.
+/// This is because zig otherwise gets in trouble trying unroll "infinite" type aliases :(
+pub fn Slot(_: type, _: type) type {
+    return SlotCore;
 }
+pub const SlotCore = struct {
+    index: u32,
+    pub fn toSpan(@"%slot": @This()) SpanCore {
+        return .{ .start = @"%slot".index, .length = P32.one };
+    }
+};
+/// sadly origin and item type tags will not make different Spans different unique types.
+/// This is because zig otherwise gets in trouble trying unroll "infinite" type aliases :(
 /// invariant: start + length <= intMax(u32)
-pub fn Span(@"%Origin": type, @"%Item": type) type {
-    return struct {
+pub fn Span(_: type, _: type) type {
+    return SpanCore;
+}
+pub const SpanCore =
+    struct {
         start: u32,
         length: P32,
-        pub const origin = @"%Origin";
-        pub const item = @"%Item";
         pub fn endIndex(@"%span": @This()) u32 {
             return @"%span".start + @"%span".length.predecessor();
         }
         pub fn splitStart(@"%span": @This()) struct {
-            after: Opt(Span(@"%Origin", @"%Item")),
-            start: Slot(@"%Origin", @"%Item"),
+            after: Opt(SpanCore),
+            start: SlotCore,
         } {
             return .{
                 .start = .{ .index = @"%span".start },
@@ -216,8 +239,8 @@ pub fn Span(@"%Origin": type, @"%Item": type) type {
             };
         }
         pub fn splitEnd(@"%span": @This()) struct {
-            Opt(Span(@"%Origin", @"%Item")),
-            Slot(@"%Origin", @"%Item"),
+            Opt(SpanCore),
+            SlotCore,
         } {
             return .{
                 if (P32.fromU32(@"%span".length.predecessor())) |@"%start_length"|
@@ -234,8 +257,8 @@ pub fn Span(@"%Origin": type, @"%Item": type) type {
             @"%span": @This(),
             @"%start_length_or_greater": P32,
         ) struct {
-            Span(@"%Origin", @"%Item"),
-            Opt(Span(@"%Origin", @"%Item")),
+            SpanCore,
+            Opt(SpanCore),
         } {
             const @"%start_length" = P32.min(@"%start_length_or_greater", @"%span".length);
             return .{
@@ -252,8 +275,8 @@ pub fn Span(@"%Origin": type, @"%Item": type) type {
             @"%span": @This(),
             @"%end_length_or_greater": P32,
         ) struct {
-            Opt(Span(@"%Origin", @"%Item")),
-            Span(@"%Origin", @"%Item"),
+            Opt(SpanCore),
+            SpanCore,
         } {
             const @"%end_length" = P32.min(@"%end_length_or_greater", @"%span".length);
             const @"%before_length" = @"%span".length.positive - @"%end_length".positive;
@@ -271,14 +294,14 @@ pub fn Span(@"%Origin": type, @"%Item": type) type {
             };
         }
         pub fn step(
-            @"%span": Span(@"%Origin", @"%Item"),
+            @"%span": @This(),
             ctx: anytype,
             @"%direction": @"[Down Up]"(void, void),
             @"%initial_state": anytype,
             @"%step": *const fn (
                 @TypeOf(ctx),
                 @TypeOf(@"%initial_state"),
-                Slot(@"%Origin", @"%Item"),
+                SlotCore,
             ) Error!@TypeOf(@"%initial_state"),
         ) Error!@TypeOf(@"%initial_state") {
             var @"%state" = @"%initial_state";
@@ -308,7 +331,7 @@ pub fn Span(@"%Origin": type, @"%Item": type) type {
             return @"%state";
         }
         pub fn step_while(
-            @"%span": Span(@"%Origin", @"%Item"),
+            @"%span": @This(),
             @"%Done": type,
             ctx: anytype,
             @"%direction": @"[Down Up]"(void, void),
@@ -316,10 +339,10 @@ pub fn Span(@"%Origin": type, @"%Item": type) type {
             @"%step": *const fn (
                 std.mem.Allocator,
                 @TypeOf(@"%initial_state"),
-                Slot(@"%Origin", @"%Item"),
+                SlotCore,
             ) Error!@"[Done Going]"(@"%Done", @TypeOf(@"%initial_state")),
         ) Error!@"[Done Going]"(
-            struct { @"%Done", Opt(Span(@"%Origin", @"%Item")) },
+            struct { @"%Done", Opt(SpanCore) },
             @TypeOf(@"%initial_state"),
         ) {
             var @"%state" = @"%initial_state";
@@ -375,7 +398,6 @@ pub fn Span(@"%Origin": type, @"%Item": type) type {
             return .{ .going = @"%state" };
         }
     };
-}
 /// TODO change to ref-counted
 /// slice whose actual items are undefined
 pub fn Unset_slice(@"%Item": type) type {
@@ -420,22 +442,6 @@ pub fn Unset_slice(@"%Item": type) type {
         }
     };
 }
-const Range = struct {
-    start: u32,
-    length: P32,
-    pub fn splitStart(@"%range": @This()) struct { u32, ?Range } {
-        return .{
-            @"%range".start,
-            if (P32.fromU32(@"%range".length.predecessor())) |@"%end_length"|
-                .{
-                    .start = @"%range".start + 1,
-                    .length = @"%end_length",
-                }
-            else
-                null,
-        };
-    }
-};
 /// Not thread-safe.
 /// TODO change to ref-counted
 pub fn Buf(@"%Origin": type, @"%Item": type) type {
@@ -639,7 +645,7 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
         }
         fn unsetSpanRid(
             @"%buf": *@This(),
-            @"%span_to_unset": Range,
+            @"%span_to_unset": SpanCore,
         ) void {
             if (@"%span_to_unset".start + @"%span_to_unset".length.positive < @"%buf".len_including_unset()) {
                 var @"%unset_bit_set" = @"%buf".unsetBitSet();
@@ -1409,6 +1415,7 @@ pub fn span_step_while(
 pub fn buf_empty(
     @"%Item": type,
     @"%Origin": type,
+    _: anytype,
 ) Buf(@"%Origin", @"%Item") {
     return .empty;
 }
@@ -1426,33 +1433,36 @@ pub fn buf_reuse(
     };
 }
 pub fn buf_pre_allocate_at_least(
-    _: type,
-    _: type,
+    @"%Item": type,
+    @"%Origin": type,
     ctx: anytype,
+    @"%buf": Buf(@"%Origin", @"%Item"),
     @"%length": u32,
 ) Error!void {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    var @"%buf_mut" = @"%buf";
     try @"%buf_mut".preAllocateAtLeast(ctx.allocator, @"%length");
 }
 // TODO correct return type to union(enum)
 pub fn buf_try_pre_allocate_at_least(
-    _: type,
-    _: type,
+    @"%Item": type,
+    @"%Origin": type,
     ctx: anytype,
+    @"%buf": Buf(@"%Origin", @"%Item"),
     @"%length": u32,
 ) struct { out_of_memory: Opt(void) } {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    var @"%buf_mut" = @"%buf";
     @"%buf_mut".preAllocateAtLeast(ctx.allocator, @"%length") catch {
         return .{ .out_of_memory = .{ .yes = {} } };
     };
     return .{ .out_of_memory = .{ .no = {} } };
 }
 pub fn buf_pre_allocation_rid(
-    _: type,
-    _: type,
+    @"%Item": type,
+    @"%Origin": type,
     ctx: anytype,
+    @"%buf": Buf(@"%Origin", @"%Item"),
 ) Error!void {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    var @"%buf_mut" = @"%buf";
     try @"%buf_mut".preAllocationRid(ctx.allocator);
     return @"%buf_mut";
 }
@@ -1500,7 +1510,7 @@ pub fn add_str_chars(
     );
     return @"%new_span".yes;
 }
-pub fn remove(
+pub fn item(
     @"%Item": type,
     @"%Origin": type,
     ctx: anytype,

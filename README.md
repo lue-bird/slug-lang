@@ -223,11 +223,12 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - check that moving spans does a clone if necessary
-- make sure buf pre-allocation primitives work currectly since it takes type variables which do not (!) appear in the result type
 - switch to whereever necessary var @"%buf_mut" = ctx.@"buf(Origin Item)";
 - switch to whereever necessary from ctx to @"%allocator": std.mem.Allocator,
+- zig output add introduced reachable bufs to the current scope context
+- zig output generate clone and drop
 - when adding items (e.g. optSpanAdd), make sure to drop the item
-- represent zig Buf as Buf=Rc(BufInner) and pass reachable bufs as *BufInner 
+- represent zig Buf as Buf=Rc(BufCore) and pass reachable bufs as *BufCore 
 - add zig codegen
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples

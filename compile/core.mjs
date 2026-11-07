@@ -606,22 +606,20 @@ export function opt_span_alter(span, item_alter, $) {
   }
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {Buf<$Origin, $Item>} buf
  * @param{U32} length
  * @returns {void} */
-export function buf_pre_allocate_at_least(length, $) {
-  ArrayBuffer.prototype.resize(
-    $.buf$Origin$Item.items.length + length * Uint16Array.BYTES_PER_ELEMENT,
-  );
-  $.buf$Origin$Item.items.length += length;
-  $.buf$Origin$Item.items.length -= length;
+export function buf_pre_allocate_at_least(length, buf) {
+  buf.counts.resize(buf.items.length + length * Uint16Array.BYTES_PER_ELEMENT);
+  buf.items.length += length;
+  buf.items.length -= length;
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {Buf<$Origin, $Item>} buf
  * @param{U32} length
  * @returns {{ success: void } | { out_of_memory: void }} */
-export function buf_try_pre_allocate_at_least(length, $) {
-  buf_pre_allocate_at_least(length, $);
+export function buf_try_pre_allocate_at_least(buf, length) {
+  buf_pre_allocate_at_least(length, buf);
   return { success: undefined };
 }
 /** @template $Item, $Origin
