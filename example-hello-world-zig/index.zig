@@ -2,9 +2,10 @@ const std = @import("std");
 const slug = @import("slug.zig");
 
 pub fn main(init: std.process.Init) !void {
-    var buf = slug.Buf(enum {}, slug.Char).empty;
+    const Origin = enum {};
+    var buf = slug.Buf(Origin, slug.Char).empty;
     const greeting = try slug.greet(
-        @TypeOf(buf).origin,
+        .{ .Ty = Origin, .name = "Origin" },
         .{
             .allocator = init.arena.allocator(),
             .@"buf(Origin char)" = &buf,

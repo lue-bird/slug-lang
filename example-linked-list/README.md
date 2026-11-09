@@ -1,8 +1,8 @@
-if you've cloned the slug repository, run from this directory with
-```bash
-cargo run --manifest-path ../Cargo.toml js && node main.mjs
-```
-if you've installed `slug`, run with
+run with (as js)
 ```bash
 slug js && node main.mjs
+```
+or (as zig)
+```bash
+slug zig && zig run index.zig
 ```

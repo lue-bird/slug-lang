@@ -225,7 +225,10 @@ cargo install --offline --debug --path . slug
 - check that moving spans does a clone if necessary
 - switch to whereever necessary var @"%buf_mut" = ctx.@"buf(Origin Item)";
 - switch to whereever necessary from ctx to @"%allocator": std.mem.Allocator,
-- zig output add introduced reachable bufs to the current scope context
+- zig output prefer generating `Span/Slot(Origin, Item)` when outside of a recursive type alias and `SpanCore/SlotCore` within after one peel (?)
+- zig output local functions require a different way of passing context.
+  Easiest of which is probably to pass `bufs for Type-variable`
+  Much harder (but nicer) would be to introduce a `fn Context(ins: []type, out: type) type` which returns a struct with the necessary bufs for each slot and span excluding reachable bufs. With this function there could be a `Fn(ins: []type, out: type)` which auto-fills this in.
 - zig output generate clone and drop
 - when adding items (e.g. optSpanAdd), make sure to drop the item
 - represent zig Buf as Buf=Rc(BufCore) and pass reachable bufs as *BufCore 

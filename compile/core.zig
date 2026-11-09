@@ -36,24 +36,204 @@ pub fn Record(@"%struct_type": type) type {
 pub fn record(@"%struct_value": anytype) Record(@TypeOf(@"%struct_value")) {
     return RecordWithFieldNames(@typeInfo(@TypeOf(@"%struct_value")).@"struct".field_names).withFieldValuesOf(@"%struct_value");
 }
-fn StructMerge(a: type, b: type) type {
+fn StructMerge(@"%A": type, @"%B": type) type {
+    switch (@typeInfo(@"%A")) {
+        .void => {
+            return @"%B";
+        },
+        .@"struct" => |@"%A struct"| {
+            switch (@typeInfo(@"%B")) {
+                .void => {
+                    return @"%A";
+                },
+                .@"struct" => |@"%B struct"| {
+                    return @Struct(
+                        .auto,
+                        null,
+                        @"%A struct".field_names ++ @"%B struct".field_names,
+                        @"%A struct".field_types ++ @"%B struct".field_types,
+                        @"%A struct".field_attrs ++ @"%B struct".field_attrs,
+                    );
+                },
+                else => {
+                    @compileError("expected void or a struct");
+                },
+            }
+        },
+        else => {
+            @compileError("expected void or a struct");
+        },
+    }
+}
+fn structMerge(@"%a": anytype, @"%b": anytype) StructMerge(@TypeOf(@"%a"), @TypeOf(@"%b")) {
+    var @"%combined": StructMerge(@TypeOf(@"%a"), @TypeOf(@"%b")) = undefined;
+    switch (@typeInfo(@TypeOf(@"%a"))) {
+        .void => {
+            return @"%b";
+        },
+        .@"struct" => |@"%A struct"| {
+            switch (@typeInfo(@TypeOf(@"%b"))) {
+                .void => {
+                    return @"%a";
+                },
+                .@"struct" => |@"%B struct"| {
+                    inline for (@"%A struct".field_names) |@"%a_field_name"| {
+                        @field(@"%combined", @"%a_field_name") = @field(@"%a", @"%a_field_name");
+                    }
+                    inline for (@"%B struct".field_names) |@"%b_field_name"| {
+                        @field(@"%combined", @"%b_field_name") = @field(@"%b", @"%b_field_name");
+                    }
+                    return @"%combined";
+                },
+                else => {
+                    @compileError("expected void or a struct");
+                },
+            }
+        },
+        else => {
+            @compileError("expected void or a struct");
+        },
+    }
+}
+fn StructOneField(@"%name": []const u8, @"%Value": type) type {
+    return @Struct(.auto, null, &.{@"%name"}, &.{@"%Value"}, &.{std.lang.Type.Struct.FieldAttributes{}});
+}
+fn struct_one_field(
+    comptime @"%name": []const u8,
+    @"%value": anytype,
+) StructOneField(@"%name", @TypeOf(@"%value")) {
+    var @"%result": StructOneField(@"%name", @"%value") = undefined;
+    @field(@"%result", @"%name") = @"%value";
+    return @"%result";
+}
+fn StructFromFields(
+    @"%names": []const []const u8,
+    @"%Values": *const [@"%names".len]type,
+) type {
     return @Struct(
         .auto,
         null,
-        @typeInfo(a).@"struct".field_names ++ @typeInfo(b).@"struct".field_names,
-        @typeInfo(a).@"struct".field_types ++ @typeInfo(b).@"struct".field_types,
-        @typeInfo(a).@"struct".field_attrs ++ @typeInfo(b).@"struct".field_attrs,
+        @"%names",
+        @"%Values",
+        &@splat(std.lang.Type.Struct.FieldAttributes{}),
     );
 }
-fn structMerge(a: anytype, b: anytype) StructMerge(@TypeOf(a), @TypeOf(b)) {
-    var combined: StructMerge(@TypeOf(a), @TypeOf(b)) = undefined;
-    inline for (@typeInfo(@TypeOf(a)).@"struct".field_names) |a_field_name| {
-        @field(combined, a_field_name) = @field(a, a_field_name);
+fn struct_from_fields(
+    comptime @"%names": []const []const u8,
+    @"%values": anytype, // Tuple(@"%names".len, anytype)
+) StructFromFields(
+    @"%names",
+    @typeInfo(@TypeOf(@"%values")).@"struct".field_types,
+) {
+    var @"%result": StructFromFields(
+        @"%names",
+        @typeInfo(@TypeOf(@"%values")).@"struct".field_types,
+    ) = undefined;
+    inline for (@"%names", @typeInfo(@TypeOf(@"%values")).@"struct".field_names) |@"%name", @"%i"| {
+        @field(@"%result", @"%name") = @field(@"%values", @"%i");
     }
-    inline for (@typeInfo(@TypeOf(b)).@"struct".field_names) |b_field_name| {
-        @field(combined, b_field_name) = @field(b, b_field_name);
+    return @"%result";
+}
+fn StructMergeAll(@"%structs": []const type) type {
+    var @"%field_names": []const [:0]const u8 = &.{};
+    var @"%field_types": []const type = &.{};
+    var @"%field_attrs": []const std.lang.Type.Struct.FieldAttributes = &.{};
+    for (@"%structs") |@"%maybe_struct"| {
+        switch (@typeInfo(@"%maybe_struct")) {
+            .void => {},
+            .@"struct" => |@"%struct"| {
+                @"%field_names" = @"%field_names" ++ @"%struct".field_names;
+                @"%field_types" = @"%field_types" ++ @"%struct".field_types;
+                @"%field_attrs" = @"%field_attrs" ++ @"%struct".field_attrs;
+            },
+            else => {
+                @compileError("expected void or a struct");
+            },
+        }
     }
-    return combined;
+    return @Struct(.auto, null, @"%field_names", @"%field_types", @"%field_attrs");
+}
+fn struct_subset(
+    @"%value": anytype,
+    @"%Fields": type,
+) @"%Fields" {
+    switch (@typeInfo(@"%Fields")) {
+        .void => {
+            return {};
+        },
+        .@"struct" => |@"%struct"| {
+            var @"%result": @"%Fields" = undefined;
+            inline for (@"%struct".field_names) |@"%field_name"| {
+                @field(@"%result", @"%field_name") = @field(@"%value", @"%field_name");
+            }
+            return @"%result";
+        },
+        else => {
+            @compileError("expected void or a struct");
+        },
+    }
+}
+fn Ctx(@"%AdditionalFields": []const type) type {
+    return StructMerge(
+        struct { allocator: std.mem.Allocator },
+        StructMergeAll(@"%AdditionalFields"),
+    );
+}
+const SlugType = struct {
+    Ty: type,
+    Bufs: type = void,
+    drop: fn (
+        anytype, // Ctx(.{@This().Bufs})
+        anytype, // @This().Ty
+    ) void = struct {
+        fn f(_: anytype, _: anytype) void {}
+    }.f,
+    clone: fn (
+        anytype, // @This().Bufs
+        anytype, // @This().Ty
+    ) void = struct {
+        fn f(_: anytype, _: anytype) void {}
+    }.f,
+    name: []const u8,
+};
+fn slug_type(
+    @"%Ty": type,
+    comptime @"%name": []const u8,
+    @"%Bufs": type,
+    @"%drop": fn (Ctx(.{@"%Bufs"}), @"%Ty") void,
+    @"%clone": fn (@"%Bufs", @"%Ty") void,
+) SlugType {
+    return .{
+        .Ty = @"%Ty",
+        .Bufs = @"%Bufs",
+        .drop = @"%drop",
+        .clone = @"%clone",
+        .name = @"%name",
+    };
+}
+/// pass either SlugType or .{ name = "..slug..", .Ty = ZigType }
+fn CtxBuf(@"%Origin": anytype, @"%Item": anytype) type {
+    return @Struct(
+        .auto,
+        null,
+        &.{"buf(" ++ @"%Origin".name ++ " " ++ @"%Item".name ++ ")"},
+        &.{*Buf(@"%Origin".Ty, @"%Item".Ty)},
+        &.{std.lang.Type.Struct.FieldAttributes{}},
+    );
+}
+fn ctx_buf_name(
+    comptime @"%origin_name": []const u8,
+    comptime @"%item_name": []const u8,
+) []const u8 {
+    return "buf(" ++ @"%origin_name" ++ " " ++ @"%item_name" ++ ")";
+}
+/// pass either SlugType or .{ name = "..slug..", .Ty = ZigType }
+fn ctx_buf(
+    ctx: anytype,
+    @"%Origin": anytype,
+    @"%Item": anytype,
+) *Buf(@"%Origin".Ty, @"%Item".Ty) {
+    return @constCast(@field(ctx, ctx_buf_name(@"%Origin".name, @"%Item".name)));
 }
 
 // If you're wondering about the strange names:
@@ -957,7 +1137,7 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
         }
         pub fn dropSlot(
             @"%buf": *@This(),
-            ctx: anytype,
+            ctx: anytype, // Ctx(&.{@"%Item".Bufs})
             @"%slot": Slot(@"%Origin", @"%Item"),
             @"drop Item": fn (@TypeOf(ctx), @"%Item") void,
         ) void {
@@ -966,25 +1146,23 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
             @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
             return @"%item";
         }
-        pub fn cloneSlot(
-            @"%buf": *@This(),
-            ctx: anytype,
-            @"%slot": Slot(@"%Origin", @"%Item"),
-        ) void {
-            // TODO increment count
-            _ = @"%buf";
-            _ = ctx;
-            _ = @"%slot";
-        }
         pub fn dropSpan(
             @"%buf": *@This(),
-            ctx: anytype,
+            ctx: anytype, // Ctx(&.{@"%Item".Bufs})
             @"%span": Span(@"%Origin", @"%Item"),
             @"drop Item": fn (@TypeOf(ctx), @"%Item") void,
         ) void {
             for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index"| {
                 @"%buf".dropSlot(ctx, .{ .index = @"%index" }, @"drop Item");
             }
+        }
+        pub fn cloneSlot(
+            @"%buf": *@This(),
+            @"%slot": Slot(@"%Origin", @"%Item"),
+        ) void {
+            // TODO increment count
+            _ = @"%buf";
+            _ = @"%slot";
         }
         pub fn cloneSpan(
             @"%buf": *@This(),
@@ -1017,11 +1195,11 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
 pub fn p32_to_u32(@"%n": P32) U32 {
     return @"%n".positive;
 }
-pub fn p32_add_clamp(@"%": Record(struct { p: P32, u: U32 })) P32 {
-    return @"%".p.addClamp(@"%".u);
+pub fn p32_add_clamp(@"%p": P32, @"%u": U32) P32 {
+    return @"%p".addClamp(@"%u");
 }
-pub fn p32_mul_clamp(@"%": Record(struct { a: P32, b: P32 })) P32 {
-    return @"%".a.mulClamp(@"%".b);
+pub fn p32_mul_clamp(@"%a": P32, @"%b": P32) P32 {
+    return @"%a".mulClamp(@"%b");
 }
 pub fn p32_order(@"%left": P32, @"%right": P32) Order {
     return mathOrderToOrder(std.math.order(@"%left".positive, @"%right".positive));
@@ -1037,26 +1215,30 @@ pub fn u32_round_to_nearest_f32_else_even(@"%n": U32) F32 {
 pub fn u32_successor_clamp(@"%n": U32) P32 {
     return .{ .positive = @"%n" +| 1 };
 }
-pub fn u32_add_clamp(@"%": Record(struct { a: U32, b: U32 })) U32 {
-    return @"%".a +| @"%".b;
+pub fn u32_add_clamp(@"%a": U32, @"%b": U32) U32 {
+    return @"%a" +| @"%b";
 }
-pub fn u32_add_i32_clamp(@"%": Record(struct { i: I32, u: U32 })) U32 {
-    return std.math.lossyCast(u32, @as(i33, @"%".u) +| @as(i33, @"%".i));
+pub fn u32_add_i32_clamp(@"%i": I32, @"%u": U32) U32 {
+    return std.math.lossyCast(u32, @as(i33, @"%u") +| @as(i33, @"%i"));
 }
-pub fn u32_mul_clamp(@"%": Record(struct { a: U32, b: U32 })) U32 {
-    return @"%".a *| @"%".b;
+pub fn u32_mul_clamp(@"%a": U32, @"%b": U32) U32 {
+    return @"%a" *| @"%b";
 }
-pub fn u32_mul_wrap(@"%": Record(struct { a: U32, b: U32 })) U32 {
-    return @"%".a *% @"%".b;
+pub fn u32_mul_wrap(@"%a": U32, @"%b": U32) U32 {
+    return @"%a" *% @"%b";
 }
-pub fn u32_pow_clamp(@"%": Record(struct { base: U32, exponent: P32 })) U32 {
-    return std.math.powi(u32, @"%".base, @"%".exponent.positive) catch std.math.maxInt(u32);
+pub fn u32_pow_clamp(@"%base": U32, @"%exponent": P32) U32 {
+    return std.math.powi(
+        u32,
+        @"%base",
+        @"%exponent".positive,
+    ) catch std.math.maxInt(u32);
 }
 pub fn u32_to_p32(@"%n": U32) Opt(P32) {
     return if (P32.fromU32(@"%n")) |@"%p32"| .{ .yes = @"%p32" } else .{ .no = {} };
 }
-pub fn u32_order(@"%": Record(struct { left: U32, right: U32 })) Order {
-    return mathOrderToOrder(std.math.order(@"%".left, @"%".right));
+pub fn u32_order(@"%left": U32, @"%right": U32) Order {
+    return mathOrderToOrder(std.math.order(@"%left", @"%right"));
 }
 
 pub fn i32_to_u32(@"%i": I32) Opt(U32) {
@@ -1070,14 +1252,18 @@ pub fn i32_round_to_nearest_f32_else_even(@"%n": I32) F32 {
     //   IEEE specifies round ties to even (see §4.3.3, §7.4 in IEEE 754-2008)
     return @floatFromInt(@"%n");
 }
-pub fn i32_add_clamp(@"%": Record(struct { a: I32, b: I32 })) I32 {
-    return @"%".a +| @"%".b;
+pub fn i32_add_clamp(@"%a": I32, @"%b": I32) I32 {
+    return @"%a" +| @"%b";
 }
-pub fn i32_mul_clamp(@"%": Record(struct { a: I32, b: I32 })) I32 {
-    return @"%".a *| @"%".b;
+pub fn i32_mul_clamp(@"%a": I32, @"%b": I32) I32 {
+    return @"%a" *| @"%b";
 }
-pub fn i32_pow_clamp(@"%": Record(struct { base: I32, exponent: P32 })) I32 {
-    return std.math.powi(i32, @"%".base, std.math.lossyCast(i32, @"%".exponent.positive)) catch std.math.maxInt(i32);
+pub fn i32_pow_clamp(@"%base": I32, @"%exponent": P32) I32 {
+    return std.math.powi(
+        i32,
+        @"%base",
+        std.math.lossyCast(i32, @"%exponent".positive),
+    ) catch std.math.maxInt(i32);
 }
 pub fn i32_negate_clamp(@"%n": I32) I32 {
     return 0 -| @"%n";
@@ -1085,8 +1271,8 @@ pub fn i32_negate_clamp(@"%n": I32) I32 {
 pub fn i32_abs_to_u32(@"%n": I32) U32 {
     return @abs(@"%n");
 }
-pub fn i32_order(@"%": Record(struct { left: I32, right: I32 })) Order {
-    return mathOrderToOrder(std.math.order(@"%".left, @"%".right));
+pub fn i32_order(@"%left": I32, @"%right": I32) Order {
+    return mathOrderToOrder(std.math.order(@"%left", @"%right"));
 }
 
 pub fn f32_pi() F32 {
@@ -1173,33 +1359,37 @@ pub fn f32_round_nearest_else_away_from_0_to_i32_clamp(@"%n": F32) I32 {
 pub fn f32_round_nearest_else_even_to_i32_clamp(@"%n": F32) I32 {
     return std.math.lossyCast(i32, f32_round_nearest_else_even(@"%n"));
 }
-pub fn f32_add_clamp(@"%": Record(struct { a: F32, b: F32 })) F32 {
-    const @"%sum" = @"%".a + @"%".b;
+pub fn f32_add_clamp(@"%a": F32, @"%b": F32) F32 {
+    const @"%sum" = @"%a" + @"%b";
     return if (std.math.isNegativeInf(@"%sum")) std.math.floatMin(f32) else if (std.math.isPositiveInf(@"%sum")) std.math.floatMax(f32) else @"%sum";
 }
-pub fn f32_mul_clamp(@"%": Record(struct { a: F32, b: F32 })) F32 {
-    const @"%product" = @"%".a * @"%".b;
+pub fn f32_mul_clamp(@"%a": F32, @"%b": F32) F32 {
+    const @"%product" = @"%a" * @"%b";
     return if (std.math.isNegativeInf(@"%product")) std.math.floatMin(f32) else if (std.math.isPositiveInf(@"%product")) std.math.floatMax(f32) else @"%product";
 }
-pub fn f32_div_clamp(@"%": Record(struct { n: F32, by: F32 })) F32 {
-    return if (@"%".by == 0.0) 0.0 else {
-        const @"%div_result" = @"%".n / @"%".by;
-        return if (std.math.isNegativeInf(@"%div_result")) std.math.floatMin(f32) else if (std.math.isPositiveInf(@"%div_result")) std.math.floatMax(f32) else @"%div_result";
+pub fn f32_div_clamp(@"%n": F32, @"%by": F32) F32 {
+    return if (@"%by" == 0.0) 0.0 else {
+        const @"%div_result" = @"%n" / @"%by";
+        return if (std.math.isNegativeInf(@"%div_result")) std.math.floatMin(
+            f32,
+        ) else if (std.math.isPositiveInf(@"%div_result")) std.math.floatMax(
+            f32,
+        ) else @"%div_result";
     };
 }
 pub fn f32_square_root(@"%n": F32) Opt(F32) {
     return if (@"%n" < 0.0) .{ .no = {} } else .{ .yes = @sqrt(@"%n") };
 }
-pub fn f32_pow_i32(@"%": Record(struct { base: F32, exponent: I32 })) Opt(F32) {
-    const @"%power" = std.math.pow(f32, @"%".base, @floatFromInt(@"%".exponent));
+pub fn f32_pow_i32(@"%base": F32, @"%exponent": I32) Opt(F32) {
+    const @"%power" = std.math.pow(f32, @"%base", @floatFromInt(@"%exponent"));
     return if (std.math.isFinite(@"%power")) .{ .yes = @"%power" } else .{ .no = {} };
 }
-pub fn f32_pow(@"%": Record(struct { base: F32, exponent: F32 })) Opt(F32) {
-    const @"%power" = std.math.pow(f32, @"%".base, @"%".exponent);
+pub fn f32_pow(@"%base": F32, @"%exponent": F32) Opt(F32) {
+    const @"%power" = std.math.pow(f32, @"%base", @"%exponent");
     return if (std.math.isFinite(@"%power")) .{ .yes = @"%power" } else .{ .no = {} };
 }
-pub fn f32_order(@"%": Record(struct { left: F32, right: F32 })) Order {
-    return mathOrderToOrder(std.math.order(@"%".left, @"%".right));
+pub fn f32_order(@"%left": F32, @"%right": F32) Order {
+    return mathOrderToOrder(std.math.order(@"%left", @"%right"));
 }
 
 pub fn char_to_u32(@"%char": Char) U32 {
@@ -1212,18 +1402,18 @@ pub fn str_utf8_length(@"%str": Str) P32 {
 pub fn str_char_count(@"%str": Str) P32 {
     return @"%str".codepoint_count_p32();
 }
-pub fn str_start(@"%str": Str) Record(struct { after: Opt(Str), start: Char }) {
+pub fn str_start(@"%str": Str) struct { Char, Opt(Str) } {
     const @"%split" = @"%str".splitStart();
     return .{
         .start = @"%split".start,
         .after = if (Str.fromUtf8View(@"%split".after)) |@"%after"| .{ .yes = @"%after" } else .{ .no = {} },
     };
 }
-pub fn str_end(@"%str": Str) Record(struct { before: Opt(Str), end: Char }) {
+pub fn str_end(@"%str": Str) struct { Opt(Str), Char } {
     const @"%split" = @"%str".splitEnd();
     return .{
-        .end = @"%split".end,
-        .before = if (Str.fromUtf8View(@"%split".before)) |@"%before"| .{ .yes = @"%before" } else .{ .no = {} },
+        if (Str.fromUtf8View(@"%split".@"0")) |@"%before"| .{ .yes = @"%before" } else .{ .no = {} },
+        @"%split".@"1",
     };
 }
 
@@ -1255,136 +1445,152 @@ pub fn choice_empty_to(
 // but I don't see much of a benefit.
 
 pub fn slot_index(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%slot": Slot(@"%Origin", @"%Item"),
+    @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
 ) U32 {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
-    @"%buf_mut".dropSlot(@"%slot", ctx.@"drop Item");
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
+    @"%buf_mut".dropSlot(ctx, @"%slot", @"%Item".drop);
     return @"%slot".index;
 }
 pub fn slot_to_span(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%slot": Slot(@"%Origin", @"%Item"),
-) Span(@"%Origin", @"%Item") {
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
+) Span(@"%Origin".Ty, @"%Item".Ty) {
     return @"%slot".toSpan();
 }
 
 pub fn span_start_index(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) U32 {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
-    @"%buf_mut".dropSpan(ctx, @"%span", ctx.@"drop Item");
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
+    @"%buf_mut".dropSpan(ctx, @"%span", @"%Item".drop);
     return @"%span".start;
 }
 pub fn span_length(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) P32 {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
-    @"%buf_mut".dropSpan(ctx, @"%span", ctx.@"drop Item");
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
+    @"%buf_mut".dropSpan(ctx, @"%span", @"%Item".drop);
     return @"%span".length;
 }
 pub fn opt_span_length(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
 ) U32 {
     return switch (@"%opt_span") {
         .no => 0,
-        .yes => |@"%span"| span_length(@"%Item", @"%Origin", ctx, @"%span"),
+        .yes => |@"%span"| span_length(@"%Item", @"%Origin", ctx, @"%span").positive,
     };
 }
 pub fn span_start(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%span": Span(@"%Origin", @"%Item"),
-) Record(struct { after: Opt(Span(@"%Origin", @"%Item")), start: Slot(@"%Origin", @"%Item") }) {
-    return record(@"%span".splitStart());
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    _: anytype,
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+) struct {
+    Slot(@"%Origin".Ty, @"%Item".Ty),
+    Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+} {
+    return @"%span".splitStart();
 }
 pub fn span_end(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%span": Span(@"%Origin", @"%Item"),
-) Record(struct { before: Opt(Span(@"%Origin", @"%Item")), end: Slot(@"%Origin", @"%Item") }) {
-    return record(@"%span".splitEnd());
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    _: anytype,
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+) struct {
+    Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    Slot(@"%Origin".Ty, @"%Item".Ty),
+} {
+    return @"%span".splitEnd();
 }
 pub fn span_start_of_length_positive(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%": Record(struct { length: P32, span: Span(@"%Origin", @"%Item") }),
-) Record(struct {
-    after: Opt(Span(@"%Origin", @"%Item")),
-    start: Span(@"%Origin", @"%Item"),
-}) {
-    return record(@"%".span.splitAfterLengthPositive(@"%".length));
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    _: anytype,
+    @"%length": P32,
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+) struct {
+    Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    Span(@"%Origin".Ty, @"%Item".Ty),
+} {
+    return @"%span".splitAfterLengthPositive(@"%length");
 }
 pub fn span_end_of_length_positive(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%": Record(struct { length: P32, span: Span(@"%Origin", @"%Item") }),
-) Record(struct {
-    before: Opt(Span(@"%Origin", @"%Item")),
-    end: Span(@"%Origin", @"%Item"),
-}) {
-    return record(@"%".span.splitBeforeEndLengthPositive(@"%".length));
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    _: anytype,
+    @"%length": P32,
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+) struct {
+    Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    Span(@"%Origin".Ty, @"%Item".Ty),
+} {
+    return @"%span".splitBeforeEndLengthPositive(@"%length");
 }
 pub fn opt_span_step(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%State": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%State": SlugType,
     ctx: anytype,
-    @"%": Record(struct {
-        direction: @"[Down Up]"(void, void),
-        span: Opt(Span(@"%Origin", @"%Item")),
-        state: @"%State",
-        step: *const fn (anytype, @"%State", Slot(@"%Origin", @"%Item")) Error!@"%State",
-    }),
-) Error!@"%State" {
-    return switch (@"%".span) {
-        .no => @"%".state,
-        .yes => |@"%span"| @"%span".step(ctx, @"%".direction, @"%".state, @"%".step),
+    @"%direction": @"[Down Up]"(void, void),
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%state": @"%State".Ty,
+    @"%step": *const fn (
+        Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
+        @"%State",
+        Slot(@"%Origin".Ty, @"%Item".Ty),
+    ) Error!@"%State".Ty,
+) Error!@"%State".Ty {
+    return switch (@"%opt_span") {
+        .no => @"%state",
+        .yes => |@"%span"| @"%span".step(ctx, @"%direction", @"%state", @"%step"),
     };
 }
 pub fn span_step(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%State": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%State": SlugType,
     ctx: anytype,
-    @"%": Record(struct {
-        direction: @"[Down Up]"(void, void),
-        span: Span(@"%Origin", @"%Item"),
-        state: @"%State",
-        step: *const fn (anytype, @"%State", Slot(@"%Origin", @"%Item")) Error!@"%State",
-    }),
-) Error!@"%State" {
-    return @"%".span.step(ctx, @"%".direction, @"%".state, @"%".step);
+    @"%direction": @"[Down Up]"(void, void),
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+    @"%state": @"%State".Ty,
+    @"%step": *const fn (
+        Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
+        @"%State",
+        Slot(@"%Origin".Ty, @"%Item".Ty),
+    ) Error!@"%State".Ty,
+) Error!@"%State".Ty {
+    return @"%span".step(ctx, @"%direction", @"%state", @"%step");
 }
 pub fn opt_span_step_while(
-    @"%Done": type,
-    @"%Item": type,
-    @"%Origin": type,
-    @"%State": type,
+    comptime @"%Done": SlugType,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%State": SlugType,
     ctx: anytype,
     @"%direction": @"[Down Up]"(void, void),
     @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
     @"%state": @"%State",
     @"%step": *const fn (
-        anytype,
+        Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
         @"%State",
-        Slot(@"%Origin", @"%Item"),
+        Slot(@"%Origin".Ty, @"%Item".Ty),
     ) Error!@"[Done Going]"(@"%Done", @"%State"),
 ) Error!@"[Done Going]"(
-    struct { @"%Done", Opt(Span(@"%Origin", @"%Item")) },
-    @"%State",
+    struct { @"%Done".Ty, Opt(Span(@"%Origin".Ty, @"%Item".Ty)) },
+    @"%State".Ty,
 ) {
     return switch (@"%opt_span") {
         .no => .{ .going = @"%state" },
@@ -1392,38 +1598,39 @@ pub fn opt_span_step_while(
     };
 }
 pub fn span_step_while(
-    @"%Done": type,
-    @"%Item": type,
-    @"%Origin": type,
-    @"%State": type,
+    comptime @"%Done": SlugType,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%State": SlugType,
     ctx: anytype,
     @"%direction": @"[Down Up]"(void, void),
-    @"%span": Span(@"%Origin", @"%Item"),
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
     @"%state": @"%State",
     @"%step": *const fn (
-        anytype,
+        Ctx(&.{ @"%Done".Bufs, @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
         @"%State",
         Slot(@"%Origin", @"%Item"),
     ) Error!@"[Done Going]"(@"%Done", @"%State"),
 ) Error!@"[Done Going]"(
-    struct { @"%Done", Opt(Span(@"%Origin", @"%Item")) },
-    @"%State",
+    struct { @"%Done".Ty, Opt(Span(@"%Origin".Ty, @"%Item".Ty)) },
+    @"%State".Ty,
 ) {
     return @"%span".step_while(@"%Done", ctx, @"%direction", @"%state", @"%step");
 }
 
 pub fn buf_empty(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     _: anytype,
-) Buf(@"%Origin", @"%Item") {
+) Buf(@"%Origin".Ty, @"%Item".Ty) {
     return .empty;
 }
 pub fn buf_reuse(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%": Unset_slice(@"%Item"),
-) Buf(@"%Origin", @"%Item") {
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    _: anytype,
+    @"%": Unset_slice(@"%Item".Ty),
+) Buf(@"%Origin".Ty, @"%Item".Ty) {
     var items = std.ArrayList(@"%Item").fromOwnedSlice(@"%".slice.undefined_items);
     items.clearRetainingCapacity();
     return .{
@@ -1433,10 +1640,10 @@ pub fn buf_reuse(
     };
 }
 pub fn buf_pre_allocate_at_least(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%buf": Buf(@"%Origin", @"%Item"),
+    @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
     @"%length": u32,
 ) Error!void {
     var @"%buf_mut" = @"%buf";
@@ -1444,10 +1651,10 @@ pub fn buf_pre_allocate_at_least(
 }
 // TODO correct return type to union(enum)
 pub fn buf_try_pre_allocate_at_least(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%buf": Buf(@"%Origin", @"%Item"),
+    @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
     @"%length": u32,
 ) struct { out_of_memory: Opt(void) } {
     var @"%buf_mut" = @"%buf";
@@ -1457,52 +1664,52 @@ pub fn buf_try_pre_allocate_at_least(
     return .{ .out_of_memory = .{ .no = {} } };
 }
 pub fn buf_pre_allocation_rid(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%buf": Buf(@"%Origin", @"%Item"),
+    @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
 ) Error!void {
     var @"%buf_mut" = @"%buf";
     try @"%buf_mut".preAllocationRid(ctx.allocator);
     return @"%buf_mut";
 }
 pub fn insert(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%new": @"%Item",
-) Error!Slot(@"%Origin", @"%Item") {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    @"%new": @"%Item".Ty,
+) Error!Slot(@"%Origin".Ty, @"%Item".Ty) {
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
     const @"%slot" = try @"%buf_mut".insert(ctx.allocator, @"%new");
     return @"%slot";
 }
 pub fn set_or_insert(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
     @"%index": U32,
-    @"%new": @"%Item",
-) Error!Slot(@"%Origin", @"%Item") {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    @"%new": @"%Item".Ty,
+) Error!Slot(@"%Origin".Ty, @"%Item".Ty) {
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
     const @"%slot" = try @"%buf_mut".setOrInsert(ctx, @"%index", @"%new");
     return @"%slot";
 }
 pub fn add(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%new": @"%Item",
-) Error!Slot(@"%Origin", @"%Item") {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    @"%new": @"%Item".Ty,
+) Error!Slot(@"%Origin".Ty, @"%Item".Ty) {
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
     const @"%slot" = try @"%buf_mut".add(ctx.allocator, @"%new");
-    return .{ .buf = ctx.@"buf(Origin Item)", .slot = @"%slot" };
+    return .{ .buf = ctx_buf(ctx, @"%Origin", @"%Item"), .slot = @"%slot" };
 }
 pub fn add_str_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
     @"%new": Str,
-) Error!Span(@"%Origin", Char) {
-    var @"%buf_mut" = ctx.@"buf(Origin char)";
+) Error!Span(@"%Origin".Ty, Char) {
+    var @"%buf_mut" = @field(ctx, ctx_buf_name(@"%Origin".name, "char"));
     const @"%new_span" = try @"%buf_mut".addIterator(
         ctx.allocator,
         @"%new".utf8.iterator(),
@@ -1511,66 +1718,64 @@ pub fn add_str_chars(
     return @"%new_span".yes;
 }
 pub fn item(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%slot": Slot(@"%Origin", @"%Item"),
-) @"%Item" {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
+) @"%Item".Ty {
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
     const @"%item" = @"%buf_mut".remove(@"%slot");
     return @"%item";
 }
 pub fn replace(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%slot": Slot(@"%Origin", @"%Item"),
-    @"%new": @"%Item",
-) @"%Item" {
-    const @"%old_item" = ctx.@"buf(Origin Item)".replace(@"%slot", @"%new");
+    @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
+    @"%new": @"%Item".Ty,
+) @"%Item".Ty {
+    const @"%old_item" = ctx_buf(ctx, @"%Origin", @"%Item").replace(@"%slot", @"%new");
     return @"%old_item";
 }
 pub fn swap(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%": struct {
-        @"buf(Origin Item)": Buf(@"%Origin", @"%Item"),
-    },
-    @"%slot_a": Slot(@"%Origin", @"%Item"),
-    @"%slot_b": Slot(@"%Origin", @"%Item"),
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    ctx: anytype,
+    @"%slot_a": Slot(@"%Origin".Ty, @"%Item".Ty),
+    @"%slot_b": Slot(@"%Origin".Ty, @"%Item".Ty),
 ) void {
-    @"%".@"buf(Origin Item)".swap(@"%slot_a", @"%slot_b");
+    ctx_buf(ctx, @"%Origin", @"%Item").swap(@"%slot_a", @"%slot_b");
 }
 
 pub fn opt_span_add(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Opt(Span(@"%Origin", @"%Item")),
-    @"%new": @"%Item",
-) Error!Span(@"%Origin", @"%Item") {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    @"%span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%new": @"%Item".Ty,
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
     const @"%combined_span" = try @"%buf_mut".optSpanAdd(ctx.allocator, @"%span", @"%new");
     return @"%combined_span";
 }
 pub fn span_add(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
-    @"%new": @"%Item",
-) Error!Span(@"%Origin", @"%Item") {
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+    @"%new": @"%Item".Ty,
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
     const @"%combined_span" = try @"%buf_mut".spanAdd(ctx.allocator, @"%span", @"%new");
     return @"%combined_span";
 }
 pub fn span_add_str_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", Char),
+    @"%span": Span(@"%Origin".Ty, Char),
     @"%new": Str,
-) Error!Span(@"%Origin", Char) {
-    var @"%buf_mut" = ctx.@"buf(Origin char)";
+) Error!Span(@"%Origin".Ty, Char) {
+    var @"%buf_mut" = @field(ctx, ctx_buf_name(@"%Origin".name, "char"));
     const @"%combined_span" = try @"%buf_mut".spanAddIterator(
         ctx.allocator,
         @"%span",
@@ -1580,12 +1785,12 @@ pub fn span_add_str_chars(
     return @"%combined_span";
 }
 pub fn opt_span_add_str_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Opt(Span(@"%Origin", Char)),
+    @"%span": Opt(Span(@"%Origin".Ty, Char)),
     @"%new": Str,
-) Error!Span(@"%Origin", Char) {
-    var @"%buf_mut" = ctx.@"buf(Origin char)";
+) Error!Span(@"%Origin".Ty, Char) {
+    var @"%buf_mut" = @field(ctx, ctx_buf_name(@"%Origin".name, "char"));
     const @"%combined_span" = try @"%buf_mut".optSpanAddIterator(
         ctx.allocator,
         @"%span",
@@ -1597,11 +1802,11 @@ pub fn opt_span_add_str_chars(
 // is there a more correct way?
 const u32_max_print_len = std.fmt.count("{}", .{std.math.maxInt(U32)});
 pub fn span_add_u32_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", Char),
+    @"%span": Span(@"%Origin".Ty, Char),
     @"%new": U32,
-) Error!Span(@"%Origin", Char) {
+) Error!Span(@"%Origin".Ty, Char) {
     var @"%buffer": [u32_max_print_len]u8 = undefined;
     const @"%buffer_exclusive_end" = std.fmt.printInt(&@"%buffer", @"%new", 10, std.fmt.Case.lower, .{});
     return span_add_str_chars(
@@ -1612,11 +1817,11 @@ pub fn span_add_u32_chars(
     );
 }
 pub fn opt_span_add_u32_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Opt(Span(@"%Origin", Char)),
+    @"%span": Opt(Span(@"%Origin".Ty, Char)),
     @"%new": U32,
-) Error!Span(@"%Origin", Char) {
+) Error!Span(@"%Origin".Ty, Char) {
     var @"%buffer": [u32_max_print_len]u8 = undefined;
     const @"%buffer_exclusive_end" = std.fmt.printInt(&@"%buffer", @"%new", 10, std.fmt.Case.lower, .{});
     const @"%combined" = try opt_span_add_str_chars(
@@ -1633,11 +1838,11 @@ const i32_max_print_len = @max(
     std.fmt.count("{}", .{std.math.maxInt(I32)}),
 );
 pub fn span_add_i32_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", Char),
+    @"%span": Span(@"%Origin".Ty, Char),
     @"%new": I32,
-) Error!Span(@"%Origin", Char) {
+) Error!Span(@"%Origin".Ty, Char) {
     var @"%buffer": [i32_max_print_len]u8 = undefined;
     const @"%buffer_exclusive_end" = std.fmt.printInt(&@"%buffer", @"%new", 10, std.fmt.Case.lower, .{});
     return span_add_str_chars(
@@ -1648,11 +1853,11 @@ pub fn span_add_i32_chars(
     );
 }
 pub fn opt_span_add_i32_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Opt(Span(@"%Origin", Char)),
+    @"%span": Opt(Span(@"%Origin".Ty, Char)),
     @"%new": I32,
-) Error!Span(@"%Origin", Char) {
+) Error!Span(@"%Origin".Ty, Char) {
     var @"%buffer": [i32_max_print_len]u8 = undefined;
     const @"%buffer_exclusive_end" = std.fmt.printInt(&@"%buffer", @"%new", 10, std.fmt.Case.lower, .{});
     const @"%combined" = try opt_span_add_str_chars(
@@ -1667,11 +1872,11 @@ pub fn opt_span_add_i32_chars(
 const f32_max_decimal_print_len =
     std.fmt.float.bufferSize(std.fmt.float.Mode.decimal, F32);
 pub fn span_add_f32_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", Char),
+    @"%span": Span(@"%Origin".Ty, Char),
     @"%new": F32,
-) Error!Span(@"%Origin", Char) {
+) Error!Span(@"%Origin".Ty, Char) {
     var @"%buffer": [f32_max_decimal_print_len]u8 = undefined;
     const @"%used_buffer_slice" = std.fmt.float.render(
         &@"%buffer",
@@ -1686,11 +1891,11 @@ pub fn span_add_f32_chars(
     );
 }
 pub fn opt_span_add_f32_chars(
-    @"%Origin": type,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Opt(Span(@"%Origin", Char)),
+    @"%span": Opt(Span(@"%Origin".Ty, Char)),
     @"%new": F32,
-) Error!Span(@"%Origin", Char) {
+) Error!Span(@"%Origin".Ty, Char) {
     var @"%buffer": [f32_max_decimal_print_len]u8 = undefined;
     const @"%used_buffer_slice" = std.fmt.float.render(
         &@"%buffer",
@@ -1706,28 +1911,28 @@ pub fn opt_span_add_f32_chars(
     return @"%combined".yes;
 }
 pub fn span_add_span(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%Source_origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%Source_origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
-    @"%source": Span(@"%Source_origin"),
-) Error!Span(@"%Origin", @"%Item") {
-    var @"%source_mut" = ctx.@"buf(Source-origin Item)";
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+    @"%source": Span(@"%Source_origin".Ty),
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
+    var @"%source_mut" = ctx_buf(ctx, @"%Source_origin", @"%Item");
     const @"%source_slice" = try @"%source_mut".spanSlice(ctx, @"%source");
-    var @"%buf_mut" = ctx.@"buf(Origin Item)";
+    var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
     const @"%combined_span" = try @"%buf_mut".spanAddSlice(ctx, @"%span", @"%source_slice");
     @"%source_mut".dropSpan(@"%source");
     return @"%combined_span";
 }
 pub fn span_add_opt_span(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%Source_origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%Source_origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
-    @"%opt_source": Opt(Span(@"%Source_origin")),
-) Error!Span(@"%Origin", @"%Item") {
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+    @"%opt_source": Opt(Span(@"%Source_origin".Ty)),
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
     switch (@"%opt_source") {
         .no => {
             return .{ .no = {} };
@@ -1738,24 +1943,24 @@ pub fn span_add_opt_span(
     }
 }
 pub fn opt_span_add_span(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%Source_origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%Source_origin": SlugType,
     ctx: anytype,
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
-    @"%source": Span(@"%Source_origin", @"%Item"),
-) Error!Span(@"%Origin", @"%Item") {
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%source": Span(@"%Source_origin".Ty, @"%Item".Ty),
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
     switch (@"%opt_span") {
         .no => {
             var @"%source_mut" = ctx.@"buf(Source-origin Item)";
             const @"%source_slice" = try @"%source_mut".spanSlice(ctx, @"%source");
-            var @"%buf_mut" = ctx.@"buf(Origin Item)";
+            var @"%buf_mut" = ctx_buf(ctx, @"%Origin", @"%Item");
             const @"%combined_span" = try @"%buf_mut".addSlice(ctx, @"%source_slice");
             @"%source_mut".dropSpan(@"%source");
             return .{
                 .source = @"%source",
                 .span = @"%combined_span".yes,
-                .buf = ctx.@"buf(Origin Item)",
+                .buf = ctx_buf(ctx, @"%Origin", @"%Item"),
             };
         },
         .yes => |@"%span"| {
@@ -1764,13 +1969,13 @@ pub fn opt_span_add_span(
     }
 }
 pub fn opt_span_add_opt_span(
-    @"%Item": type,
-    @"%Origin": type,
-    @"%Source_origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
+    comptime @"%Source_origin": SlugType,
     ctx: anytype,
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
-    @"%opt_source": Opt(Span(@"%Source_origin", @"%Item")),
-) Error!Opt(Span(@"%Origin", @"%Item")) {
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%opt_source": Opt(Span(@"%Source_origin".Ty, @"%Item".Ty)),
+) Error!Opt(Span(@"%Origin".Ty, @"%Item".Ty)) {
     switch (@"%opt_source") {
         .no => {
             return .{ .no = {} };
@@ -1781,163 +1986,140 @@ pub fn opt_span_add_opt_span(
     }
 }
 pub fn span_add_own_span(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%": Record(struct {
-        buf: Buf(@"%Origin", @"%Item"),
-        end: Span(@"%Origin", @"%Item"),
-        start: Span(@"%Origin", @"%Item"),
-    }),
-) Error!Record(struct { buf: Buf(@"%Origin", @"%Item"), span: Span(@"%Origin", @"%Item") }) {
-    const @"%combined_span" = try ctx.@"buf(Origin Item)".spanAddOwnSpan(ctx, @"%".start, @"%".end);
-    return .{
-        .span = @"%combined_span",
-        .buf = ctx.@"buf(Origin Item)",
-    };
+    @"%start": Span(@"%Origin".Ty, @"%Item".Ty),
+    @"%end": Span(@"%Origin".Ty, @"%Item".Ty),
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
+    return ctx_buf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end");
 }
 pub fn opt_span_add_own_span(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%": Record(struct {
-        buf: Buf(@"%Origin", @"%Item"),
-        end: Span(@"%Origin", @"%Item"),
-        start: Opt(Span(@"%Origin", @"%Item")),
-    }),
-) Error!Record(struct { buf: Buf(@"%Origin", @"%Item"), span: Span(@"%Origin", @"%Item") }) {
-    switch (@"%".start) {
-        .no => return .{ .buf = ctx.@"buf(Origin Item)", .span = @"%".end },
+    @"%opt_start": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%end": Span(@"%Origin".Ty, @"%Item".Ty),
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
+    switch (@"%opt_start") {
+        .no => return @"%end",
         .yes => |@"%start"| {
-            const @"%combined_span" = try ctx.@"buf(Origin Item)".spanAddOwnSpan(ctx, @"%start", @"%".end);
-            return .{
-                .span = @"%combined_span",
-                .buf = ctx.@"buf(Origin Item)",
-            };
+            return ctx_buf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end");
         },
     }
 }
 pub fn span_add_own_opt_span(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%": Record(struct {
-        buf: Buf(@"%Origin", @"%Item"),
-        end: Opt(Span(@"%Origin", @"%Item")),
-        start: Span(@"%Origin", @"%Item"),
-    }),
-) Error!Record(struct { buf: Buf(@"%Origin", @"%Item"), span: Span(@"%Origin", @"%Item") }) {
-    switch (@"%".end) {
-        .no => return .{ .buf = ctx.@"buf(Origin Item)", .span = @"%".start },
+    @"%start": Span(@"%Origin".Ty, @"%Item".Ty),
+    @"%opt_end": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
+    switch (@"%opt_end") {
+        .no => return @"%start",
         .yes => |@"%end"| {
-            const @"%combined_span" = try ctx.@"buf(Origin Item)".spanAddOwnSpan(ctx, @"%".start, @"%end");
-            return .{
-                .span = @"%combined_span",
-                .buf = ctx.@"buf(Origin Item)",
-            };
+            return ctx_buf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end");
         },
     }
 }
 pub fn opt_span_add_own_opt_span(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%": Record(struct {
-        buf: Buf(@"%Origin", @"%Item"),
-        end: Opt(Span(@"%Origin", @"%Item")),
-        start: Opt(Span(@"%Origin", @"%Item")),
-    }),
-) Error!Record(struct { buf: Buf(@"%Origin", @"%Item"), span: Span(@"%Origin", @"%Item") }) {
-    switch (@"%".start) {
-        .no => return .{ .buf = ctx.@"buf(Origin Item)", .span = @"%".end },
+    @"%opt_start": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%opt_end": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
+    switch (@"%opt_start") {
+        .no => return @"%opt_end",
         .yes => |@"%start"| {
-            switch (@"%".end) {
-                .no => return .{ .buf = ctx.@"buf(Origin Item)", .span = .{ .yes = @"%start" } },
+            switch (@"%opt_end") {
+                .no => return .{ .yes = @"%start" },
                 .yes => |@"%end"| {
-                    const @"%combined_span" = try ctx.@"buf(Origin Item)".spanAddOwnSpan(ctx, @"%start", @"%end");
-                    return .{
-                        .span = .{ .yes = @"%combined_span" },
-                        .buf = ctx.@"buf(Origin Item)",
-                    };
+                    const @"%combined_span" = try ctx_buf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end");
+                    return .{ .yes = @"%combined_span" };
                 },
             }
         },
     }
 }
 pub fn span_move_to_unset(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
-) Span(@"%Origin", @"%Item") {
-    const @"%moved_span" = ctx.@"buf(Origin Item)".spanMoveToUnset(@"%span");
-    return .{ .buf = ctx.@"buf(Origin Item)", .span = @"%moved_span" };
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+) Span(@"%Origin".Ty, @"%Item".Ty) {
+    return ctx_buf(ctx, @"%Origin", @"%Item").spanMoveToUnset(@"%span");
 }
 pub fn opt_span_move_to_unset(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
-) Opt(Span(@"%Origin", @"%Item")) {
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+) Opt(Span(@"%Origin".Ty, @"%Item".Ty)) {
     switch (@"%opt_span") {
         .no => return .{ .no = {} },
         .yes => |@"%span"| {
-            const @"%moved_span" = ctx.@"buf(Origin Item)".spanMoveToUnset(@"%span");
+            const @"%moved_span" = ctx_buf(ctx, @"%Origin", @"%Item").spanMoveToUnset(@"%span");
             return .{ .yes = @"%moved_span" };
         },
     }
 }
 pub fn span_move_to_end(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
-) Span(@"%Origin", @"%Item") {
-    const @"%moved_span" = ctx.@"buf(Origin Item)".spanMoveToEnd(ctx, @"%span");
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+) Span(@"%Origin".Ty, @"%Item".Ty) {
+    const @"%moved_span" = ctx_buf(ctx, @"%Origin", @"%Item").spanMoveToEnd(ctx, @"%span");
     return @"%moved_span";
 }
 pub fn opt_span_move_to_end(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
-) Opt(Span(@"%Origin", @"%Item")) {
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+) Opt(Span(@"%Origin".Ty, @"%Item".Ty)) {
     switch (@"%opt_span") {
         .no => return .{ .no = {} },
         .yes => |@"%span"| {
-            const @"%moved_span" = ctx.@"buf(Origin Item)".spanMoveToEnd(ctx, @"%span");
+            const @"%moved_span" = ctx_buf(ctx, @"%Origin", @"%Item").spanMoveToEnd(ctx, @"%span");
             return .{ .yes = @"%moved_span" };
         },
     }
 }
 pub fn span_reverse(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Span(@"%Origin", @"%Item"),
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) void {
-    ctx.@"buf(Origin Item)".spanReverse(@"%span");
-    ctx.@"buf(Origin Item)".dropSpan(ctx, @"%span", ctx.@"drop Item");
+    ctx_buf(ctx, @"%Origin", @"%Item").spanReverse(@"%span");
+    ctx_buf(ctx, @"%Origin", @"%Item").dropSpan(ctx.allocator, ctx, @"%span", @"%Origin".drop);
 }
 pub fn opt_span_reverse(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%span": Opt(Span(@"%Origin", @"%Item")),
-) Record(struct { buf: Buf(@"%Origin", @"%Item"), span: Opt(Span(@"%Origin", @"%Item")) }) {
-    ctx.@"buf(Origin Item)".optSpanReverse(@"%span");
+    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
+) void {
+    switch (@"%opt_span") {
+        .no => {},
+        .yes => |@"%span"| {
+            ctx_buf(ctx, @"%Origin", @"%Item").optSpanReverse(@"%span");
+        },
+    }
 }
 pub fn span_sort(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%order": *const fn (@"%Item", @"%Item") Error!Order,
-    @"%span": Span(@"%Origin", @"%Item"),
+    @"%order": *const fn (Ctx(&.{@"%Item".Bufs}), @"%Item".Ty, @"%Item".Ty) Error!Order,
+    @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) Error!void {
     const @"%SortState" = struct {
         buf_items: []@"%Item",
         order: @TypeOf(@"%order"),
-        allocator: std.mem.Allocator,
+        ctx: @TypeOf(ctx),
         is_out_of_memory: *bool,
     };
     const @"%span_slice_offsets" = try ctx.allocator.alloc(usize, @"%span".length.positive);
@@ -1949,9 +2131,9 @@ pub fn span_sort(
         usize,
         @"%span_slice_offsets",
         @"%SortState"{
-            .buf_items = ctx.@"buf(Origin Item)".items.items,
+            .buf_items = ctx_buf(ctx, @"%Origin", @"%Item").items.items,
             .order = @"%order",
-            .allocator = ctx,
+            .ctx = ctx,
             .is_out_of_memory = &@"%is_out_of_memory",
         },
         struct {
@@ -1959,7 +2141,7 @@ pub fn span_sort(
                 const @"%left" = &@"%state".buf_items[@"%left_offset"];
                 const @"%right" = &@"%state".buf_items[@"%right_offset"];
                 const @"%ordered" = @"%state".order(
-                    @"%state".allocator,
+                    @"%state".ctx,
                     .{ .left = @"%left".*, .right = @"%right".* },
                 ) catch {
                     @"%state".is_out_of_memory.* = true;
@@ -1979,7 +2161,7 @@ pub fn span_sort(
         ctx.allocator.free(@"%span_slice_offsets");
         return error.OutOfMemory;
     }
-    const @"%span_slice" = ctx.@"buf(Origin Item)".spanSlice(@"%span");
+    const @"%span_slice" = ctx_buf(ctx, @"%Origin", @"%Item").spanSlice(@"%span");
     for (@"%span_slice_offsets", 0..) |@"%sorted_offset", @"%offset"| {
         if (@"%sorted_offset" > @"%offset") {
             std.mem.swap(
@@ -1991,14 +2173,14 @@ pub fn span_sort(
     }
     ctx.allocator.free(@"%span_slice_offsets");
     // TODO should probably be done earlier
-    ctx.@"buf(Origin Item)".dropSpan(ctx, @"%span", ctx.@"drop Item");
+    ctx_buf(ctx, @"%Origin", @"%Item").dropSpan(ctx, @"%span", @"%Item".drop);
 }
 pub fn opt_span_sort(
-    @"%Item": type,
-    @"%Origin": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
-    @"%order": *const fn (@"%Item", @"%Item") Error!Order,
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%order": *const fn (Ctx(&.{@"%Item".Bufs}), @"%Item".Ty, @"%Item".Ty) Error!Order,
 ) Error!void {
     switch (@"%opt_span") {
         .no => {
@@ -2016,23 +2198,25 @@ pub fn opt_span_sort(
     }
 }
 pub fn buf_to_unset(
-    @"%Item": type,
+    comptime @"%Item": SlugType,
+    comptime @"%Origin": SlugType,
     ctx: anytype,
+    @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
 ) Unset_slice(@"%Item") {
-    return ctx.@"buf(Origin Item)".intoUnsetSlice(ctx.allocator);
+    return @"%buf".intoUnsetSlice(ctx.allocator);
 }
 pub fn unset_slice_allocate_length(
-    @"%Item": type,
+    comptime @"%Item": SlugType,
     ctx: anytype,
     @"%length": U32,
-) Error!Unset_slice(@"%Item") {
-    return Unset_slice(@"%Item").allocateLength(ctx, @"%length");
+) Error!Unset_slice(@"%Item".Ty) {
+    return Unset_slice(@"%Item".Ty).allocateLength(ctx, @"%length");
 }
 pub fn unset_slice_cast_or_rid_and_allocate(
-    @"%Item": type,
-    @"%NewItem": type,
+    comptime @"%Item": SlugType,
+    comptime @"%New_item": SlugType,
     ctx: anytype,
-    @"%unset_slice": Unset_slice(@"%Item"),
-) Error!Unset_slice(@"%NewItem") {
-    return @"%unset_slice".castOrRidAndAllocate(@"%NewItem", ctx.allocator);
+    @"%unset_slice": Unset_slice(@"%Item".Ty),
+) Error!Unset_slice(@"%New_item") {
+    return @"%unset_slice".castOrRidAndAllocate(@"%New_item".Ty, ctx.allocator);
 }

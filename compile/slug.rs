@@ -4592,18 +4592,20 @@ fn function_signature_implicit_bufs<'a>(
         }
     }
     if let Some(result) = result {
-        let mut result_type_bufs_to_ignore = std::collections::HashSet::new();
-        type_reachable_bufs(result, vec![], type_aliases, &mut |newly_reachable, _| {
-            result_type_bufs_to_ignore.insert(newly_reachable);
-        });
-        type_implicit_bufs(
-            result,
-            &result_type_bufs_to_ignore,
-            type_aliases,
-            &mut type_bufs,
-        );
+        type_insert_implicit_bufs_ignoring_reachable(result, type_aliases, &mut type_bufs);
     }
     type_bufs
+}
+fn type_insert_implicit_bufs_ignoring_reachable(
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+    type_bufs: &mut std::collections::HashSet<TypeBuf>,
+) {
+    let mut type_bufs_to_ignore = std::collections::HashSet::new();
+    type_reachable_bufs(type_, vec![], type_aliases, &mut |newly_reachable, _| {
+        type_bufs_to_ignore.insert(newly_reachable);
+    });
+    type_implicit_bufs(type_, &type_bufs_to_ignore, type_aliases, type_bufs);
 }
 /// use in combination with `type_reachable_bufs` to exclude already present bufs
 fn type_implicit_bufs(
@@ -4804,6 +4806,7 @@ pub fn checked_project_to_zig(
                 checked_type_alias_name,
                 &checked_type_alias.parameters,
                 checked_aliased_type,
+                checked_type_aliases,
             );
         }
     }
@@ -4878,6 +4881,7 @@ fn project_type_alias_to_zig(
     name: &Name,
     parameters: &[Name],
     aliased_type: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     if let Some(documentation) = maybe_documentation {
         for documentation_line in documentation.lines() {
@@ -4890,15 +4894,16 @@ fn project_type_alias_to_zig(
         output.push_str("pub const ");
         output.push_str(&name_to_uppercase_zig(name));
         output.push_str(": type = ");
-        type_to_zig(output, aliased_type);
+        type_to_zig(output, aliased_type, type_aliases);
         output.push(';');
     } else {
         output.push_str("pub fn ");
         output.push_str(&name_to_uppercase_zig(name));
         output.push('(');
         for parameter in parameters {
+            output.push_str("comptime ");
             name_to_uppercase_local_zig(output, parameter);
-            output.push_str(": type, ");
+            output.push_str(": SlugType, ");
         }
         output.push_str(") type {\n");
         for parameter in parameters {
@@ -4908,7 +4913,7 @@ fn project_type_alias_to_zig(
             output.push_str(");\n");
         }
         output.push_str("return ");
-        type_to_zig(output, aliased_type);
+        type_to_zig(output, aliased_type, type_aliases);
         output.push_str("; }");
     }
     output.push_str("\n\n");
@@ -4947,8 +4952,9 @@ fn syntax_project_fn_to_zig(
     }
     type_variables_into(&mut type_parameters, result_type);
     for type_parameter in type_parameters {
+        output.push_str("comptime ");
         name_to_uppercase_local_zig(output, type_parameter);
-        output.push_str(": type, ");
+        output.push_str(": SlugType, ");
     }
     zig_context_variable(output, function_scope_start);
     output.push_str(": anytype");
@@ -4957,10 +4963,10 @@ fn syntax_project_fn_to_zig(
         use std::fmt::Write as _;
         _ = write!(output, "{}", parameter_index);
         output.push_str("\": ");
-        type_to_zig(output, parameter_type);
+        type_to_zig(output, parameter_type, type_aliases);
     }
     output.push_str(") Error!");
-    type_to_zig(output, result_type);
+    type_to_zig(output, result_type, type_aliases);
     output.push_str(" {\n");
     let mut parameter_introduced_variables = std::collections::HashMap::new();
     let mut parameter_introduced_reachable_bufs = std::collections::HashMap::new();
@@ -5025,20 +5031,22 @@ fn zig_update_context_variable_with_new_reachable_bufs(
     } else {
         output.push_str("structMerge(");
         zig_context_variable(output, previous_context_scope_start);
-        output.push_str(", .{ ");
-        for (introduced_type_buf, (zig_path, buf_reach_path)) in introduced_reachable_bufs {
-            output.push('.');
-            type_buf_zig_field_name(
-                output,
-                &introduced_type_buf.origin,
-                &introduced_type_buf.item,
-            );
-            output.push_str(" = ");
+        output.push_str(", struct_from_fields(&.{");
+        for introduced_type_buf in introduced_reachable_bufs.keys() {
+            output.push_str("ctx_buf_name(");
+            sloe_type_name_zig(output, &introduced_type_buf.origin);
+            output.push_str(", ");
+            sloe_type_name_zig(output, &introduced_type_buf.item);
+            output.push_str("), ");
+        }
+        output.push_str("}, .{");
+        for (zig_path, buf_reach_path) in introduced_reachable_bufs.values() {
+            output.push('&'); // TODO remove once zig innternal representation of Buf changes to *Rc(BufCore)
             output.push_str(zig_path.as_ref());
             reachable_type_buf_path_js(output, buf_reach_path);
             output.push_str(", ");
         }
-        output.push_str("})");
+        output.push_str("}))");
     }
     output.push_str(";\n_ = @TypeOf(");
     zig_context_variable(output, new_context_scope_start);
@@ -5068,6 +5076,7 @@ fn syntax_pattern_to_zig_matches_condition(
             output.push_str("true");
         }
         SyntaxPattern::Variant { name, values } => {
+            // not sure if std.mem.eql(@tagName(...), "...") would simpler
             output.push_str("switch (");
             output.push_str(to_match);
             output.push_str(") { .");
@@ -5131,10 +5140,10 @@ fn syntax_pattern_to_zig_matches_condition(
 fn syntax_pattern_to_zig_destructuring<'a>(
     output: &mut String,
     pattern: &'a SyntaxPattern,
-    expected_type: Option<&Type>,
+    expected_type: Option<&'a Type>,
     to_destructure: &str, // tiny possible optimization: pass Cow<'b, str> and use that as zig path
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-    introduced_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
+    introduced_variables: &mut std::collections::HashMap<&'a Name, ZigLocalVariable<'a>>,
     introduced_reachable_bufs: &mut std::collections::HashMap<
         TypeBuf,
         (/* zig path */ Box<str>, Vec<BufReachPathSegment>),
@@ -5149,7 +5158,19 @@ fn syntax_pattern_to_zig_destructuring<'a>(
             output.push_str(";\n_ = @TypeOf(");
             name_to_lowercase_local_zig_introduced_at(output, &name.value, name.start);
             output.push_str(");\n");
-            introduced_variables.insert(&name.value, name.start);
+            introduced_variables.insert(
+                &name.value,
+                ZigLocalVariable {
+                    introduced_start: name.start,
+                    type_: expected_type
+                        .map(|expected_type| std::borrow::Cow::Borrowed(expected_type))
+                        .or_else(|| {
+                            type_
+                                .as_ref()
+                                .map(|type_| std::borrow::Cow::Owned(syntax_type_to_type(type_)))
+                        }),
+                },
+            );
             if let Some(variable_type) = expected_type
                 .map(|expected_type| std::borrow::Cow::Borrowed(expected_type))
                 .or_else(|| {
@@ -5281,6 +5302,11 @@ enum ZigReturnContext {
     Expression,
     StatementsFollowedByBreak(lsp_types::Position),
 }
+#[derive(Debug, Clone)]
+struct ZigLocalVariable<'a> {
+    introduced_start: lsp_types::Position,
+    type_: Option<std::borrow::Cow<'a, Type>>,
+}
 fn syntax_expression_to_zig<'a>(
     output: &mut String,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
@@ -5288,8 +5314,8 @@ fn syntax_expression_to_zig<'a>(
     expressions: &'a Buf<Expressions, SyntaxExpression>,
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
-    checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
-    local_variables: &mut std::collections::HashMap<&'a Name, lsp_types::Position>,
+    checked_queries: &'a std::collections::HashMap<lsp_types::Position, CheckedQuery>,
+    local_variables: &mut std::collections::HashMap<&'a Name, ZigLocalVariable<'a>>,
     expression: &'a SyntaxExpression,
     function_scope_start: lsp_types::Position,
     context_scope_start: lsp_types::Position,
@@ -5417,11 +5443,11 @@ fn syntax_expression_to_zig<'a>(
             if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
                 zig_break_start(output, label);
             }
-            if let Some(&local_variable_introduced_start) = local_variables.get(&name.value) {
+            if let Some(local_variable) = local_variables.get(&name.value) {
                 name_to_lowercase_local_zig_introduced_at(
                     output,
                     &name.value,
-                    local_variable_introduced_start,
+                    local_variable.introduced_start,
                 );
             } else {
                 name_to_lowercase_local_zig(output, &name.value);
@@ -5441,7 +5467,7 @@ fn syntax_expression_to_zig<'a>(
             let maybe_first_argument = first_argument_dot
                 .as_ref()
                 .map(|first_argument_dot| expressions.item(&first_argument_dot.argument));
-            if let Some(project_fn) = project_fns.get(&name.value)
+            if let Some(_project_fn) = project_fns.get(&name.value)
                 && let Some(checked_call) = checked_calls.get(&name.start)
             {
                 if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
@@ -5455,20 +5481,15 @@ fn syntax_expression_to_zig<'a>(
                 output.push_str(&name_to_lowercase_zig(&name.value));
                 output.push('(');
                 for type_variable_argument in checked_call.type_variable_replacements.values() {
-                    type_to_zig(output, type_variable_argument);
+                    slug_type_zig(output, type_variable_argument, type_aliases);
                     output.push_str(", ");
                 }
-                let implicit_bufs = function_signature_implicit_bufs(
-                    project_fn.parameter_types.iter().flatten(),
-                    project_fn.result_type.as_ref(),
-                    type_aliases,
-                );
                 specialize_implicits_zig_comma(
                     output,
                     context_scope_start,
-                    &implicit_bufs,
                     &checked_call.type_variable_replacements,
-                    type_aliases,
+                    is_core_fn_taking_allocator_in_zig(&name.value)
+                        || !core_fns.contains_key(&name.value),
                 );
                 for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
                     syntax_expression_to_zig(
@@ -5491,7 +5512,12 @@ fn syntax_expression_to_zig<'a>(
                 if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
                     zig_break_end(output);
                 }
-            } else if let Some(&local_variable_introduced_start) = local_variables.get(&name.value)
+            } else if let Some(local_variable) = local_variables.get(&name.value)
+                && let Some(local_variable_type) = &local_variable.type_
+                && let Type::Fn {
+                    parameters: local_variable_type_parameters,
+                    result: local_variable_type_result,
+                } = type_alias_resolve_to_non_alias(local_variable_type, type_aliases).as_ref()
             {
                 if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
                     zig_break_start(output, label);
@@ -5500,11 +5526,18 @@ fn syntax_expression_to_zig<'a>(
                 name_to_lowercase_local_zig_introduced_at(
                     output,
                     &name.value,
-                    local_variable_introduced_start,
+                    local_variable.introduced_start,
                 );
-                output.push('(');
+                output.push_str("(struct_subset(");
                 zig_context_variable(output, context_scope_start);
                 output.push_str(", ");
+                type_fn_context_zig_type(
+                    output,
+                    local_variable_type_parameters,
+                    local_variable_type_result,
+                    type_aliases,
+                );
+                output.push_str("), ");
                 for argument in maybe_first_argument.into_iter().chain(arguments_rest) {
                     syntax_expression_to_zig(
                         output,
@@ -5540,7 +5573,9 @@ fn syntax_expression_to_zig<'a>(
                 zig_incomplete_expression(output);
                 return;
             };
-            let Type::Choice(provided_type_variants) = syntax_type_to_type(syntax_type) else {
+            let type_ = syntax_type_to_type(syntax_type);
+            let type_ = type_alias_resolve_to_non_alias(&type_, type_aliases);
+            let Type::Choice(provided_type_variants) = type_.as_ref() else {
                 zig_incomplete_expression(output);
                 return;
             };
@@ -5644,7 +5679,7 @@ fn syntax_expression_to_zig<'a>(
             for (_, type_variant_value) in type_variants_sorted {
                 match type_variant_value {
                     Some(type_variant_value) => {
-                        variant_values_type_to_zig(output, type_variant_value);
+                        variant_values_type_to_zig(output, type_variant_value, type_aliases);
                     }
                     None => {
                         output.push_str("@TypeOf(");
@@ -5687,26 +5722,33 @@ fn syntax_expression_to_zig<'a>(
             if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
                 zig_break_start(output, label);
             }
-            output.push_str("@as(*const fn(anytype, ");
-            for parameter_type in &checked_local_fn.parameter_types {
-                type_to_zig(output, parameter_type);
-                output.push_str(", ");
-            }
-            output.push_str(") Error!");
-            type_to_zig(output, &checked_local_fn.result_type);
+            output.push_str("@as(");
+            type_fn_to_zig(
+                output,
+                &checked_local_fn.parameter_types,
+                &checked_local_fn.result_type,
+                type_aliases,
+            );
             output.push_str(", struct {\npub fn f(");
             zig_context_variable(output, local_function_scope_start);
-            output.push_str(": anytype, ");
+            output.push_str(": ");
+            type_fn_context_zig_type(
+                output,
+                &checked_local_fn.parameter_types,
+                &checked_local_fn.result_type,
+                type_aliases,
+            );
+            output.push_str(", ");
             for (parameter, parameter_type) in
                 parameters.iter().zip(&checked_local_fn.parameter_types)
             {
                 function_parameter_name(output, pattern_start(parameter));
                 output.push_str(": ");
-                type_to_zig(output, parameter_type);
+                type_to_zig(output, parameter_type, type_aliases);
                 output.push(',');
             }
             output.push_str(") Error!");
-            type_to_zig(output, &checked_local_fn.result_type);
+            type_to_zig(output, &checked_local_fn.result_type, type_aliases);
             output.push_str(" {\n");
             output.push_str("_ = @TypeOf(");
             zig_context_variable(output, local_function_scope_start);
@@ -6109,19 +6151,31 @@ fn syntax_expression_to_zig<'a>(
 fn specialize_implicits_zig_comma(
     output: &mut String,
     context_variable_scope_start: lsp_types::Position,
-    implicit_bufs: &std::collections::HashSet<TypeBuf>,
     type_variables_to_substitute: &std::collections::BTreeMap<Name, Type>,
-    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+    takes_allocator: bool,
 ) {
     if type_variables_to_substitute.is_empty() {
-        if implicit_bufs.is_empty() {
-        } else {
+        if takes_allocator {
             zig_context_variable(output, context_variable_scope_start);
             output.push_str(", ");
         }
     } else {
-        output.push_str(".{");
-        for implicit_buf in implicit_bufs {
+        zig_context_variable(output, context_variable_scope_start);
+        output.push_str(", ");
+        /* above should work. Previously each field name was individually specialized.
+        // we include all implicit bufs for each variable in type_variable_replacements
+        // because local functions _require_ having those passed
+        for (_, type_variable_replacement) in type_variables_to_substitute {
+            type_insert_implicit_bufs_ignoring_reachable(
+                type_variable_replacement,
+                type_aliases,
+                implicit_bufs,
+            );
+        }
+        output.push_str(".{ .allocator = ");
+        zig_context_variable(output, context_variable_scope_start);
+        output.push_str(".allocator, ");
+        for implicit_buf in implicit_bufs.iter() {
             output.push('.');
             type_buf_zig_field_name(output, &implicit_buf.origin, &implicit_buf.item);
             output.push_str(" = ");
@@ -6154,28 +6208,123 @@ fn specialize_implicits_zig_comma(
             );
             output.push_str(", ");
         }
-        // TODO
-        // for (type_variable, type_variable_replacement_type) in type_variables_to_substitute {
-        //     output.push_str(".@\"drop ");
-        //     output.push_str(type_variable);
-        //     output.push_str("\" = ");
-        //     zig_drop_function(output, type_variable_replacement_type, type_aliases);
-        //     output.push_str(", ");
-        //     output.push_str(".@\"clone ");
-        //     output.push_str(type_variable);
-        //     output.push_str("\" = ");
-        //     zig_clone_function(output, type_variable_replacement_type, type_aliases);
-        //     output.push_str(", ");
-        // }
         output.push_str("}, ");
+        */
     }
 }
-fn type_buf_zig_field_name(output: &mut String, origin: &Type, item: &Type) {
-    output.push_str("@\"buf(");
-    type_format_single_line(output, origin);
-    output.push(' ');
-    type_format_single_line(output, item);
-    output.push_str(")\"");
+fn slug_type_zig(
+    output: &mut String,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    if let Type::Variable(type_variable) = type_ {
+        name_to_uppercase_local_zig(output, type_variable);
+        return;
+    }
+    output.push_str(".{ .name = ");
+    // can be optimized
+    let mut type_dealiased = type_.clone();
+    type_fully_resolve_aliases(&mut type_dealiased, &mut Vec::new(), type_aliases);
+    sloe_type_name_zig(output, &type_dealiased);
+    output.push_str(", .Ty = ");
+    type_to_zig(output, type_, type_aliases);
+    output.push_str(", .drop = ");
+    output.push_str("undefined"); // TODO remove and replace with
+    //     zig_drop_function(output, type_variable_replacement_type, type_aliases);
+    output.push_str(", .clone = ");
+    output.push_str("undefined"); // TODO remove and replace with
+    //     zig_clone_function(output, type_variable_replacement_type, type_aliases);
+    output.push_str(", }");
+}
+pub fn type_format_single_line_with_zig_variables(formatted: &mut String, type_: &Type) {
+    match type_ {
+        Type::Variable(name) => {
+            formatted.push_str("\" ++ ");
+            name_to_uppercase_local_zig(formatted, name);
+            formatted.push_str(".name ++ \"");
+        }
+        Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
+            formatted.push_str(name);
+            if let Some((argument0, argument1_up)) = arguments.split_first() {
+                formatted.push('(');
+                type_format_single_line_with_zig_variables(formatted, argument0);
+                for argument in argument1_up {
+                    formatted.push(' ');
+                    type_format_single_line_with_zig_variables(formatted, argument);
+                }
+                formatted.push(')');
+            }
+        }
+        Type::Fn { parameters, result } => {
+            formatted.push_str("fn(");
+            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
+                type_format_single_line_with_zig_variables(formatted, parameter0);
+                for parameter in parameter1_up {
+                    formatted.push(' ');
+                    type_format_single_line_with_zig_variables(formatted, parameter);
+                }
+            }
+            formatted.push_str(") ");
+            type_format_single_line_with_zig_variables(formatted, result);
+        }
+        Type::Tuple(parts) => {
+            formatted.push('*');
+            if let Some((part0, part1_up)) = parts.split_first() {
+                formatted.push('(');
+                type_format_single_line_with_zig_variables(formatted, part0);
+                for part in part1_up {
+                    formatted.push(' ');
+                    type_format_single_line_with_zig_variables(formatted, part);
+                }
+                formatted.push(')');
+            }
+        }
+        Type::Record(fields) => {
+            fn type_field_format_single_line_with_zig_variables(
+                formatted: &mut String,
+                type_field: &TypeField,
+            ) {
+                formatted.push_str(&type_field.name);
+                formatted.push(' ');
+                type_format_single_line_with_zig_variables(formatted, &type_field.value);
+            }
+            formatted.push('{');
+            if let Some((field0, field1_up)) = fields.split_first() {
+                type_field_format_single_line_with_zig_variables(formatted, field0);
+                for field in field1_up {
+                    formatted.push(' ');
+                    type_field_format_single_line_with_zig_variables(formatted, field);
+                }
+            }
+            formatted.push('}');
+        }
+        Type::Choice(variants) => {
+            fn type_variant_format_single_line_with_zig_variables(
+                formatted: &mut String,
+                type_variant: &TypeVariant,
+            ) {
+                formatted.push_str(&type_variant.name);
+                if let Some((value0, value1_up)) = type_variant.values.split_first() {
+                    formatted.push('(');
+                    type_format_single_line_with_zig_variables(formatted, value0);
+                    for variant_value in value1_up {
+                        formatted.push(' ');
+                        type_format_single_line_with_zig_variables(formatted, variant_value);
+                    }
+                    formatted.push(')');
+                }
+            }
+            formatted.push('[');
+            if let Some((variant0, variant1_up)) = variants.split_first() {
+                type_variant_format_single_line_with_zig_variables(formatted, variant0);
+                for variant in variant1_up {
+                    formatted.push(' ');
+                    type_variant_format_single_line_with_zig_variables(formatted, variant);
+                }
+            }
+            formatted.push(']');
+        }
+    }
 }
 fn zig_block_start(output: &mut String, label: lsp_types::Position) {
     zig_block_label_for_start_position(output, label);
@@ -6200,16 +6349,23 @@ fn zig_block_label_for_start_position(output: &mut String, position: lsp_types::
     _ = write!(output, "{}", position.character);
     output.push('"');
 }
-fn type_to_zig(output: &mut String, type_: &Type) {
+fn type_to_zig(
+    output: &mut String,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
     match type_ {
-        Type::Variable(name) => name_to_uppercase_local_zig(output, name),
+        Type::Variable(name) => {
+            name_to_uppercase_local_zig(output, name);
+            output.push_str(".Ty");
+        }
         Type::Tuple(parts) => {
             if parts.is_empty() {
                 output.push_str(empty_zig_type_name);
             } else {
                 output.push_str("struct { ");
                 for part in parts {
-                    type_to_zig(output, part);
+                    type_to_zig(output, part, type_aliases);
                     output.push_str(", ");
                 }
                 output.push('}');
@@ -6225,7 +6381,7 @@ fn type_to_zig(output: &mut String, type_: &Type) {
                 for TypeField { name, value } in fields_sorted {
                     output.push_str(&name_to_lowercase_zig(name));
                     output.push_str(": ");
-                    type_to_zig(output, value);
+                    type_to_zig(output, value, type_aliases);
                     output.push_str(", ");
                 }
                 output.push_str("})");
@@ -6243,7 +6399,7 @@ fn type_to_zig(output: &mut String, type_: &Type) {
                 );
                 output.push('(');
                 for TypeVariant { name: _, values } in variants_sorted {
-                    variant_values_type_to_zig(output, values);
+                    variant_values_type_to_zig(output, values, type_aliases);
                     output.push_str(", ");
                 }
                 output.push(')');
@@ -6251,16 +6407,16 @@ fn type_to_zig(output: &mut String, type_: &Type) {
         }
         Type::CoreConstruct { name, arguments } => {
             // zig otherwise gets in trouble trying unroll "infinite" type aliases :(
-            if name != type_slot_name {
+            if name == type_slot_name {
                 output.push_str("SlotCore");
-            } else if name != type_span_name {
+            } else if name == type_span_name {
                 output.push_str("SpanCore");
             } else {
                 output.push_str(&name_to_uppercase_zig(name));
                 if !arguments.is_empty() {
                     output.push('(');
                     for argument in arguments {
-                        type_to_zig(output, argument);
+                        type_to_zig(output, argument, type_aliases);
                         output.push_str(", ");
                     }
                     output.push(')');
@@ -6272,42 +6428,100 @@ fn type_to_zig(output: &mut String, type_: &Type) {
             if !arguments.is_empty() {
                 output.push('(');
                 for argument in arguments {
-                    type_to_zig(output, argument);
+                    slug_type_zig(output, argument, type_aliases);
                     output.push_str(", ");
                 }
                 output.push(')');
             }
         }
         Type::Fn { parameters, result } => {
-            output.push_str("*const fn(anytype, ");
-            for parameter in parameters {
-                type_to_zig(output, parameter);
-                output.push_str(", ");
-            }
-            output.push_str(") Error!");
-            type_to_zig(output, result);
+            type_fn_to_zig(output, parameters, result, type_aliases);
         }
     }
 }
-fn variant_values_type_to_zig(output: &mut String, values: &[Type]) {
+fn type_fn_context_zig_type(
+    output: &mut String,
+    parameters: &[Type],
+    result: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    output.push_str("Ctx(&.{ ");
+    let mut type_variables = std::collections::BTreeSet::new();
+    for parameter in parameters {
+        type_variables_into(&mut type_variables, parameter);
+    }
+    type_variables_into(&mut type_variables, result);
+    for type_variable in type_variables {
+        name_to_uppercase_local_zig(output, type_variable);
+        output.push_str(".Bufs, ");
+    }
+    for implicit_buf in
+        function_signature_implicit_bufs(parameters.iter(), Some(result), type_aliases)
+    {
+        output.push_str("CtxBuf(");
+        zig_type_name_and_ty(output, &implicit_buf.origin, type_aliases);
+        output.push_str(", ");
+        zig_type_name_and_ty(output, &implicit_buf.item, type_aliases);
+        output.push_str("), ");
+    }
+    output.push_str("})");
+}
+fn type_fn_to_zig(
+    output: &mut String,
+    parameters: &[Type],
+    result: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    output.push_str("*const fn(");
+    type_fn_context_zig_type(output, parameters, result, type_aliases);
+    output.push_str(", ");
+    for parameter in parameters {
+        type_to_zig(output, parameter, type_aliases);
+        output.push_str(", ");
+    }
+    output.push_str(") Error!");
+    type_to_zig(output, result, type_aliases);
+}
+fn variant_values_type_to_zig(
+    output: &mut String,
+    values: &[Type],
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
     match values.len() {
         0 => {
             output.push_str(empty_zig_type_name);
         }
         1 => {
             if let Some(value) = values.first() {
-                type_to_zig(output, value);
+                type_to_zig(output, value, type_aliases);
             }
         }
         2.. => {
             output.push_str("struct { ");
             for value in values {
-                type_to_zig(output, value);
+                type_to_zig(output, value, type_aliases);
                 output.push_str(", ");
             }
             output.push('}');
         }
     }
+}
+fn zig_type_name_and_ty(
+    output: &mut String,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    output.push_str(".{ .Ty = ");
+    type_to_zig(output, type_, type_aliases);
+    output.push_str(", .name = ");
+    sloe_type_name_zig(output, type_);
+    output.push_str(" }");
+}
+fn sloe_type_name_zig(output: &mut String, type_: &Type) {
+    // can be made prettier by omitting "" ++ ..type_.. ++ "" when type_ is a variable
+    output.push('"');
+    type_format_single_line_with_zig_variables(output, type_);
+    output.push('"');
 }
 fn name_to_uppercase_zig(name: &str) -> String {
     let mut sanitized: String = name.replace("-", "_");
@@ -13308,7 +13522,11 @@ fn syntax_expression_format(
                 }
                 syntax_expression_format(formatted, indent, expressions, rest_argument0);
                 for argument in rest_argument1_up {
-                    space_or_linebreak_indented_into(formatted, arguments_line_span, indent);
+                    space_or_linebreak_indented_into(
+                        formatted,
+                        arguments_line_span,
+                        next_indent(indent),
+                    );
                     syntax_expression_format(formatted, indent, expressions, argument);
                 }
                 if arguments_line_span == LineSpan::Multiple {
