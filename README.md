@@ -219,19 +219,13 @@ cargo install --offline --debug --path . slug
 - drop and clone is implicit and happens after the last use. This is possible leak-free because a `slot` knows how to modify the associated `buf` in the scope it's in
 - positional arguments and otherwise familiar syntax
 - `.` syntax for piping the first argument
-- enabling nested origins or even type-identity origins if you don't care about at all
+- enabling nested origins or even type-identity origins (like Box<> or gc or shared_ptr)
 
 ## TODO
 - check that moving spans does a clone if necessary
-- switch to whereever necessary var @"%buf_mut" = ctx.@"buf(Origin Item)";
-- switch to whereever necessary from ctx to @"%allocator": std.mem.Allocator,
-- zig output prefer generating `Span/Slot(Origin, Item)` when outside of a recursive type alias and `SpanCore/SlotCore` within after one peel (?)
-- zig output local functions require a different way of passing context.
-  Easiest of which is probably to pass `bufs for Type-variable`
-  Much harder (but nicer) would be to introduce a `fn Context(ins: []type, out: type) type` which returns a struct with the necessary bufs for each slot and span excluding reachable bufs. With this function there could be a `Fn(ins: []type, out: type)` which auto-fills this in.
 - zig output generate clone and drop
+- represent zig Buf as Buf=*BufCore and pass reachable bufs as *BufCore, where BufCore is the current buf impl + reference_count: u16
 - when adding items (e.g. optSpanAdd), make sure to drop the item
-- represent zig Buf as Buf=Rc(BufCore) and pass reachable bufs as *BufCore 
 - add zig codegen
   Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
