@@ -6,10 +6,7 @@ pub fn main(init: std.process.Init) !void {
     var buf = slug.Buf(Origin, slug.Char).empty;
     const greeting = try slug.greet(
         .{ .Ty = Origin, .name = "Origin" },
-        .{
-            .allocator = init.arena.allocator(),
-            .@"buf(Origin char)" = &buf,
-        },
+        .{ .allocator = init.arena.allocator(), .@"buf(Origin char)" = &buf },
         slug.Str.fromComptime("world"),
     );
     for (buf.spanSlice(greeting)) |greeting_char| {

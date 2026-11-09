@@ -4851,14 +4851,14 @@ fn syntax_choice_to_zig(output: &mut String, variant_names: &[Name]) {
         name_to_uppercase_local_zig(output, variant_name);
         output.push_str(": type, ");
     }
-    output.push_str(") type { return union(enum) { ");
+    output.push_str(") type {\n    return union(enum) { ");
     for variant_name in variant_names {
         output.push_str(&name_to_lowercase_zig(variant_name));
         output.push_str(": ");
         name_to_uppercase_local_zig(output, variant_name);
         output.push_str(", ");
     }
-    output.push_str(" }; }\n\n");
+    output.push_str("};\n}\n\n");
 }
 fn variant_names_to_zig_choice_type_name<'a>(
     output: &mut String,
@@ -5031,9 +5031,9 @@ fn zig_update_context_variable_with_new_reachable_bufs(
     } else {
         output.push_str("structMerge(");
         zig_context_variable(output, previous_context_scope_start);
-        output.push_str(", struct_from_fields(&.{");
+        output.push_str(", structFromFields(&.{");
         for introduced_type_buf in introduced_reachable_bufs.keys() {
-            output.push_str("ctx_buf_name(");
+            output.push_str("ctxBufName(");
             sloe_type_name_zig(output, &introduced_type_buf.origin);
             output.push_str(", ");
             sloe_type_name_zig(output, &introduced_type_buf.item);
@@ -5041,7 +5041,7 @@ fn zig_update_context_variable_with_new_reachable_bufs(
         }
         output.push_str("}, .{");
         for (zig_path, buf_reach_path) in introduced_reachable_bufs.values() {
-            output.push('&'); // TODO remove once zig innternal representation of Buf changes to *Rc(BufCore)
+            output.push('&'); // TODO remove once zig internal representation of Buf changes to *Rc(BufCore)
             output.push_str(zig_path.as_ref());
             reachable_type_buf_path_js(output, buf_reach_path);
             output.push_str(", ");
@@ -5528,7 +5528,7 @@ fn syntax_expression_to_zig<'a>(
                     &name.value,
                     local_variable.introduced_start,
                 );
-                output.push_str("(struct_subset(");
+                output.push_str("(structSubset(");
                 zig_context_variable(output, context_scope_start);
                 output.push_str(", ");
                 type_fn_context_zig_type(
@@ -6132,7 +6132,7 @@ fn syntax_expression_to_zig<'a>(
                         }
                     }
                     if cases.len() >= 2 {
-                        output.push_str("\n}");
+                        output.push_str("\n} else ");
                     }
                 }
             }
@@ -6530,7 +6530,15 @@ fn name_to_uppercase_zig(name: &str) -> String {
     }
     // Not sure if type variables in core code can actually collide with generated type names?
     match sanitized.as_str() {
-        "Record" | "Range" | "StructMerge" | "Error" => sanitized + "ø",
+        "Record"
+        | "RecordWithFieldNames"
+        | "StructMerge"
+        | "StructMergeAll"
+        | "StructFromFields"
+        | "Ctx"
+        | "CtxBuf"
+        | "Error"
+        | "SlugType" => sanitized + "ø",
         _ => sanitized,
     }
 }
@@ -6586,12 +6594,17 @@ fn name_to_lowercase_local_zig_introduced_at(
     _ = write!(output, "{}", introduced_start.character);
     output.push('"');
 }
-const zig_unrelated_top_level_lowercase_names: [&str; 10] = [
+const zig_unrelated_top_level_lowercase_names: [&str; 15] = [
     local_unnamed_function_name,
     empty_zig_type_name,
     "std",
     "record",
-    "recordToArray",
+    "structMerge",
+    "structSubset",
+    "structFromFields",
+    "ctxBufName",
+    "ctxBuf",
+    "slugType",
     "u32AddOrOutOfMem",
     "usizeAddOrOutOfMem",
     "strideOf",
