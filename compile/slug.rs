@@ -315,7 +315,7 @@ pub fn project_item_end(
             .or_else(|| {
                 type_parameters
                     .last()
-                    .map(|name| name_end(with_start_position_as_ref(name)))
+                    .map(|type_parameter| name_end(with_start_position_as_ref(type_parameter)))
             })
             .or_else(|| {
                 name.as_ref()
@@ -631,7 +631,7 @@ pub fn expression_end(
                         .closed_angle_start
                         .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
                         .or_else(|| type_.type_.as_ref().map(|type_| type_end(type_)))
-                        .unwrap_or(symbol_end(type_.open_angle_start, "<"))
+                        .unwrap_or_else(|| symbol_end(type_.open_angle_start, "<"))
                 })
             })
             .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
@@ -1069,8 +1069,8 @@ fn parse_project_fn(
     let _ = parse_symbol(state, "<");
     parse_slug_whitespace(state);
     let mut type_parameters = Vec::new();
-    while let Some(name) = parse_slug_uppercase_name_with_start(state) {
-        type_parameters.push(name);
+    while let Some(type_parameter_name) = parse_slug_uppercase_name_with_start(state) {
+        type_parameters.push(type_parameter_name);
         parse_slug_whitespace(state);
     }
     let _ = parse_symbol(state, ">");
@@ -1122,8 +1122,8 @@ pub fn parse_project_fn_signature(state: &mut ParseState) -> Option<ProjectFnSig
     let _ = parse_symbol(state, ":");
     parse_slug_whitespace(state);
     let mut type_parameters = Vec::with_capacity(1);
-    while let Some(name) = parse_slug_uppercase_name_with_start(state) {
-        type_parameters.push(name);
+    while let Some(type_parameter_name) = parse_slug_uppercase_name_with_start(state) {
+        type_parameters.push(type_parameter_name);
         parse_slug_whitespace(state);
     }
     parse_slug_whitespace(state);
@@ -2734,7 +2734,7 @@ fn syntax_expression_connect_fns_in_graph_from<'a>(
         }
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct SyntaxProjectFnInfo<'a> {
     pub range: lsp_types::Range,
     pub name: &'a WithStartPosition<Name>,
@@ -2751,13 +2751,6 @@ pub struct SyntaxProjectTypeInfo<'a> {
     pub documentation: &'a Option<SyntaxComments>,
     pub parameters: &'a Option<SyntaxTyParameters>,
     pub type_: &'a Option<SyntaxType>,
-}
-// Copy & Clone need to be manually implemented because derive(Clone) introduces unnecessary Expressions/Patterns/Types:Clone bounds
-impl<'a> Copy for SyntaxProjectFnInfo<'a> {}
-impl<'a> Clone for SyntaxProjectFnInfo<'a> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 fn project_type_alias_check(
@@ -3573,7 +3566,7 @@ fn type_fully_resolve_aliases(
             type_fully_resolve_aliases(result, type_aliases_to_keep_unresolved, type_aliases);
         }
         Type::Alias { name, arguments } => {
-            if !type_aliases_to_keep_unresolved.contains(&name)
+            if !type_aliases_to_keep_unresolved.contains(name)
                 && let Some(actual_origin_type_alias) = type_aliases.get(name)
                 && let Some(mut actual_resolved_alias) = type_construct_resolve_type_alias(
                     actual_origin_type_alias,
@@ -3899,7 +3892,7 @@ fn specific_pattern_catch_format(
 ) {
     match specific_pattern_catch {
         SpecificPatternCatch::OnlyMatchableByVariable => {
-            output.push_str("_");
+            output.push('_');
         }
         SpecificPatternCatch::Variant { name, values } => {
             output.push_str(name);
@@ -4007,7 +4000,7 @@ fn pattern_matches_specific_pattern_catch(
                     Some(value) => {
                         match possibility_fields
                             .iter()
-                            .find(|(possibility_name, _)| *possibility_name == &field.name.value)
+                            .find(|(possibility_name, _)| possibility_name == &field.name.value)
                         {
                             None => true,
                             Some((_, value_possibility)) => {
@@ -5007,7 +5000,6 @@ fn syntax_project_fn_to_zig(
             checked_queries,
             &mut parameter_introduced_variables,
             syntax_result,
-            function_scope_start,
             with_parameters_conntext_scope_start,
             ZigReturnContext::Expression,
         );
@@ -5317,7 +5309,6 @@ fn syntax_expression_to_zig<'a>(
     checked_queries: &'a std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     local_variables: &mut std::collections::HashMap<&'a Name, ZigLocalVariable<'a>>,
     expression: &'a SyntaxExpression,
-    function_scope_start: lsp_types::Position,
     context_scope_start: lsp_types::Position,
     return_context: ZigReturnContext,
 ) {
@@ -5502,7 +5493,6 @@ fn syntax_expression_to_zig<'a>(
                         checked_queries,
                         local_variables,
                         argument,
-                        function_scope_start,
                         context_scope_start,
                         ZigReturnContext::Expression,
                     );
@@ -5549,7 +5539,6 @@ fn syntax_expression_to_zig<'a>(
                         checked_queries,
                         local_variables,
                         argument,
-                        function_scope_start,
                         context_scope_start,
                         ZigReturnContext::Expression,
                     );
@@ -5561,15 +5550,15 @@ fn syntax_expression_to_zig<'a>(
                 }
             } else {
                 zig_incomplete_expression(output);
-                return;
-            };
+            }
         }
         SyntaxExpression::Variant {
             name,
-            type_,
+            type_: syntax_type,
             values,
         } => {
-            let Some(syntax_type) = type_.as_ref().and_then(|type_| type_.type_.as_ref()) else {
+            let Some(syntax_type) = syntax_type.as_ref().and_then(|type_| type_.type_.as_ref())
+            else {
                 zig_incomplete_expression(output);
                 return;
             };
@@ -5619,7 +5608,6 @@ fn syntax_expression_to_zig<'a>(
                             checked_queries,
                             local_variables,
                             value,
-                            function_scope_start,
                             context_scope_start,
                             ZigReturnContext::Expression,
                         );
@@ -5638,7 +5626,6 @@ fn syntax_expression_to_zig<'a>(
                             checked_queries,
                             local_variables,
                             value,
-                            function_scope_start,
                             context_scope_start,
                             ZigReturnContext::Expression,
                         );
@@ -5794,7 +5781,6 @@ fn syntax_expression_to_zig<'a>(
                         checked_queries,
                         &mut parameter_introduced_variables,
                         result,
-                        local_function_with_parameters_context_scope_start,
                         local_function_scope_start,
                         ZigReturnContext::Expression,
                     );
@@ -5830,7 +5816,6 @@ fn syntax_expression_to_zig<'a>(
                     checked_queries,
                     local_variables,
                     part,
-                    function_scope_start,
                     context_scope_start,
                     ZigReturnContext::Expression,
                 );
@@ -5881,7 +5866,6 @@ fn syntax_expression_to_zig<'a>(
                             checked_queries,
                             local_variables,
                             value,
-                            function_scope_start,
                             context_scope_start,
                             ZigReturnContext::Expression,
                         );
@@ -5920,7 +5904,6 @@ fn syntax_expression_to_zig<'a>(
                 checked_queries,
                 local_variables,
                 expressions.item(expression),
-                function_scope_start,
                 context_scope_start,
                 return_context,
             );
@@ -5966,7 +5949,6 @@ fn syntax_expression_to_zig<'a>(
                         checked_queries,
                         local_variables,
                         expressions.item(queried),
-                        function_scope_start,
                         context_scope_start,
                         ZigReturnContext::Expression,
                     );
@@ -6014,7 +5996,6 @@ fn syntax_expression_to_zig<'a>(
                         checked_queries,
                         local_variables,
                         result,
-                        function_scope_start,
                         with_destructured_context_scope_start,
                         ZigReturnContext::StatementsFollowedByBreak(label),
                     );
@@ -6070,7 +6051,6 @@ fn syntax_expression_to_zig<'a>(
                         checked_queries,
                         local_variables,
                         expressions.item(queried),
-                        function_scope_start,
                         context_scope_start,
                         ZigReturnContext::Expression,
                     );
@@ -6125,7 +6105,6 @@ fn syntax_expression_to_zig<'a>(
                                 checked_queries,
                                 &mut case_local_variables,
                                 case_result,
-                                function_scope_start,
                                 case_context_scope_start,
                                 ZigReturnContext::StatementsFollowedByBreak(label),
                             );
@@ -6702,7 +6681,7 @@ pub fn checked_project_to_js(
                 checked_type_alias_name,
                 &checked_type_alias.parameters,
                 checked_aliased_type,
-                &checked_type_aliases,
+                checked_type_aliases,
             );
         }
     }
@@ -6812,7 +6791,7 @@ fn syntax_project_fn_to_js(
         _ = write!(output, "{parameter_index}");
         output.push('\n');
     }
-    if implicit_bufs.len() >= 1 {
+    if !implicit_bufs.is_empty() {
         output.push_str("@param {{");
         for implicit_buf in &implicit_bufs {
             type_buf_js_variable_name(output, &implicit_buf.origin, &implicit_buf.item);
@@ -6849,12 +6828,12 @@ fn syntax_project_fn_to_js(
         _ = write!(output, "{}", parameter_index);
         output.push_str(", ");
     }
-    if implicit_bufs.len() >= 1 {
+    if !implicit_bufs.is_empty() {
         output.push('$');
     }
     output.push_str(") {\n");
     if implicit_bufs.is_empty() {
-        output.push_str("const $ = {};\n")
+        output.push_str("const $ = {};\n");
     }
     let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
     let mut parameter_introduced_variables_last_uses = std::collections::HashMap::with_capacity(2);
@@ -6869,9 +6848,10 @@ fn syntax_project_fn_to_js(
             syntax_parameter,
             None,
             &format!("a{}", syntax_parameter_index),
-            &mut |name, type_| {
-                parameter_introduced_variables.insert(name, type_);
-                parameter_introduced_variables_last_uses.insert(name, Vec::with_capacity(1));
+            &mut |variable_name, variable_type| {
+                parameter_introduced_variables.insert(variable_name, variable_type);
+                parameter_introduced_variables_last_uses
+                    .insert(variable_name, Vec::with_capacity(1));
             },
             type_aliases,
         );
@@ -6914,7 +6894,7 @@ fn type_to_js(output: &mut String, type_: &Type) {
             if parts.is_empty() {
                 output.push_str(empty_js_type_name);
             } else {
-                output.push_str("[");
+                output.push('[');
                 for part in parts {
                     type_to_js(output, part);
                     output.push_str(", ");
@@ -6996,9 +6976,9 @@ fn type_to_js(output: &mut String, type_: &Type) {
         }
     }
 }
-fn syntax_pattern_to_js_matches_condition<'a>(
+fn syntax_pattern_to_js_matches_condition(
     output: &mut String,
-    pattern: &'a SyntaxPattern,
+    pattern: &SyntaxPattern,
     to_match: &str,
 ) {
     match pattern {
@@ -7340,7 +7320,7 @@ fn syntax_expression_to_js<'a>(
                 && !last_uses.contains(&name.start)
                 && let Some(type_) = &local_variable.type_
             {
-                js_variable_clone(output, &js_variable_name, &type_, type_aliases);
+                js_variable_clone(output, &js_variable_name, type_, type_aliases);
             }
             js_scope_result_variable(output, scope_start);
             output.push_str(" = ");
@@ -7760,9 +7740,7 @@ fn syntax_expression_to_js<'a>(
                     syntax_pattern_to_js_destructuring(
                         output,
                         &case.pattern,
-                        checked_queries
-                            .get(if_keyword_start)
-                            .map(|checked_query| &checked_query.queried_type),
+                        Some(&checked_query.queried_type),
                         &queried_variable_name,
                         &mut |name, type_| {
                             case_local_variables.insert(name, type_);
@@ -7894,7 +7872,7 @@ fn specialize_implicits_js(
             js_clone_function(output, type_variable_replacement_type, type_aliases);
             output.push_str(", ");
         }
-        output.push_str("}");
+        output.push('}');
     }
 }
 fn js_variable_drop(
@@ -8176,7 +8154,7 @@ fn js_drop_function(
 ) {
     output.push_str("function(it) {\n");
     js_variable_drop(output, "it", type_, type_aliases);
-    output.push_str("}");
+    output.push('}');
 }
 fn js_clone_function(
     output: &mut String,
@@ -8185,7 +8163,7 @@ fn js_clone_function(
 ) {
     output.push_str("function(it) {\n");
     js_variable_clone(output, "it", type_, type_aliases);
-    output.push_str("}");
+    output.push('}');
 }
 fn js_incomplete_statement() {
     // just don't set the result to anything
@@ -8415,7 +8393,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                     expressions,
                     local_variables_used,
                     local_variables_last_uses,
-                )
+                );
             }
         }
         SyntaxExpression::Variant {
@@ -8429,7 +8407,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                     expressions,
                     local_variables_used,
                     local_variables_last_uses,
-                )
+                );
             }
         }
         SyntaxExpression::Fn { .. } => {}
@@ -8445,7 +8423,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                     expressions,
                     local_variables_used,
                     local_variables_last_uses,
-                )
+                );
             }
         }
         SyntaxExpression::Record {
@@ -8460,7 +8438,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                         expressions,
                         local_variables_used,
                         local_variables_last_uses,
-                    )
+                    );
                 }
             }
         }
@@ -8474,7 +8452,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                     expressions,
                     local_variables_used,
                     local_variables_last_uses,
-                )
+                );
             }
         }
         SyntaxExpression::Destruct {
@@ -8489,7 +8467,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                     expressions,
                     local_variables_used,
                     local_variables_last_uses,
-                )
+                );
             }
             if let Some(queried) = queried {
                 syntax_expression_local_variables_last_uses(
@@ -8497,7 +8475,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                     expressions,
                     local_variables_used,
                     local_variables_last_uses,
-                )
+                );
             }
         }
         SyntaxExpression::If {
@@ -8529,7 +8507,7 @@ fn syntax_expression_local_variables_last_uses<'a>(
                     expressions,
                     local_variables_used,
                     local_variables_last_uses,
-                )
+                );
             }
         }
     }
@@ -9417,7 +9395,7 @@ If you want to handle cases in separate branches, use an if like  if option { Ye
                 .iter()
                 .any(|pattern_newly_reachable_buf| {
                     destruct_result_required_additional_implicit_bufs
-                        .contains(&pattern_newly_reachable_buf)
+                        .contains(pattern_newly_reachable_buf)
                 })
             {
                 let mut error_message =
@@ -9433,14 +9411,13 @@ If you want to handle cases in separate branches, use an if like  if option { Ye
                     error_message.push_str("\n  - ");
                     type_format(&mut error_message, 4, &type_buf(origin, item));
                 }
+                error_message.push_str("
+Without these additional bufs, the resulting slots/spans would have no way to be passed to functions, dropped or cloned."
+                );
                 errors.push(ErrorNode {
                     range: expression_range(result, expressions),
-                    message: format!(
-                        "
-Without these additional bufs, the resulting slots/spans would have no way to be passed to functions, dropped or cloned."
-                    )
-                    .into_boxed_str(),
-                })
+                    message: error_message.into_boxed_str(),
+                });
             }
             checked_queries.insert(
                 *equals_start,
@@ -9734,7 +9711,7 @@ fn expression_query_check_for_missing_result_bufs(
 ) {
     let mut result_required_additional_implicit_bufs = std::collections::HashSet::new();
     type_implicit_bufs(
-        &result_type,
+        result_type,
         &std::collections::HashSet::new(),
         type_aliases,
         &mut result_required_additional_implicit_bufs,
@@ -9742,7 +9719,7 @@ fn expression_query_check_for_missing_result_bufs(
     if pattern_introduced_bufs
         .iter()
         .any(|pattern_newly_reachable_buf| {
-            result_required_additional_implicit_bufs.contains(&pattern_newly_reachable_buf)
+            result_required_additional_implicit_bufs.contains(pattern_newly_reachable_buf)
         })
     {
         let mut error_message =
@@ -9757,14 +9734,13 @@ fn expression_query_check_for_missing_result_bufs(
             error_message.push_str("\n  - ");
             type_format(&mut error_message, 4, &type_buf(origin, item));
         }
+        error_message.push_str("
+Without these additional bufs, the resulting slots/spans would have no way to be passed to functions, dropped or cloned."
+        );
         errors.push(ErrorNode {
             // is there a nicer place to put it?
             range: expression_range(result, expressions),
-            message: format!(
-                "
-Without these additional bufs, the resulting slots/spans would have no way to be passed to functions, dropped or cloned."
-            )
-            .into_boxed_str(),
+            message: error_message.into_boxed_str(),
         });
     }
 }
@@ -9809,14 +9785,13 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                 && let Some(result_type) = &project_fn.result_type
                 && let Some(checked_call) = checked_calls.get(&name.start)
             {
-                let mut type_bufs = std::collections::HashSet::new();
                 let mut result_type = result_type.clone();
                 type_replace_variables(&checked_call.type_variable_replacements, &mut result_type);
                 type_check_introduced_bufs_do_not_overlap(
                     errors,
                     || expression_range(expression, expressions),
                     &result_type,
-                    &mut type_bufs,
+                    reachable_bufs,
                     type_aliases,
                 );
             }
@@ -9867,7 +9842,7 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             if let Some(result) = result
                 && let Some(checked_fn) = checked_local_fns.get(fn_keyword_start)
             {
-                let mut reachable_bufs = function_signature_implicit_bufs(
+                let mut fn_reachable_bufs = function_signature_implicit_bufs(
                     checked_fn.parameter_types.iter(),
                     Some(&checked_fn.result_type),
                     type_aliases,
@@ -9876,14 +9851,14 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                     parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
                         errors,
                         parameter,
-                        &mut reachable_bufs,
+                        &mut fn_reachable_bufs,
                         type_aliases,
                     );
                 }
                 syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                     errors,
                     expressions.item(result),
-                    &mut reachable_bufs,
+                    &mut fn_reachable_bufs,
                     checked_calls,
                     checked_queries,
                     checked_local_fns,
@@ -10132,7 +10107,7 @@ fn query_pattern_add_introduced_bufs_and_check_do_not_overlap(
             pattern_type_add_introduced_bufs_and_check_do_not_overlap(
                 errors,
                 || symbol_range(*underscore_start, "_"),
-                &expected_type,
+                expected_type,
                 reachable_bufs,
                 type_aliases,
             );
@@ -10141,7 +10116,7 @@ fn query_pattern_add_introduced_bufs_and_check_do_not_overlap(
             pattern_type_add_introduced_bufs_and_check_do_not_overlap(
                 errors,
                 || name_range(with_start_position_as_ref(name)),
-                &expected_type,
+                expected_type,
                 reachable_bufs,
                 type_aliases,
             );
@@ -10159,11 +10134,11 @@ fn query_pattern_add_introduced_bufs_and_check_do_not_overlap(
             };
             for (value_index, value) in values.iter().flat_map(|values| &values.values).enumerate()
             {
-                if let Some(expected_type) = expected_value_types.get(value_index) {
+                if let Some(value_expected_type) = expected_value_types.get(value_index) {
                     query_pattern_add_introduced_bufs_and_check_do_not_overlap(
                         errors,
                         value,
-                        expected_type,
+                        value_expected_type,
                         reachable_bufs,
                         type_aliases,
                     );
@@ -10181,11 +10156,11 @@ fn query_pattern_add_introduced_bufs_and_check_do_not_overlap(
                 return;
             };
             for (part_index, part) in parts.iter().enumerate() {
-                if let Some(expected_type) = expected_part_types.get(part_index) {
+                if let Some(part_expected_type) = expected_part_types.get(part_index) {
                     query_pattern_add_introduced_bufs_and_check_do_not_overlap(
                         errors,
                         part,
-                        expected_type,
+                        part_expected_type,
                         reachable_bufs,
                         type_aliases,
                     );
@@ -10232,7 +10207,7 @@ fn pattern_type_add_introduced_bufs_and_check_do_not_overlap(
             errors.push(ErrorNode {
                 range: error_range(),
                 message: introduced_reachable_buf_overlaps_error_message(),
-            })
+            });
         }
     });
 }
@@ -10249,7 +10224,7 @@ fn type_check_introduced_bufs_do_not_overlap(
             errors.push(ErrorNode {
                 range: error_range(),
                 message: introduced_reachable_buf_overlaps_error_message(),
-            })
+            });
         } else {
             let introduced_buf_was_not_reachable_before_inner =
                 type_inner_reachable_bufs.insert(reachable_buf);
@@ -10257,7 +10232,7 @@ fn type_check_introduced_bufs_do_not_overlap(
                 errors.push(ErrorNode {
                     range: error_range(),
                     message: introduced_reachable_buf_overlaps_error_message(),
-                })
+                });
             }
         }
     });
@@ -10434,109 +10409,103 @@ fn type_collect_variables_that_are_concrete_into(
                 .or_insert_with(|| concrete_type.clone());
         }
         Type::CoreConstruct { name, arguments } => {
-            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
-                Type::CoreConstruct {
-                    name: concrete_choice_type_construct_name,
-                    arguments: concrete_choice_type_construct_arguments,
-                } if name == concrete_choice_type_construct_name => {
-                    for (argument_type, concrete_argument_type) in arguments
-                        .iter()
-                        .zip(concrete_choice_type_construct_arguments.iter())
-                    {
-                        type_collect_variables_that_are_concrete_into(
-                            type_parameter_replacements,
-                            argument_type,
-                            concrete_argument_type,
-                            type_aliases,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-        Type::Fn { parameters, result } => {
-            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
-                Type::Fn {
-                    parameters: concrete_parameters,
-                    result: concrete_result,
-                } => {
-                    for (argument_type, concrete_argument_type) in
-                        parameters.iter().zip(concrete_parameters)
-                    {
-                        type_collect_variables_that_are_concrete_into(
-                            type_parameter_replacements,
-                            argument_type,
-                            concrete_argument_type,
-                            type_aliases,
-                        );
-                    }
+            if let Type::CoreConstruct {
+                name: concrete_choice_type_construct_name,
+                arguments: concrete_choice_type_construct_arguments,
+            } = type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref()
+                && name == concrete_choice_type_construct_name
+            {
+                for (argument_type, concrete_argument_type) in arguments
+                    .iter()
+                    .zip(concrete_choice_type_construct_arguments.iter())
+                {
                     type_collect_variables_that_are_concrete_into(
                         type_parameter_replacements,
-                        result,
-                        concrete_result,
+                        argument_type,
+                        concrete_argument_type,
                         type_aliases,
                     );
                 }
-                _ => {}
+            }
+        }
+        Type::Fn { parameters, result } => {
+            if let Type::Fn {
+                parameters: concrete_parameters,
+                result: concrete_result,
+            } = type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref()
+            {
+                for (argument_type, concrete_argument_type) in
+                    parameters.iter().zip(concrete_parameters)
+                {
+                    type_collect_variables_that_are_concrete_into(
+                        type_parameter_replacements,
+                        argument_type,
+                        concrete_argument_type,
+                        type_aliases,
+                    );
+                }
+                type_collect_variables_that_are_concrete_into(
+                    type_parameter_replacements,
+                    result,
+                    concrete_result,
+                    type_aliases,
+                );
             }
         }
         Type::Tuple(parts) => {
-            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
-                Type::Tuple(concrete_parts) => {
-                    for (part, matching_concrete_part) in parts.iter().zip(concrete_parts) {
+            if let Type::Tuple(concrete_parts) =
+                type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref()
+            {
+                for (part, matching_concrete_part) in parts.iter().zip(concrete_parts) {
+                    type_collect_variables_that_are_concrete_into(
+                        type_parameter_replacements,
+                        part,
+                        matching_concrete_part,
+                        type_aliases,
+                    );
+                }
+            }
+        }
+        Type::Record(fields) => {
+            if let Type::Record(concrete_fields) =
+                type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref()
+            {
+                for field in fields {
+                    if let Some(matching_concrete_field) = concrete_fields
+                        .iter()
+                        .find(|concrete_field| concrete_field.name == field.name)
+                    {
                         type_collect_variables_that_are_concrete_into(
                             type_parameter_replacements,
-                            part,
-                            matching_concrete_part,
+                            &field.value,
+                            &matching_concrete_field.value,
                             type_aliases,
                         );
                     }
                 }
-                _ => {}
             }
         }
-        Type::Record(fields) => {
-            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
-                Type::Record(concrete_fields) => {
-                    for field in fields {
-                        if let Some(matching_concrete_field) = concrete_fields
-                            .iter()
-                            .find(|concrete_field| concrete_field.name == field.name)
+        Type::Choice(variants) => {
+            if let Type::Choice(concrete_variants) =
+                type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref()
+            {
+                for variant in variants {
+                    if let Some(matching_concrete_variant) = concrete_variants
+                        .iter()
+                        .find(|concrete_variant| concrete_variant.name == variant.name)
+                    {
+                        for (variant_value, concrete_variant_value) in
+                            variant.values.iter().zip(&matching_concrete_variant.values)
                         {
                             type_collect_variables_that_are_concrete_into(
                                 type_parameter_replacements,
-                                &field.value,
-                                &matching_concrete_field.value,
+                                variant_value,
+                                concrete_variant_value,
                                 type_aliases,
                             );
                         }
                     }
                 }
-                _ => {}
-            }
-        }
-        Type::Choice(variants) => {
-            match type_alias_resolve_to_non_alias(concrete_type, type_aliases).as_ref() {
-                Type::Choice(concrete_variants) => {
-                    for variant in variants {
-                        if let Some(matching_concrete_variant) = concrete_variants
-                            .iter()
-                            .find(|concrete_variant| concrete_variant.name == variant.name)
-                        {
-                            for (variant_value, concrete_variant_value) in
-                                variant.values.iter().zip(&matching_concrete_variant.values)
-                            {
-                                type_collect_variables_that_are_concrete_into(
-                                    type_parameter_replacements,
-                                    variant_value,
-                                    concrete_variant_value,
-                                    type_aliases,
-                                );
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
         }
         Type::Alias { name, arguments } => match concrete_type {
@@ -10673,12 +10642,10 @@ fn type_diff(
                         ))
                     }
                 }
-                _ => {
-                    return Some(TypeDiff::Conflict {
-                        expected: expected_type.clone(),
-                        actual: actual_type.clone(),
-                    });
-                }
+                _ => Some(TypeDiff::Conflict {
+                    expected: expected_type.clone(),
+                    actual: actual_type.clone(),
+                }),
             }
         }
         Type::Record(expected_fields) => {
@@ -11177,7 +11144,7 @@ fn place_expression_type_diff_errors(
             };
             match variant_type_diffs
                 .iter()
-                .find(|variant_type_diff| variant_type_diff.name == &name.value)
+                .find(|variant_type_diff| variant_type_diff.name == name.value)
             {
                 Some(variant_type_diff) => {
                     for (value, value_type_diff) in values
@@ -11378,7 +11345,7 @@ fn place_pattern_type_diff_errors(
             TypeDiff::Choice(variant_type_diffs) => {
                 match variant_type_diffs
                     .iter()
-                    .find(|variant_type_diff| variant_type_diff.name == &name.value)
+                    .find(|variant_type_diff| variant_type_diff.name == name.value)
                 {
                     Some(variant_type_diff) => {
                         for (value, value_type_diff) in values
@@ -13554,14 +13521,16 @@ fn syntax_expression_format(
             values,
         } => {
             formatted.push_str(&name.value);
-            if let Some(type_argument) = type_
-                && let Some(type_) = &type_argument.type_
+            if let Some(SyntaxExpressionVariantType {
+                open_angle_start,
+                type_: Some(type_),
+                closed_angle_start,
+            }) = type_
             {
                 formatted.push('<');
                 let type_line_span = range_line_span(lsp_types::Range {
-                    start: type_argument.open_angle_start,
-                    end: type_argument
-                        .closed_angle_start
+                    start: *open_angle_start,
+                    end: closed_angle_start
                         .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
                         .unwrap_or_else(|| type_end(type_)),
                 });
@@ -13706,8 +13675,12 @@ fn syntax_expression_format(
                 None => {}
                 Some(queried) => {
                     let queried = expressions.item(queried);
-                    let line_span = range_line_span(expression_range(queried, expressions));
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    let queried_line_span = range_line_span(expression_range(queried, expressions));
+                    space_or_linebreak_indented_into(
+                        formatted,
+                        queried_line_span,
+                        next_indent(indent),
+                    );
                     syntax_expression_format(formatted, next_indent(indent), expressions, queried);
                     let line_span = range_line_span(expression_range(expression, expressions));
                     space_or_linebreak_indented_into(formatted, line_span, indent);
@@ -14243,14 +14216,7 @@ pub fn project_symbol_at_position<'a>(
                 })
                 .or_else(|| {
                     parameters.iter().find_map(|parameter| {
-                        pattern_symbol_at_position(
-                            parameter,
-                            None,
-                            position,
-                            type_aliases,
-                            item,
-                            result.as_ref(),
-                        )
+                        pattern_symbol_at_position(parameter, None, position, item, result.as_ref())
                     })
                 })
                 .or_else(|| {
@@ -14451,14 +14417,7 @@ fn expression_symbol_at_position<'a>(
             parameters
                 .iter()
                 .find_map(|parameter| {
-                    pattern_symbol_at_position(
-                        parameter,
-                        None,
-                        position,
-                        type_aliases,
-                        scope,
-                        result,
-                    )
+                    pattern_symbol_at_position(parameter, None, position, scope, result)
                 })
                 .or_else(|| {
                     result.as_ref().and_then(|result| {
@@ -14566,7 +14525,6 @@ fn expression_symbol_at_position<'a>(
                             pattern,
                             expected_pattern_type,
                             position,
-                            type_aliases,
                             scope,
                             result,
                         )
@@ -14653,7 +14611,6 @@ fn expression_if_case_symbol_at_position<'a>(
         &case.pattern,
         expected_pattern_type,
         position,
-        type_aliases,
         scope,
         case.result.as_ref(),
     )
@@ -14701,7 +14658,7 @@ fn syntax_parameter_pattern_variables_for_each<'a>(
             type_: _,
         } => {}
         SyntaxPattern::Variable { name, type_ } => {
-            step_variable(with_start_position_as_ref(name), type_.as_ref())
+            step_variable(with_start_position_as_ref(name), type_.as_ref());
         }
         SyntaxPattern::Variant { name: _, values } => {
             for value in values.iter().flat_map(|values| &values.values) {
@@ -14743,7 +14700,7 @@ fn syntax_query_pattern_variables_for_each<'a>(
             type_: _,
         } => {}
         SyntaxPattern::Variable { name, type_: _ } => {
-            step_variable(with_start_position_as_ref(name), expected_type.cloned())
+            step_variable(with_start_position_as_ref(name), expected_type.cloned());
         }
         SyntaxPattern::Variant { name, values } => {
             let expected_type = expected_type
@@ -14821,8 +14778,6 @@ fn pattern_symbol_at_position<'a>(
     pattern: &'a SyntaxPattern,
     expected_type: Option<&Type>,
     position: lsp_types::Position,
-    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-
     project_item_scope: &'a SyntaxProjectItem,
     expression_scope: Option<&'a SyntaxExpression>,
 ) -> Option<SyntaxSymbol<'a>> {
@@ -14877,7 +14832,6 @@ fn pattern_symbol_at_position<'a>(
                             _ => None,
                         }),
                         position,
-                        type_aliases,
                         project_item_scope,
                         expression_scope,
                     )
@@ -14896,7 +14850,6 @@ fn pattern_symbol_at_position<'a>(
                     _ => None,
                 },
                 position,
-                type_aliases,
                 project_item_scope,
                 expression_scope,
             )
@@ -14918,7 +14871,6 @@ fn pattern_symbol_at_position<'a>(
                         })
                         .map(|field| &field.value),
                     position,
-                    type_aliases,
                     project_item_scope,
                     expression_scope,
                 )
@@ -15522,13 +15474,11 @@ fn syntax_expression_symbol_uses_into(
             }
             if let Some(SyntaxExpressionVariantType {
                 open_angle_start: _,
-                type_,
+                type_: Some(type_),
                 closed_angle_start: _,
             }) = type_argument
             {
-                if let Some(type_) = type_ {
-                    syntax_type_symbol_uses_into(uses, type_, symbol);
-                }
+                syntax_type_symbol_uses_into(uses, type_, symbol);
             }
             for value in values.iter().flat_map(|values| &values.values) {
                 syntax_expression_symbol_uses_into(
@@ -16128,13 +16078,11 @@ fn syntax_expression_highlight(
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::EnumMember);
             if let Some(SyntaxExpressionVariantType {
                 open_angle_start: _,
-                type_,
+                type_: Some(type_),
                 closed_angle_start: _,
             }) = type_argument
             {
-                if let Some(type_) = type_ {
-                    syntax_type_highlight(state, type_);
-                }
+                syntax_type_highlight(state, type_);
             }
             for value in values.iter().flat_map(|values| &values.values) {
                 syntax_expression_highlight(state, expressions, value);
@@ -16763,13 +16711,14 @@ mod strongly_connected_components {
         }
         fn visit(neighbors: &Neighbors, state: &mut TarjanState, vertex: Vertex) {
             // (don't ask me about any of this. I more or less just ported pseudo-code from wikipedia)
-            let vertex_mut = &mut state.vertex_state[vertex];
-            vertex_mut.index = state.index;
-            vertex_mut.low_link = state.index;
-            state.index += 1;
-            state.stack.push(vertex);
-            vertex_mut.is_on_stack = true;
-
+            {
+                let vertex_mut = &mut state.vertex_state[vertex];
+                vertex_mut.index = state.index;
+                vertex_mut.low_link = state.index;
+                state.index += 1;
+                state.stack.push(vertex);
+                vertex_mut.is_on_stack = true;
+            }
             for &vertex_neighbor in &neighbors[vertex] {
                 let vertex_neighbor_state = state.vertex_state[vertex_neighbor];
                 if vertex_neighbor_state.index == vertex_unvisited {

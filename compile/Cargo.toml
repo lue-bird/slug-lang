@@ -72,6 +72,7 @@ branches_sharing_code = { level = "allow" }
 equatable_if_let = { level = "allow" }
 useless_let_if_seq = { level = "allow" }
 redundant_closure_for_method_calls = { level = "allow" }
+blocks_in_conditions = { level = "allow" }
 # overkill outside of packages
 implicit_hasher = { level = "allow" }
 # annoying, not relevant for correctness
@@ -81,6 +82,7 @@ range_plus_one = { level = "allow" }
 missing_panics_doc = { level = "allow" }
 missing_safety_doc = { level = "allow" }
 must_use_candidate = { level = "allow" }
+new_without_default = { level = "allow" }
 # too many false positives
 enum_variant_names = { level = "allow" }
 missing_errors_doc = { level = "allow" }
