@@ -14103,11 +14103,6 @@ pub enum SyntaxSymbol<'a> {
         name: WithStartPosition<&'a Name>,
         construct_info: ConstructInfo,
     },
-    // applies to both type and variable name
-    Origin {
-        name: &'a Name,
-        use_start: lsp_types::Position,
-    },
     TypeVariable {
         name: &'a Name,
         use_start: lsp_types::Position,
@@ -14651,7 +14646,6 @@ fn expression_if_case_symbol_at_position<'a>(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     expressions: &'a Buf<Expressions, SyntaxExpression>,
-
     scope: &'a SyntaxProjectItem,
     local_variables: &mut std::collections::HashMap<&'a Name, LocalVariableSymbolOrigin<'a>>,
 ) -> Option<SyntaxSymbol<'a>> {
@@ -15040,10 +15034,6 @@ pub fn syntax_project_symbol_origin_range(
             | SyntaxProjectItem::Comments(_)
             | SyntaxProjectItem::Unrecognized { .. } => None,
         }),
-        SyntaxSymbol::Origin { name, use_start } => Some(name_range(WithStartPosition {
-            value: name,
-            start: *use_start,
-        })),
         &SyntaxSymbol::TypeVariable {
             name: symbol_name,
             use_start: _,
@@ -15176,56 +15166,6 @@ pub fn syntax_project_symbol_uses(
                     &project.expressions,
                     type_aliases,
                 );
-            }
-        }
-        SyntaxSymbol::Origin {
-            name: _,
-            use_start: _,
-        } => {
-            for item in &project.items {
-                match item {
-                    SyntaxProjectItem::Fn {
-                        fn_keyword_start: _,
-                        name: _,
-                        type_parameters: _,
-                        open_paren_start: _,
-                        parameters,
-                        closed_paren_start: _,
-                        result_type,
-                        documentation: _,
-                        result,
-                    } => {
-                        for parameter in parameters {
-                            syntax_pattern_symbol_uses_into(&mut uses, parameter, symbol);
-                        }
-                        if let Some(result_type) = result_type {
-                            syntax_type_symbol_uses_into(&mut uses, result_type, symbol);
-                        }
-                        if let Some(result) = result {
-                            syntax_expression_symbol_uses_into(
-                                &mut uses,
-                                result,
-                                symbol,
-                                &std::collections::HashSet::new(),
-                                &project.expressions,
-                                type_aliases,
-                            );
-                        }
-                    }
-                    SyntaxProjectItem::TypeAlias {
-                        ty_keyword_start: _,
-                        name: _,
-                        parameters: _,
-                        documentation: _,
-                        type_,
-                    } => {
-                        if let Some(type_) = type_ {
-                            syntax_type_symbol_uses_into(&mut uses, type_, symbol);
-                        }
-                    }
-                    SyntaxProjectItem::Comments(_) => {}
-                    SyntaxProjectItem::Unrecognized { .. } => {}
-                }
             }
         }
         SyntaxSymbol::ProjectTypeOrUnknown { .. } => {
@@ -15490,8 +15430,7 @@ fn syntax_expression_symbol_uses_into(
         SyntaxExpression::Variable(name) => match symbol {
             SyntaxSymbol::TypeVariable { .. }
             | SyntaxSymbol::VariantOrUnknown(_)
-            | SyntaxSymbol::ProjectFnOrVariableUnknown { .. }
-            | SyntaxSymbol::Origin { .. } => {}
+            | SyntaxSymbol::ProjectFnOrVariableUnknown { .. } => {}
             SyntaxSymbol::ProjectTypeOrUnknown {
                 name:
                     WithStartPosition {
@@ -15524,7 +15463,6 @@ fn syntax_expression_symbol_uses_into(
         } => {
             match symbol {
                 SyntaxSymbol::TypeVariable { .. }
-                | SyntaxSymbol::Origin { .. }
                 | SyntaxSymbol::ProjectTypeOrUnknown { .. }
                 | SyntaxSymbol::VariantOrUnknown(_) => {}
                 SyntaxSymbol::LocalVariable {
@@ -15613,7 +15551,6 @@ fn syntax_expression_symbol_uses_into(
             match symbol {
                 SyntaxSymbol::LocalVariable { .. } => return,
                 SyntaxSymbol::ProjectTypeOrUnknown { .. }
-                | SyntaxSymbol::Origin { .. }
                 | SyntaxSymbol::TypeVariable { .. }
                 | SyntaxSymbol::VariantOrUnknown(_)
                 | SyntaxSymbol::ProjectFnOrVariableUnknown { .. } => {}

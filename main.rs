@@ -283,9 +283,6 @@ fn present_local_variable_markdown(type_: Option<&slug::Type>) -> String {
         }
     }
 }
-fn present_origin_markdown(origin_variable_name: &slug::Name) -> String {
-    format!("a tag that uniquely identifies a buf origin within a scope: ^{origin_variable_name}")
-}
 fn default_output_file_path_for_slug_input_file_path(
     input_file_path: &std::path::Path,
     language: CompileOutputLanguage,
@@ -903,29 +900,19 @@ fn respond_to_hover(
                 }),
                 range: Some(slug::name_range(symbol_name)),
             }),
-        slug::SyntaxSymbol::Origin { name, use_start } => Some(lsp_types::Hover {
-            contents: lsp_types::Contents::MarkupContent(lsp_types::MarkupContent {
-                kind: lsp_types::MarkupKind::Markdown,
-                value: present_origin_markdown(name),
-            }),
-            range: Some(slug::name_range(slug::WithStartPosition {
-                start: use_start,
-                value: name,
-            })),
-        }),
         slug::SyntaxSymbol::TypeVariable {
             name,
-            use_start: use_underscore_start,
+            use_start,
             scope: _,
         } => Some(lsp_types::Hover {
             contents: lsp_types::Contents::MarkupContent(lsp_types::MarkupContent {
                 kind: lsp_types::MarkupKind::Markdown,
                 value: "type variable".to_string(),
             }),
-            range: Some(lsp_types::Range {
-                start: use_underscore_start,
-                end: lsp_position_add_characters(use_underscore_start, (name.len() + 1) as u32),
-            }),
+            range: Some(slug::name_range(slug::WithStartPosition {
+                start: use_start,
+                value: name,
+            })),
         }),
         slug::SyntaxSymbol::VariantOrUnknown(_) => None,
         slug::SyntaxSymbol::ProjectFnOrVariableUnknown {
@@ -1028,12 +1015,6 @@ fn respond_to_prepare_rename(
             name,
             construct_info: _,
         } => Some(slug::name_range(name)),
-        slug::SyntaxSymbol::Origin { name, use_start } => {
-            Some(slug::name_range(slug::WithStartPosition {
-                value: name,
-                start: use_start,
-            }))
-        }
         slug::SyntaxSymbol::TypeVariable {
             name,
             use_start: use_underscore_start,
@@ -1505,7 +1486,6 @@ fn respond_to_completion(
                 ))
             }
         },
-        slug::SyntaxSymbol::Origin { .. } => None,
         slug::SyntaxSymbol::LocalVariable {
             name: _,
             use_start: _,
