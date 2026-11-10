@@ -661,43 +661,49 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         /// Assumed to have an .items.len that fits into a u32.
         /// .items.capacity has no such constraint.
         /// if you want to directly access .items, be extra aware of
-        ///   - considering .unset_masks
-        ///   - the ABA problem
-        ///     (e.g. an index to an item could point to a wrong, new item instead of invalid memory when its index was unset and re-occupied in between)
+        /// - considering .counts
+        /// - the ABA problem (e.g. an index to an item could point to a wrong, new item
+        ///   instead of invalid memory when its index was unset and re-occupied in between)
         items: std.ArrayList(@"%Item"),
-        /// TODO change to counts: [*]ItemCount
-        unset_masks: @TypeOf((std.bit_set.Dynamic{}).masks),
+        /// has the same length and capacity as items.items.
+        /// Prefer accessing through countsSlice or countsArrayList
+        counts: [*]SlotCount,
         /// invariants:
-        /// - .none_unset if set_bit_set() is all false within 0..items.items.len
+        /// - .none_unset if countsSlice() is all 0
+        /// - _ points to the first 0 in counts
         /// - _ points to a valid index in items
-        /// - _ points to the first true index in .unsetBitSet()
         first_unset_index: UnsetIndexOrNone,
         reference_count: ReferenceCount,
 
         pub const ReferenceCount = enum(u32) { invalid = 0, leaked = std.math.maxInt(u32), _ };
-        pub const ItemCount = enum(u16) { leaked = std.math.maxInt(u16), _ };
+        pub const SlotCount = enum(u16) { leaked = std.math.maxInt(u16), _ };
         pub const UnsetIndexOrNone = enum(u32) { none_unset = std.math.maxInt(u32), _ };
 
         /// usually used with std.mem.Allocator.create()
         pub const empty: @This() = .{
             .items = .empty,
-            .unset_masks = (std.bit_set.Dynamic{}).masks,
+            .counts = undefined,
             .first_unset_index = UnsetIndexOrNone.none_unset,
             .reference_count = @fromBackingInt(1),
         };
 
-        pub fn len_including_unset(@"%buf": @This()) u32 {
+        pub fn lenIncludingUnset(@"%buf": @This()) u32 {
             return @intCast(@"%buf".items.items.len);
         }
 
-        // Contains the set bits until .items.items.len (not its capacity).
-        // modifying the resulting value does not change the given Buf's .unset_masks
-        pub fn unsetBitSet(@"%buf": @This()) std.bit_set.Dynamic {
-            return std.bit_set.Dynamic{ .masks = @"%buf".unset_masks, .bit_length = @"%buf".items.items.len };
+        pub fn countsSlice(@"%buf": @This()) []SlotCount {
+            return @"%buf".counts[0..@"%buf".items.items.len];
         }
-        // modifying the resulting value does not change the given Buf's .unset_masks
-        pub fn unsetBitSetUntilCapacity(@"%buf": @This()) std.bit_set.Dynamic {
-            return std.bit_set.Dynamic{ .masks = @"%buf".unset_masks, .bit_length = @"%buf".items.capacity };
+        /// important:
+        /// - updating the returned ArrayList will not update the Buf's .counts pointer!
+        /// - this function assumes items and counts have the same len anf capacity _currently_
+        ///   which might not be the case during an internal function call
+        pub fn countsArrayList(@"%buf": @This()) std.ArrayList(SlotCount) {
+            return std.ArrayList(SlotCount){
+                .items = countsSlice(@"%buf"),
+                .pointer_stability = @"%buf".items.pointer_stability,
+                .capacity = @"%buf".items.capacity,
+            };
         }
 
         pub fn preAllocateAtLeast(
@@ -705,38 +711,39 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%allocator": std.mem.Allocator,
             @"%min_pre_allocated_length": u32,
         ) Error!void {
-            var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
+            var @"%counts" = @"%buf".countsArrayList();
+            try @"%counts".ensureUnusedCapacity(@"%allocator", @"%min_pre_allocated_length");
+            @"%buf".counts = @"%counts".items.ptr;
             try @"%buf".items.ensureUnusedCapacity(@"%allocator", @"%min_pre_allocated_length");
-            try @"%unset_bit_set".resize(@"%allocator", @"%buf".items.capacity, false);
-            @"%buf".unset_masks = @"%unset_bit_set".masks;
         }
         pub fn preAllocationRid(
             @"%buf": *@This(),
             @"%allocator": std.mem.Allocator,
         ) Error!void {
+            var @"%counts" = @"%buf".countsArrayList();
+            try @"%counts".shrinkToLen(@"%allocator");
+            @"%buf".counts = @"%counts".items.ptr;
             try @"%buf".items.shrinkToLen(@"%allocator");
-            var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
-            try @"%unset_bit_set".resize(@"%allocator", @"%buf".items.items.len, false);
-            @"%buf".unset_masks = @"%unset_bit_set".masks;
         }
         pub fn unsetCount(@"%buf": @This()) u32 {
-            return @intCast(@"%buf".unsetBitSet().count());
+            return @intCast(std.mem.countScalar(SlotCount, @"%buf".countsSlice(), @fromBackingInt(0)));
         }
         pub fn setCount(@"%buf": @This()) u32 {
-            return @"%buf".len_including_unset() - @"%buf".unsetCount();
+            return @"%buf".lenIncludingUnset() - @"%buf".unsetCount();
         }
         pub fn add(
             @"%buf": *@This(),
             @"%allocator": std.mem.Allocator,
             @"%new_item": @"%Item",
         ) Error!Slot(@"%Origin", @"%Item") {
-            var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
-            const @"%new_index" = @"%buf".len_including_unset();
+            const @"%new_index" = @"%buf".lenIncludingUnset();
+            var @"%counts" = @"%buf".countsArrayList();
+            const @"%new_count_ptr" = try @"%counts".addOne(@"%allocator");
             const @"%new_item_ptr" = try @"%buf".items.addOne(@"%allocator");
             if (std.math.cast(u32, @"%buf".items.items.len) == null) return error.OutOfMemory;
+            @"%buf".counts = @"%counts".items.ptr;
             @"%new_item_ptr".* = @"%new_item";
-            try @"%unset_bit_set".resize(@"%allocator", @"%buf".items.capacity, false);
-            @"%buf".unset_masks = @"%unset_bit_set".masks;
+            @"%new_count_ptr".* = @fromBackingInt(1);
             return Slot(@"%Origin", @"%Item"){ .index = @"%new_index" };
         }
         pub fn insert(
@@ -751,8 +758,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
                 _ => |@"%first_unset_index_enum"| {
                     const @"%first_unset_index" = @backingInt(@"%first_unset_index_enum");
                     @"%buf".items.items[@"%first_unset_index"] = @"%new_item";
-                    var @"%unset_bit_set" = @"%buf".unsetBitSet();
-                    @"%unset_bit_set".unset(@"%first_unset_index");
+                    @"%buf".countsSlice()[@"%first_unset_index"] = @fromBackingInt(1);
                     const @"%set_slot" = Slot(@"%Origin", @"%Item"){ .index = @"%first_unset_index" };
                     @"%buf".first_unset_index = @"%buf".firstUnsetIndexStartSearchFrom(@"%first_unset_index" + 1);
                     return @"%set_slot";
@@ -765,30 +771,26 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%index": U32,
             @"%new_item": @"%Item",
         ) Error!Slot(@"%Origin", @"%Item") {
-            // TODO should item drop be handled here or only in set_or_insert (I'd prefer that one)
-            if (@"%index" >= @"%buf".items.items.len) {
-                return @"%buf".insert(ctx.allocator, @"%new_item");
-            }
-            var @"%unset_bit_set" = @"%buf".unsetBitSet();
-            if (!@"%unset_bit_set".isSet(@"%index")) {
+            if ((@"%index" >= @"%buf".items.items.len) or (@"%buf".countsSlice()[@"%index"] != @as(
+                SlotCount,
+                @fromBackingInt(0),
+            ))) {
                 return @"%buf".insert(ctx.allocator, @"%new_item");
             }
             @"%buf".items.items[@"%index"] = @"%new_item";
-            @"%unset_bit_set".unset(@"%index");
+            @"%buf".countsSlice()[@"%index"] = @fromBackingInt(1);
             if (@"%buf".first_unset_index == @as(UnsetIndexOrNone, @fromBackingInt(@"%index"))) {
                 @"%buf".first_unset_index = @"%buf".firstUnsetIndexStartSearchFrom(@"%index" + 1);
             }
             return Slot(@"%Origin", @"%Item"){ .index = @"%index" };
         }
         fn firstUnsetIndexStartSearchFrom(@"%buf": @This(), @"%search_start_index": u32) UnsetIndexOrNone {
-            const @"%unset_bit_set" = @"%buf".unsetBitSet();
-            // skip first_unset_index bits rounded down to the mask
-            const @"%unset_bit_mask_index_to_start_search" = @"%search_start_index" / @bitSizeOf(std.bit_set.Dynamic.MaskInt);
-            var @"%unset_bit_set_after_unset_index": std.bit_set.Dynamic = .{
-                .masks = @"%unset_bit_set".masks + @"%unset_bit_mask_index_to_start_search",
-                .bit_length = @"%buf".items.items.len - (@"%unset_bit_mask_index_to_start_search" * @bitSizeOf(std.bit_set.Dynamic.MaskInt)),
-            };
-            return if (@"%unset_bit_set_after_unset_index".findFirstSet()) |@"%new_first_unset_index"|
+            return if (std.mem.findScalarPos(
+                SlotCount,
+                @"%buf".countsSlice(),
+                @"%search_start_index",
+                @fromBackingInt(0),
+            )) |@"%new_first_unset_index"|
                 @fromBackingInt(@as(u32, @intCast(@"%new_first_unset_index")))
             else
                 .none_unset;
@@ -802,11 +804,27 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         }
         pub fn take(
             @"%buf": *@This(),
+            ctx: anytype,
             @"%slot": Slot(@"%Origin", @"%Item"),
+            @"clone Item": fn (
+                anytype, // @TypeOf(ctx)
+                anytype, // @"%Item"
+            ) void,
         ) @"%Item" {
-            // TODO
             const @"%item" = @"%buf".item(@"%slot");
-            @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
+            const @"%slot_count" = @"%buf".countsSlice()[@"%slot".index];
+            if (@"%slot_count" == @as(SlotCount, @fromBackingInt(1))) {
+                // can be optimized
+                @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
+            } else {
+                @"clone Item"(ctx, @"%item");
+                switch (@"%slot_count") {
+                    .leaked => {},
+                    _ => {
+                        @"%buf".countsSlice()[@"%slot".index] = @fromBackingInt(@backingInt(@"%slot_count") - 1);
+                    },
+                }
+            }
             return @"%item";
         }
         /// returns the old item
@@ -860,57 +878,42 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
                 },
             }
         }
-        fn unsetSpanRid(
-            @"%buf": *@This(),
-            @"%span_to_unset": SpanCore,
-        ) void {
-            if (@"%span_to_unset".start + @"%span_to_unset".length.positive < @"%buf".len_including_unset()) {
-                var @"%unset_bit_set" = @"%buf".unsetBitSet();
-                @"%unset_bit_set".setRangeValue(
-                    .{
-                        .start = @"%span_to_unset".start,
-                        .end = @"%span_to_unset".start + @"%span_to_unset".length.positive,
+        fn unsetSpanRid(@"%buf": *@This(), @"%span": SpanCore) void {
+            const @"%counts_in_span" = @"%buf".countsSlice()[@"%span".start..(@"%span".start + @"%span".length.positive)];
+            for (@"%counts_in_span") |*@"%count"| {
+                switch (@"%count".*) {
+                    .leaked => {},
+                    _ => {
+                        @"%count".* = @fromBackingInt(@backingInt(@"%count".*) - 1);
                     },
-                    true,
-                );
-                @"%buf".first_unset_index = @fromBackingInt(@min(@backingInt(@"%buf".first_unset_index), @"%span_to_unset".start));
-            } else {
-                // span is at the end
-                @"%buf".endUnsetSpanRid(@"%span_to_unset".length);
-            }
-        }
-        fn endUnsetSpanRid(
-            @"%buf": *@This(),
-            @"%length_to_unset": P32,
-        ) void {
-            var @"%unset_bit_set" = @"%buf".unsetBitSet();
-            // can be optimized a bit
-            var @"%length_to_keep" = @as(u32, @intCast(@"%buf".items.items.len)) - @"%length_to_unset".positive;
-            while (@"%length_to_keep" >= 1) {
-                @"%length_to_keep" -= 1;
-                if (!@"%unset_bit_set".isSet(@"%length_to_keep")) {
-                    @"%length_to_keep" += 1;
-                    @"%buf".items.shrinkRetainingCapacity(@"%length_to_keep");
-                    @"%unset_bit_set".setRangeValue(
-                        .{
-                            .start = @"%length_to_keep",
-                            .end = @"%unset_bit_set".bit_length,
-                        },
-                        false,
-                    );
-                    if (@"%buf".first_unset_index == @as(UnsetIndexOrNone, @fromBackingInt(@"%length_to_keep"))) {
-                        @"%buf".first_unset_index = .none_unset;
-                    }
-                    return;
                 }
             }
-            @"%buf".clearRetainingCapacity();
+            if (@"%span".start + @"%span".length.positive < @"%buf".lenIncludingUnset()) {
+                @"%buf".first_unset_index = @fromBackingInt(@min(@backingInt(@"%buf".first_unset_index), @"%span".start));
+            } else {
+                // span is at the end
+                @"%buf".trimUnsetEnd();
+            }
+        }
+        fn trimUnsetEnd(@"%buf": *@This()) void {
+            const @"%counts_without_trailing_0s" = std.mem.trimEnd(
+                SlotCount,
+                @"%buf".countsSlice(),
+                &.{@fromBackingInt(0)},
+            );
+            if (@"%counts_without_trailing_0s".len < @"%buf".items.items.len) {
+                if (@"%buf".first_unset_index == @as(UnsetIndexOrNone, @fromBackingInt(@intCast(@"%counts_without_trailing_0s".len)))) {
+                    @"%buf".first_unset_index = .none_unset;
+                }
+                var @"%counts" = @"%buf".countsArrayList();
+                @"%counts".shrinkRetainingCapacity(@"%counts_without_trailing_0s".len);
+                @"%buf".counts = @"%counts".items.ptr;
+                @"%buf".items.shrinkRetainingCapacity(@"%counts_without_trailing_0s".len);
+            }
         }
         /// invalidates all Slots and Spans into this Buf
         pub fn clearRetainingCapacity(@"%buf": *@This()) void {
             @"%buf".items.clearRetainingCapacity();
-            var @"%unset_bit_set" = @"%buf".unsetBitSet();
-            @"%unset_bit_set".unsetAll();
             @"%buf".first_unset_index = .none_unset;
         }
         pub fn spanMoveToEnd(
@@ -918,7 +921,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             ctx: anytype,
             @"%span": Span(@"%Origin", @"%Item"),
         ) Error!Span(@"%Origin", @"%Item") {
-            if (@"%span".start + @"%span".length.positive == @"%buf".len_including_unset()) {
+            if (@"%span".start + @"%span".length.positive == @"%buf".lenIncludingUnset()) {
                 return @"%span";
             }
             // span is not at the end already
@@ -930,12 +933,12 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf".items.appendSliceAssumeCapacity(@"%buf".spanSlice(@"%span"));
             if (std.math.cast(u32, @"%buf".items.items.len) == null) return error.OutOfMemory;
             return .{
-                .start = @"%buf".len_including_unset() - @"%span".length.positive,
+                .start = @"%buf".lenIncludingUnset() - @"%span".length.positive,
                 .length = @"%span".length,
             };
         }
         pub fn spanMoveToUnset(@"%buf": *@This(), @"%span": Span(@"%Origin", @"%Item")) Span(@"%Origin", @"%Item") {
-            if (@"%span".start + @"%span".length.positive < @"%buf".len_including_unset()) {
+            if (@"%span".start + @"%span".length.positive < @"%buf".lenIncludingUnset()) {
                 return @"%span";
             }
             // span is at the end of items
@@ -980,33 +983,17 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
                 _ => |@"%first_unset_index_enum"| {
                     const @"%first_unset_index" = @backingInt(@"%first_unset_index_enum");
                     // can be optimized
-                    const @"%unset_bit_mask_index_to_start_search" = @"%first_unset_index" / @bitSizeOf(std.bit_set.Dynamic.MaskInt);
-                    var @"%unset_iterator" = (std.bit_set.Dynamic{
-                        .masks = @"%buf".unset_masks + @"%unset_bit_mask_index_to_start_search",
-                        .bit_length = @"%buf".items.items.len - (@"%unset_bit_mask_index_to_start_search" * @bitSizeOf(std.bit_set.Dynamic.MaskInt)),
-                    }).iterator(.{ .direction = .forward, .kind = .set });
-                    _ = @"%unset_iterator".next().?;
                     // unset_iterator is now at after first_unset_index
                     // because we know there is no unset index before first_unset_index
-                    var @"%unset_end_so_far" = @"%first_unset_index";
                     var @"%unset_length_so_far": u32 = 1;
-                    while (@"%unset_iterator".next()) |@"%unset_index_usize"| {
-                        const @"%unset_index": u32 = @intCast(@"%unset_index_usize");
-                        if (@"%unset_index" > @"%unset_end_so_far" + 1) {
+                    for (@"%buf".countsSlice()[@"%first_unset_index"..], @"%first_unset_index"..) |@"%count", @"%index"| {
+                        if (@"%count" == @as(SlotCount, @fromBackingInt(0))) {
                             @"%unset_length_so_far" = 0;
                         } else {
                             @"%unset_length_so_far" += 1;
-                            @"%unset_end_so_far" = @"%unset_index";
                             if (@"%unset_length_so_far" == @"%length_to_set".positive) {
-                                const @"%found_start" = @as(u32, @intCast(@"%unset_index")) + 1 - @"%length_to_set".positive;
-                                var @"%unset_bit_set" = @"%buf".unsetBitSet();
-                                @"%unset_bit_set".setRangeValue(
-                                    .{
-                                        .start = @"%found_start",
-                                        .end = @"%found_start" + @"%length_to_set".positive,
-                                    },
-                                    false,
-                                );
+                                const @"%found_start" = @"%index" + 1 - @"%length_to_set".positive;
+                                @memset(@"%buf".countsSlice()[@"%found_start"..(@"%index" + 1)], @fromBackingInt(1));
                                 if (@"%first_unset_index" == @"%found_start") {
                                     @"%buf".first_unset_index = @"%buf".firstUnsetIndexStartSearchFrom(@"%first_unset_index" + 1);
                                 }
@@ -1030,7 +1017,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
                 @"%buf".items.appendSliceAssumeCapacity(@"%new_items");
                 if (std.math.cast(u32, @"%buf".items.items.len) == null) return error.OutOfMemory;
                 return .{ .yes = .{
-                    .start = @"%buf".len_including_unset() - @as(u32, @intCast(@"%new_items".len)),
+                    .start = @"%buf".lenIncludingUnset() - @as(u32, @intCast(@"%new_items".len)),
                     .length = P32.fromU32(@intCast(@"%new_items".len)).?,
                 } };
             } else return .{ .no = {} };
@@ -1042,13 +1029,13 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%new_items": anytype,
             @"%next_item": fn (*@TypeOf(@"%new_items")) ?@"%Item",
         ) Error!Opt(Span(@"%Origin", @"%Item")) {
-            const @"%length_before_add" = @"%buf".len_including_unset();
+            const @"%length_before_add" = @"%buf".lenIncludingUnset();
             var @"%new_items_iterator" = @"%new_items";
             while (@"%next_item"(&@"%new_items_iterator")) |@"%new_item"| {
                 _ = try @"%buf".add(@"%allocator", @"%new_item");
             }
             return if (P32.fromU32(
-                @"%buf".len_including_unset() - @"%length_before_add",
+                @"%buf".lenIncludingUnset() - @"%length_before_add",
             )) |@"%new_length"|
                 .{ .yes = .{ .start = @"%length_before_add", .length = @"%new_length" } }
             else
@@ -1126,12 +1113,12 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%next_item": fn (*@TypeOf(@"%new_items")) ?@"%Item",
         ) Error!Span(@"%Origin", @"%Item") {
             const @"%moved_span" = try @"%buf".spanMoveToEnd(@"%allocator", @"%span");
-            const @"%length_before_add" = @"%buf".len_including_unset();
+            const @"%length_before_add" = @"%buf".lenIncludingUnset();
             var @"%new_items_iterator" = @"%new_items";
             while (@"%next_item"(&@"%new_items_iterator")) |@"%new_item"| {
                 _ = try @"%buf".add(@"%allocator", @"%new_item");
             }
-            const @"%iterated_length" = @"%buf".len_including_unset() - @"%length_before_add";
+            const @"%iterated_length" = @"%buf".lenIncludingUnset() - @"%length_before_add";
             return Span(@"%Origin", @"%Item"){
                 .start = @"%moved_span".start,
                 .length = @"%moved_span".length.addAssumeNoOverflow(@"%iterated_length"),
@@ -1157,11 +1144,10 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%allocator": std.mem.Allocator,
         ) Unset_slice(@"%Item") {
             if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
-                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
-                @"%unset_bit_set".deinit(@"%allocator");
-                var @"%items" = @"%buf".items;
-                @"%items".clearRetainingCapacity();
-                return .{ .undefined_items = @"%items".allocatedSlice() };
+                var @"%counts" = @"%buf".countsArrayList();
+                @"%counts".deinit(@"%allocator");
+                @"%buf".counts = undefined;
+                return .{ .undefined_items = @"%buf".items.allocatedSlice() };
             } else {
                 return .{ .undefined_items = &.{} };
             }
@@ -1172,12 +1158,11 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%allocator": std.mem.Allocator,
         ) Unset_slice(@"%Item") {
             if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
-                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
-                @"%unset_bit_set".deinit(@"%allocator");
-                var @"%items" = @"%buf".items;
-                @"%items".clearRetainingCapacity();
+                var @"%counts" = @"%buf".countsArrayList();
+                @"%counts".deinit(@"%allocator");
+                @"%buf".counts = undefined;
                 @"%allocator".destroy(@"%buf");
-                return .{ .undefined_items = @"%items".allocatedSlice() };
+                return .{ .undefined_items = @"%buf".items.allocatedSlice() };
             } else {
                 return .{ .undefined_items = &.{} };
             }
@@ -1188,9 +1173,10 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%allocator": std.mem.Allocator,
         ) void {
             if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                var @"%counts" = @"%buf".countsArrayList();
+                @"%counts".deinit(@"%allocator");
+                @"%buf".counts = undefined;
                 @"%buf".items.deinit(@"%allocator");
-                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
-                @"%unset_bit_set".deinit(@"%allocator");
             } else {
                 @"%buf".reference_count = if (@"%buf".reference_count == .leaked) .leaked else @fromBackingInt(
                     @backingInt(@"%buf".reference_count) - 1,
@@ -1203,9 +1189,10 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%allocator": std.mem.Allocator,
         ) void {
             if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                var @"%counts" = @"%buf".countsArrayList();
+                @"%counts".deinit(@"%allocator");
+                @"%buf".counts = undefined;
                 @"%buf".items.deinit(@"%allocator");
-                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
-                @"%unset_bit_set".deinit(@"%allocator");
                 @"%allocator".destroy(@"%buf");
             } else {
                 @"%buf".reference_count = if (@"%buf".reference_count == .leaked) .leaked else @fromBackingInt(
@@ -1217,12 +1204,24 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf": *@This(),
             ctx: anytype, // Ctx(&.{@"%Item".Bufs})
             @"%slot": Slot(@"%Origin", @"%Item"),
-            @"drop Item": fn (@TypeOf(ctx), @"%Item") void,
+            @"drop Item": fn (
+                anytype, // @TypeOf(ctx)
+                anytype, // @"%Item"
+            ) void,
         ) void {
-            const @"%item" = @"%buf".item(@"%slot");
-            @"drop Item"(ctx, @"%item");
-            @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
-            return @"%item";
+            const @"%slot_count" = @"%buf".countsSlice()[@"%slot".index];
+            if (@"%slot_count" == @as(SlotCount, @fromBackingInt(1))) {
+                @"drop Item"(ctx, @"%buf".item(@"%slot"));
+                // can be optimized
+                @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
+            } else {
+                switch (@"%slot_count") {
+                    .leaked => {},
+                    _ => {
+                        @"%buf".countsSlice()[@"%slot".index] = @fromBackingInt(@backingInt(@"%slot_count") - 1);
+                    },
+                }
+            }
         }
         pub fn dropSpan(
             @"%buf": *@This(),
@@ -1230,6 +1229,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%span": Span(@"%Origin", @"%Item"),
             @"drop Item": fn (@TypeOf(ctx), @"%Item") void,
         ) void {
+            // TODO optimize
             for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index"| {
                 @"%buf".dropSlot(ctx, .{ .index = @"%index" }, @"drop Item");
             }
@@ -1247,9 +1247,12 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf": *@This(),
             @"%slot": Slot(@"%Origin", @"%Item"),
         ) void {
-            // TODO increment count
-            _ = @"%buf";
-            _ = @"%slot";
+            switch (@"%buf".counts()[@"%slot".index]) {
+                .leaked => {},
+                _ => |@"%count"| {
+                    @"%buf".counts()[@"%slot".index] = @fromBackingInt(@"%count" + 1);
+                },
+            }
         }
         pub fn cloneSpan(
             @"%buf": *@This(),
@@ -1719,12 +1722,12 @@ pub fn buf_reuse(
     ctx: anytype,
     @"%": Unset_slice(@"%Item".Ty),
 ) Buf(@"%Origin".Ty, @"%Item".Ty) {
-    var items = std.ArrayList(@"%Item").fromOwnedSlice(@"%".slice.undefined_items);
-    items.clearRetainingCapacity();
+    var @"%items" = std.ArrayList(@"%Item").fromOwnedSlice(@"%".slice.undefined_items);
+    @"%items".clearRetainingCapacity();
     const @"%buf" = try ctx.allocator.create(BufCore(@"%Origin".Ty, @"%Item".Ty));
     @"%buf".* = .{
-        .items = items,
-        .unset_masks = (std.bit_set.Dynamic{}).masks,
+        .items = @"%items",
+        .counts = undefined,
         .first_unset_index = .none_unset,
     };
     return @"%buf";
@@ -1807,7 +1810,7 @@ pub fn item(
     @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
 ) @"%Item".Ty {
     var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%item" = @"%buf".take(@"%slot");
+    const @"%item" = @"%buf".take(ctx, @"%slot", @"%Item".drop);
     return @"%item";
 }
 pub fn replace(

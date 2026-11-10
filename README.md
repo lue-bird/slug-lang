@@ -222,15 +222,16 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins (like Box<> or gc or shared_ptr)
 
 ## TODO
+- core.zig factor out CountOrLeaked() as super of ReferenceCount/SlotCount with methods increase and decrease
 - check that moving spans does a clone if necessary
 - when adding items (e.g. optSpanAdd), make sure to drop the item
 - add more examples
-- check if `if containing-never-type {}` is handled correctly. It should either report an error and recommend using `Choice-empty-to<>` or return `[]`
 - show implicitly passed bufs when hovering a project fn
 - consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 - website with online repl
 
 ## implementation details
+- introduce operation that can set an index after new unset items. Something like `add-unset-then`
 - shadowing is disallowed (local functions are an entirely separate context so they allow it)
 - expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
   The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant

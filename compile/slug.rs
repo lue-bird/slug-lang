@@ -6569,7 +6569,7 @@ fn zig_variable_drop(
                         item_dealiased
                     },
                 );
-                output.push_str(".dropSlot(");
+                output.push_str(".*.dropSlot(");
                 zig_context_variable_at_depth(output, context_scope_start, depth);
                 output.push_str(", ");
                 output.push_str(variable_name);
@@ -6601,7 +6601,7 @@ fn zig_variable_drop(
                         item_dealiased
                     },
                 );
-                output.push_str(".dropSpan(");
+                output.push_str(".*.dropSpan(");
                 zig_context_variable_at_depth(output, context_scope_start, depth);
                 output.push_str(", ");
                 output.push_str(variable_name);
@@ -6731,7 +6731,7 @@ fn zig_variable_clone(
                         item_dealiased
                     },
                 );
-                output.push_str(".cloneSlot(");
+                output.push_str(".*.cloneSlot(");
                 output.push_str(variable_name);
                 output.push_str(");\n");
             } else if name == type_span_name
@@ -6759,7 +6759,7 @@ fn zig_variable_clone(
                         item_dealiased
                     },
                 );
-                output.push_str(".cloneSpan(");
+                output.push_str(".*.cloneSpan(");
                 output.push_str(variable_name);
                 output.push_str(");\n");
             } else if name == type_buf_name {
@@ -7102,7 +7102,8 @@ fn name_to_uppercase_zig(name: &str) -> String {
         | "BufCore"
         | "Unset_sliceCore"
         | "ReferenceCount"
-        | "ItemCount" => sanitized + "ø",
+        | "ItemCount"
+        | "UnsetIndexOrNone" => sanitized + "ø",
         _ => sanitized,
     }
 }
