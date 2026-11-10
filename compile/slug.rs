@@ -2602,7 +2602,7 @@ fn syntax_expression_connect_fns_in_graph_from<'a>(
             result,
         } => {
             if let Some(result) = result {
-                let mut parameter_introduced_variables = Vec::new();
+                let mut parameter_introduced_variables = Vec::with_capacity(2);
                 for parameter in parameters {
                     syntax_parameter_pattern_variables_for_each(parameter, &mut |name, _type| {
                         parameter_introduced_variables.push(name.value);
@@ -2981,7 +2981,7 @@ fn syntax_project_fn_check<'a>(
             result_expression_is_invalid: true,
         };
     };
-    let mut parameter_introduced_variables = std::collections::HashMap::new();
+    let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
     for syntax_parameter in project_fn.parameters {
         syntax_parameter_pattern_variables_for_each(syntax_parameter, &mut |name, type_| {
             parameter_introduced_variables.insert(
@@ -4919,25 +4919,21 @@ fn project_type_alias_to_zig(
             name_to_uppercase_local_zig(output, parameter);
             output.push_str(": SlugType, ");
         }
-        zig_context_variable(
-            output,
-            lsp_types::Position {
-                line: 0,
-                character: 0,
-            },
-        );
+        let context_scope_start = lsp_types::Position::default();
+        zig_context_variable(output, context_scope_start);
         output.push_str(": anytype, it: anytype) void {\n");
         zig_ignore(output, |output| {
-            zig_context_variable(
-                output,
-                lsp_types::Position {
-                    line: 0,
-                    character: 0,
-                },
-            )
+            zig_context_variable(output, context_scope_start)
         });
         zig_ignore(output, |output| output.push_str("it"));
-        zig_variable_clone(output, "it", aliased_type, 0, type_aliases);
+        zig_variable_clone(
+            output,
+            "it",
+            aliased_type,
+            context_scope_start,
+            0,
+            type_aliases,
+        );
         output.push_str("}\n");
     }
     {
@@ -4949,25 +4945,21 @@ fn project_type_alias_to_zig(
             name_to_uppercase_local_zig(output, parameter);
             output.push_str(": SlugType, ");
         }
-        zig_context_variable(
-            output,
-            lsp_types::Position {
-                line: 0,
-                character: 0,
-            },
-        );
+        let context_scope_start = lsp_types::Position::default();
+        zig_context_variable(output, context_scope_start);
         output.push_str(": anytype, it: anytype) void {\n");
         zig_ignore(output, |output| {
-            zig_context_variable(
-                output,
-                lsp_types::Position {
-                    line: 0,
-                    character: 0,
-                },
-            )
+            zig_context_variable(output, context_scope_start)
         });
         zig_ignore(output, |output| output.push_str("it"));
-        zig_variable_drop(output, "it", aliased_type, 0, type_aliases);
+        zig_variable_drop(
+            output,
+            "it",
+            aliased_type,
+            context_scope_start,
+            0,
+            type_aliases,
+        );
         output.push_str("}\n\n");
     }
 }
@@ -5021,7 +5013,8 @@ fn syntax_project_fn_to_zig(
     output.push_str(") Error!");
     type_to_zig(output, result_type, type_aliases);
     output.push_str(" {\n");
-    let mut parameter_introduced_variables = std::collections::HashMap::new();
+    let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
+    let mut parameter_introduced_variables_last_uses = std::collections::HashMap::with_capacity(2);
     let mut parameter_introduced_reachable_bufs = std::collections::HashMap::new();
     for (parameter_index, (syntax_parameter, _)) in syntax_parameters
         .iter()
@@ -5034,8 +5027,13 @@ fn syntax_project_fn_to_zig(
             syntax_parameter,
             None,
             &format!("@\"%{}\"", parameter_index),
+            function_scope_start,
             type_aliases,
-            &mut parameter_introduced_variables,
+            &mut |variable_name, variable_type| {
+                parameter_introduced_variables.insert(variable_name, variable_type);
+                parameter_introduced_variables_last_uses
+                    .insert(variable_name, Vec::with_capacity(1));
+            },
             &mut parameter_introduced_reachable_bufs,
         );
     }
@@ -5050,6 +5048,12 @@ fn syntax_project_fn_to_zig(
     if result_expression_is_invalid {
         zig_incomplete_expression(output);
     } else {
+        syntax_expression_local_variables_last_uses(
+            syntax_result,
+            expressions,
+            &mut std::collections::HashSet::with_capacity(2),
+            &mut parameter_introduced_variables_last_uses,
+        );
         syntax_expression_to_zig(
             output,
             type_aliases,
@@ -5059,6 +5063,7 @@ fn syntax_project_fn_to_zig(
             checked_local_fns,
             checked_queries,
             &mut parameter_introduced_variables,
+            &mut parameter_introduced_variables_last_uses,
             syntax_result,
             with_parameters_conntext_scope_start,
             ZigReturnContext::Expression,
@@ -5107,12 +5112,12 @@ fn zig_update_context_variable_with_new_reachable_bufs(
 }
 fn zig_ctx_buf(
     output: &mut String,
-    context_scope_start: lsp_types::Position,
+    context_variable: impl FnOnce(&mut String),
     origin_dealiased: &Type,
     item_dealiased: &Type,
 ) {
     output.push_str("@constCast(@field(");
-    zig_context_variable(output, context_scope_start);
+    context_variable(output);
     output.push_str(", ctxBufName(");
     sloe_type_name_zig(output, origin_dealiased);
     output.push_str(", ");
@@ -5126,6 +5131,20 @@ fn zig_context_variable(output: &mut String, scope_start: lsp_types::Position) {
     output.push(':');
     _ = write!(output, "{}", scope_start.character);
     output.push('"');
+}
+fn zig_context_variable_at_depth(
+    output: &mut String,
+    scope_start: lsp_types::Position,
+    depth: u32,
+) {
+    if depth == 0 {
+        zig_context_variable(output, scope_start);
+    } else {
+        use std::fmt::Write as _;
+        output.push_str("@\"%ctx");
+        _ = write!(output, "{}", depth);
+        output.push('"');
+    }
 }
 fn zig_incomplete_expression(output: &mut String) {
     output.push_str("std.process.abort()");
@@ -5208,8 +5227,9 @@ fn syntax_pattern_to_zig_destructuring<'a>(
     pattern: &'a SyntaxPattern,
     expected_type: Option<&'a Type>,
     to_destructure: &str, // tiny possible optimization: pass Cow<'b, str> and use that as zig path
+    context_scope_start: lsp_types::Position,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
-    introduced_variables: &mut std::collections::HashMap<&'a Name, ZigLocalVariable<'a>>,
+    insert_introduced_variable: &mut impl FnMut(&'a Name, ZigLocalVariable<'a>),
     introduced_reachable_bufs: &mut std::collections::HashMap<
         TypeBuf,
         (/* zig path */ Box<str>, Vec<BufReachPathSegment>),
@@ -5225,7 +5245,7 @@ fn syntax_pattern_to_zig_destructuring<'a>(
             zig_ignore(output, |output| {
                 name_to_lowercase_local_zig_introduced_at(output, &name.value, name.start)
             });
-            introduced_variables.insert(
+            insert_introduced_variable(
                 &name.value,
                 ZigLocalVariable {
                     introduced_start: name.start,
@@ -5269,15 +5289,38 @@ fn syntax_pattern_to_zig_destructuring<'a>(
                         .map(|type_| std::borrow::Cow::Owned(syntax_type_to_type(type_)))
                 })
             {
+                let mut ignored_contains_reachable_bufs = false;
                 type_reachable_bufs(
                     &ignored_type,
                     vec![],
                     type_aliases,
                     &mut |type_buf, path| {
+                        ignored_contains_reachable_bufs = true;
                         introduced_reachable_bufs
                             .insert(type_buf, (Box::from(to_destructure), path));
                     },
                 );
+                if ignored_contains_reachable_bufs {
+                    output.push_str("defer {\n");
+                    zig_variable_drop(
+                        output,
+                        to_destructure,
+                        &ignored_type,
+                        context_scope_start,
+                        0,
+                        type_aliases,
+                    );
+                    output.push_str("}\n");
+                } else {
+                    zig_variable_drop(
+                        output,
+                        to_destructure,
+                        &ignored_type,
+                        context_scope_start,
+                        0,
+                        type_aliases,
+                    );
+                }
             }
         }
         SyntaxPattern::Variant { name, values } => {
@@ -5304,8 +5347,9 @@ fn syntax_pattern_to_zig_destructuring<'a>(
                     } else {
                         format!("{to_destructure}.{}", name_to_lowercase_zig(&name.value))
                     },
+                    context_scope_start,
                     type_aliases,
-                    introduced_variables,
+                    insert_introduced_variable,
                     introduced_reachable_bufs,
                 );
             }
@@ -5327,8 +5371,9 @@ fn syntax_pattern_to_zig_destructuring<'a>(
                         _ => None,
                     },
                     &format!("{to_destructure}.@\"{part_index}\""),
+                    context_scope_start,
                     type_aliases,
-                    introduced_variables,
+                    insert_introduced_variable,
                     introduced_reachable_bufs,
                 );
             }
@@ -5356,8 +5401,9 @@ fn syntax_pattern_to_zig_destructuring<'a>(
                             "{to_destructure}.{}",
                             name_to_lowercase_zig(&field.name.value)
                         ),
+                        context_scope_start,
                         type_aliases,
-                        introduced_variables,
+                        insert_introduced_variable,
                         introduced_reachable_bufs,
                     );
                 }
@@ -5383,6 +5429,7 @@ fn syntax_expression_to_zig<'a>(
     checked_local_fns: &std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     checked_queries: &'a std::collections::HashMap<lsp_types::Position, CheckedQuery>,
     local_variables: &mut std::collections::HashMap<&'a Name, ZigLocalVariable<'a>>,
+    local_variables_last_uses: &mut std::collections::HashMap<&'a Name, Vec<lsp_types::Position>>,
     expression: &'a SyntaxExpression,
     context_scope_start: lsp_types::Position,
     return_context: ZigReturnContext,
@@ -5506,20 +5553,47 @@ fn syntax_expression_to_zig<'a>(
             }
         }
         SyntaxExpression::Variable(name) => {
-            if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
+            let Some(local_variable) = local_variables.get(&name.value) else {
+                zig_incomplete_expression(output);
+                return;
+            };
+            if let Some(last_uses) = local_variables_last_uses.get(&name.value)
+                && !last_uses.contains(&name.start)
+                && let Some(type_) = &local_variable.type_
+            {
+                let label = match return_context {
+                    ZigReturnContext::StatementsFollowedByBreak(label) => label,
+                    ZigReturnContext::Expression => {
+                        let label = expression_start(expression, expressions);
+                        zig_block_start(output, label);
+                        label
+                    }
+                };
+                let mut zig_variable_name = String::new();
+                name_to_lowercase_local_zig_introduced_at(
+                    &mut zig_variable_name,
+                    &name.value,
+                    local_variable.introduced_start,
+                );
+                js_variable_clone(output, &zig_variable_name, type_, type_aliases);
                 zig_break_start(output, label);
-            }
-            if let Some(local_variable) = local_variables.get(&name.value) {
+                output.push_str(&zig_variable_name);
+                zig_break_end(output);
+                if let ZigReturnContext::Expression = return_context {
+                    zig_block_end(output);
+                }
+            } else {
+                if let ZigReturnContext::StatementsFollowedByBreak(label) = return_context {
+                    zig_break_start(output, label);
+                }
                 name_to_lowercase_local_zig_introduced_at(
                     output,
                     &name.value,
                     local_variable.introduced_start,
                 );
-            } else {
-                name_to_lowercase_local_zig(output, &name.value);
-            }
-            if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
-                zig_break_end(output);
+                if let ZigReturnContext::StatementsFollowedByBreak(_) = return_context {
+                    zig_break_end(output);
+                }
             }
         }
         SyntaxExpression::Call {
@@ -5567,6 +5641,7 @@ fn syntax_expression_to_zig<'a>(
                         checked_local_fns,
                         checked_queries,
                         local_variables,
+                        local_variables_last_uses,
                         argument,
                         context_scope_start,
                         ZigReturnContext::Expression,
@@ -5613,6 +5688,7 @@ fn syntax_expression_to_zig<'a>(
                         checked_local_fns,
                         checked_queries,
                         local_variables,
+                        local_variables_last_uses,
                         argument,
                         context_scope_start,
                         ZigReturnContext::Expression,
@@ -5682,6 +5758,7 @@ fn syntax_expression_to_zig<'a>(
                             checked_local_fns,
                             checked_queries,
                             local_variables,
+                            local_variables_last_uses,
                             value,
                             context_scope_start,
                             ZigReturnContext::Expression,
@@ -5700,6 +5777,7 @@ fn syntax_expression_to_zig<'a>(
                             checked_local_fns,
                             checked_queries,
                             local_variables,
+                            local_variables_last_uses,
                             value,
                             context_scope_start,
                             ZigReturnContext::Expression,
@@ -5815,7 +5893,9 @@ fn syntax_expression_to_zig<'a>(
             zig_ignore(output, |output| {
                 zig_context_variable(output, local_function_scope_start)
             });
-            let mut parameter_introduced_variables = std::collections::HashMap::new();
+            let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
+            let mut parameter_introduced_variables_last_uses =
+                std::collections::HashMap::with_capacity(2);
             let mut parameter_introduced_reachable_bufs = std::collections::HashMap::new();
             for syntax_parameter in parameters {
                 let mut parameter_name = String::new();
@@ -5825,8 +5905,13 @@ fn syntax_expression_to_zig<'a>(
                     syntax_parameter,
                     None,
                     &parameter_name,
+                    context_scope_start,
                     type_aliases,
-                    &mut parameter_introduced_variables,
+                    &mut |name, type_| {
+                        parameter_introduced_variables.insert(name, type_);
+                        parameter_introduced_variables_last_uses
+                            .insert(name, Vec::with_capacity(1));
+                    },
                     &mut parameter_introduced_reachable_bufs,
                 );
             }
@@ -5855,6 +5940,7 @@ fn syntax_expression_to_zig<'a>(
                         checked_local_fns,
                         checked_queries,
                         &mut parameter_introduced_variables,
+                        &mut parameter_introduced_variables_last_uses,
                         result,
                         local_function_scope_start,
                         ZigReturnContext::Expression,
@@ -5890,6 +5976,7 @@ fn syntax_expression_to_zig<'a>(
                     checked_local_fns,
                     checked_queries,
                     local_variables,
+                    local_variables_last_uses,
                     part,
                     context_scope_start,
                     ZigReturnContext::Expression,
@@ -5940,6 +6027,7 @@ fn syntax_expression_to_zig<'a>(
                             checked_local_fns,
                             checked_queries,
                             local_variables,
+                            local_variables_last_uses,
                             value,
                             context_scope_start,
                             ZigReturnContext::Expression,
@@ -5978,6 +6066,7 @@ fn syntax_expression_to_zig<'a>(
                 checked_local_fns,
                 checked_queries,
                 local_variables,
+                local_variables_last_uses,
                 expressions.item(expression),
                 context_scope_start,
                 return_context,
@@ -6023,6 +6112,7 @@ fn syntax_expression_to_zig<'a>(
                         checked_local_fns,
                         checked_queries,
                         local_variables,
+                        local_variables_last_uses,
                         expressions.item(queried),
                         context_scope_start,
                         ZigReturnContext::Expression,
@@ -6039,6 +6129,7 @@ fn syntax_expression_to_zig<'a>(
                     let result = expressions.item(result);
                     let mut destructuring_introduced_reachable_bufs =
                         std::collections::HashMap::new();
+                    let mut destruct_local_variables_last_uses = std::collections::HashMap::new();
                     if let Some(pattern) = pattern {
                         syntax_pattern_to_zig_destructuring(
                             output,
@@ -6047,8 +6138,13 @@ fn syntax_expression_to_zig<'a>(
                                 .get(equals_start)
                                 .map(|query| &query.queried_type),
                             &queried_variable_name,
+                            context_scope_start,
                             type_aliases,
-                            local_variables,
+                            &mut |name, type_| {
+                                local_variables.insert(name, type_);
+                                destruct_local_variables_last_uses
+                                    .insert(name, Vec::with_capacity(1));
+                            },
                             &mut destructuring_introduced_reachable_bufs,
                         );
                     }
@@ -6060,6 +6156,13 @@ fn syntax_expression_to_zig<'a>(
                         with_destructured_context_scope_start,
                         &destructuring_introduced_reachable_bufs,
                     );
+                    syntax_expression_local_variables_last_uses(
+                        result,
+                        expressions,
+                        &mut std::collections::HashSet::new(),
+                        &mut destruct_local_variables_last_uses,
+                    );
+                    local_variables_last_uses.extend(destruct_local_variables_last_uses);
                     syntax_expression_to_zig(
                         output,
                         type_aliases,
@@ -6069,6 +6172,7 @@ fn syntax_expression_to_zig<'a>(
                         checked_local_fns,
                         checked_queries,
                         local_variables,
+                        local_variables_last_uses,
                         result,
                         with_destructured_context_scope_start,
                         ZigReturnContext::StatementsFollowedByBreak(label),
@@ -6124,6 +6228,7 @@ fn syntax_expression_to_zig<'a>(
                         checked_local_fns,
                         checked_queries,
                         local_variables,
+                        local_variables_last_uses,
                         expressions.item(queried),
                         context_scope_start,
                         ZigReturnContext::Expression,
@@ -6145,14 +6250,19 @@ fn syntax_expression_to_zig<'a>(
                     }
                     // can be optimized by not cloning if there is only one case
                     let mut case_local_variables = local_variables.clone();
+                    let mut case_local_variables_last_uses = std::collections::HashMap::new();
                     let mut case_introduced_reachable_bufs = std::collections::HashMap::new();
                     syntax_pattern_to_zig_destructuring(
                         output,
                         &case.pattern,
                         Some(&checked_query.queried_type),
                         &queried_variable_name,
+                        context_scope_start,
                         type_aliases,
-                        &mut case_local_variables,
+                        &mut |name, type_| {
+                            case_local_variables.insert(name, type_);
+                            case_local_variables_last_uses.insert(name, Vec::with_capacity(1));
+                        },
                         &mut case_introduced_reachable_bufs,
                     );
                     match &case.result {
@@ -6168,6 +6278,17 @@ fn syntax_expression_to_zig<'a>(
                                 case_context_scope_start,
                                 &case_introduced_reachable_bufs,
                             );
+                            syntax_expression_local_variables_last_uses(
+                                case_result,
+                                expressions,
+                                &mut std::collections::HashSet::new(),
+                                &mut case_local_variables_last_uses,
+                            );
+                            case_local_variables_last_uses.extend(
+                                local_variables_last_uses
+                                    .iter()
+                                    .map(|(name, uses)| (*name, uses.clone())),
+                            );
                             syntax_expression_to_zig(
                                 output,
                                 type_aliases,
@@ -6177,6 +6298,7 @@ fn syntax_expression_to_zig<'a>(
                                 checked_local_fns,
                                 checked_queries,
                                 &mut case_local_variables,
+                                &mut case_local_variables_last_uses,
                                 case_result,
                                 case_context_scope_start,
                                 ZigReturnContext::StatementsFollowedByBreak(label),
@@ -6282,72 +6404,75 @@ fn slug_type_zig(
     output.push_str(", .Ty = ");
     type_to_zig(output, type_, type_aliases);
     output.push_str(", .drop = ");
-    zig_drop_function(output, type_, depth, type_aliases);
+    zig_drop_function(
+        output,
+        type_,
+        lsp_types::Position::default(),
+        depth + 1,
+        type_aliases,
+    );
     output.push_str(", .clone = ");
-    zig_clone_function(output, type_, depth, type_aliases);
+    zig_clone_function(
+        output,
+        type_,
+        lsp_types::Position::default(),
+        depth + 1,
+        type_aliases,
+    );
     output.push_str(", }");
 }
 fn zig_drop_function(
     output: &mut String,
     type_: &Type,
+    context_scope_start: lsp_types::Position,
     depth: u32,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     output.push_str("struct { fn f(");
-    zig_context_variable(
-        output,
-        lsp_types::Position {
-            line: depth,
-            character: 0,
-        },
-    );
+    zig_context_variable_at_depth(output, context_scope_start, depth);
     output.push_str(": anytype, ");
     let to_drop_variable_name = format!("it{}", depth);
     output.push_str(&to_drop_variable_name);
     output.push_str(": anytype) void {\n");
     zig_ignore(output, |output| {
-        zig_context_variable(
-            output,
-            lsp_types::Position {
-                line: depth,
-                character: 0,
-            },
-        )
+        zig_context_variable_at_depth(output, context_scope_start, depth);
     });
     zig_ignore(output, |output| output.push_str(&to_drop_variable_name));
-    zig_variable_drop(output, &to_drop_variable_name, type_, depth, type_aliases);
+    zig_variable_drop(
+        output,
+        &to_drop_variable_name,
+        type_,
+        context_scope_start,
+        depth,
+        type_aliases,
+    );
     output.push_str("} }.f");
 }
 fn zig_clone_function(
     output: &mut String,
     type_: &Type,
+    context_scope_start: lsp_types::Position,
     depth: u32,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
-    // TODO track depth and append it to the ctx and it variable name
     output.push_str("struct { fn f(");
-    zig_context_variable(
-        output,
-        lsp_types::Position {
-            line: depth,
-            character: 0,
-        },
-    );
+    zig_context_variable_at_depth(output, context_scope_start, depth);
     output.push_str(": anytype, ");
     let to_clone_variable_name = format!("it{}", depth);
     output.push_str(&to_clone_variable_name);
     output.push_str(": anytype) void {\n");
     zig_ignore(output, |output| {
-        zig_context_variable(
-            output,
-            lsp_types::Position {
-                line: depth,
-                character: 0,
-            },
-        )
+        zig_context_variable_at_depth(output, context_scope_start, depth);
     });
     zig_ignore(output, |output| output.push_str(&to_clone_variable_name));
-    zig_variable_clone(output, &to_clone_variable_name, type_, depth, type_aliases);
+    zig_variable_clone(
+        output,
+        &to_clone_variable_name,
+        type_,
+        context_scope_start,
+        depth,
+        type_aliases,
+    );
     output.push_str("} }.f");
 }
 
@@ -6355,6 +6480,7 @@ fn zig_variable_drop(
     output: &mut String,
     variable_name: &str,
     type_: &Type,
+    context_scope_start: lsp_types::Position,
     depth: u32,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
@@ -6362,13 +6488,7 @@ fn zig_variable_drop(
         Type::Variable(type_variable) => {
             name_to_uppercase_local_zig(output, type_variable);
             output.push_str(".drop(");
-            zig_context_variable(
-                output,
-                lsp_types::Position {
-                    line: depth,
-                    character: 0,
-                },
-            );
+            zig_context_variable_at_depth(output, context_scope_start, depth);
             output.push_str(", ");
             output.push_str(variable_name);
             output.push_str(");\n");
@@ -6379,6 +6499,7 @@ fn zig_variable_drop(
                     output,
                     &format!("{variable_name}.@\"{part_index}\""),
                     part,
+                    context_scope_start,
                     depth,
                     type_aliases,
                 );
@@ -6390,6 +6511,7 @@ fn zig_variable_drop(
                     output,
                     &format!("{variable_name}.{}", name_to_lowercase_zig(name)),
                     value,
+                    context_scope_start,
                     depth,
                     type_aliases,
                 );
@@ -6412,6 +6534,7 @@ fn zig_variable_drop(
                             format!("{variable_name}.{variant_name_zig}")
                         },
                         value,
+                        context_scope_start,
                         depth,
                         type_aliases,
                     );
@@ -6426,10 +6549,7 @@ fn zig_variable_drop(
             {
                 zig_ctx_buf(
                     output,
-                    lsp_types::Position {
-                        line: depth,
-                        character: 0,
-                    },
+                    |output| zig_context_variable_at_depth(output, context_scope_start, depth),
                     &{
                         let mut origin_dealiased = origin.clone();
                         type_fully_resolve_aliases(
@@ -6450,27 +6570,18 @@ fn zig_variable_drop(
                     },
                 );
                 output.push_str(".dropSlot(");
-                zig_context_variable(
-                    output,
-                    lsp_types::Position {
-                        line: depth,
-                        character: 0,
-                    },
-                );
+                zig_context_variable_at_depth(output, context_scope_start, depth);
                 output.push_str(", ");
                 output.push_str(variable_name);
                 output.push_str(", ");
-                zig_drop_function(output, item, depth + 1, type_aliases);
+                zig_drop_function(output, item, context_scope_start, depth + 1, type_aliases);
                 output.push_str(");\n");
             } else if name == type_span_name
                 && let [origin, item] = arguments.as_slice()
             {
                 zig_ctx_buf(
                     output,
-                    lsp_types::Position {
-                        line: depth,
-                        character: 0,
-                    },
+                    |output| zig_context_variable_at_depth(output, context_scope_start, depth),
                     &{
                         let mut origin_dealiased = origin.clone();
                         type_fully_resolve_aliases(
@@ -6491,48 +6602,29 @@ fn zig_variable_drop(
                     },
                 );
                 output.push_str(".dropSpan(");
-                zig_context_variable(
-                    output,
-                    lsp_types::Position {
-                        line: depth,
-                        character: 0,
-                    },
-                );
+                zig_context_variable_at_depth(output, context_scope_start, depth);
                 output.push_str(", ");
                 output.push_str(variable_name);
                 output.push_str(", ");
-                zig_drop_function(output, item, depth + 1, type_aliases);
+                zig_drop_function(output, item, context_scope_start, depth + 1, type_aliases);
                 output.push_str(");\n");
             } else {
                 output.push_str(variable_name);
                 output.push_str(".drop(");
-                zig_context_variable(
-                    output,
-                    lsp_types::Position {
-                        line: depth,
-                        character: 0,
-                    },
-                );
+                zig_context_variable_at_depth(output, context_scope_start, depth);
                 output.push_str(".allocator);\n");
             }
         }
         Type::Fn { .. } => {}
         Type::Alias { name, arguments } => {
-            // TODO generate those functions
             output.push_str("@\"drop ");
             output.push_str(&name_to_uppercase_zig(name));
             output.push_str("\"(");
             for argument in arguments {
-                slug_type_zig(output, argument, depth + 1, type_aliases);
+                slug_type_zig(output, argument, depth, type_aliases); // already increases depth by 1
                 output.push_str(", ");
             }
-            zig_context_variable(
-                output,
-                lsp_types::Position {
-                    line: depth,
-                    character: 0,
-                },
-            );
+            zig_context_variable_at_depth(output, context_scope_start, depth);
             output.push_str(", ");
             output.push_str(variable_name);
             output.push_str(");\n");
@@ -6543,6 +6635,7 @@ fn zig_variable_clone(
     output: &mut String,
     variable_name: &str,
     type_: &Type,
+    context_scope_start: lsp_types::Position,
     depth: u32,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
@@ -6551,13 +6644,7 @@ fn zig_variable_clone(
         Type::Variable(type_variable) => {
             name_to_uppercase_local_zig(output, type_variable);
             output.push_str(".clone(");
-            zig_context_variable(
-                output,
-                lsp_types::Position {
-                    line: depth,
-                    character: 0,
-                },
-            );
+            zig_context_variable_at_depth(output, context_scope_start, depth);
             output.push_str(", ");
             output.push_str(variable_name);
             output.push_str(");\n");
@@ -6568,6 +6655,7 @@ fn zig_variable_clone(
                     output,
                     &format!("{variable_name}.@\"{part_index}\""),
                     part,
+                    context_scope_start,
                     depth,
                     type_aliases,
                 );
@@ -6579,6 +6667,7 @@ fn zig_variable_clone(
                     output,
                     &format!("{variable_name}.{}", name_to_lowercase_zig(name)),
                     value,
+                    context_scope_start,
                     depth,
                     type_aliases,
                 );
@@ -6601,6 +6690,7 @@ fn zig_variable_clone(
                             format!("{variable_name}.{variant_name_zig}")
                         },
                         value,
+                        context_scope_start,
                         depth,
                         type_aliases,
                     );
@@ -6615,10 +6705,7 @@ fn zig_variable_clone(
             {
                 zig_ctx_buf(
                     output,
-                    lsp_types::Position {
-                        line: depth,
-                        character: 0,
-                    },
+                    |output| zig_context_variable_at_depth(output, context_scope_start, depth),
                     &{
                         let mut origin_dealiased = origin.clone();
                         type_fully_resolve_aliases(
@@ -6646,10 +6733,7 @@ fn zig_variable_clone(
             {
                 zig_ctx_buf(
                     output,
-                    lsp_types::Position {
-                        line: depth,
-                        character: 0,
-                    },
+                    |output| zig_context_variable_at_depth(output, context_scope_start, depth),
                     &{
                         let mut origin_dealiased = origin.clone();
                         type_fully_resolve_aliases(
@@ -6683,16 +6767,10 @@ fn zig_variable_clone(
             output.push_str(&name_to_uppercase_zig(name));
             output.push_str("\"(");
             for argument in arguments {
-                slug_type_zig(output, argument, depth + 1, type_aliases);
+                slug_type_zig(output, argument, depth, type_aliases); // already increases depth + 1
                 output.push_str(", ");
             }
-            zig_context_variable(
-                output,
-                lsp_types::Position {
-                    line: depth,
-                    character: 0,
-                },
-            );
+            zig_context_variable_at_depth(output, context_scope_start, depth);
             output.push_str(", ");
             output.push_str(variable_name);
             output.push_str(");\n");
@@ -7035,15 +7113,6 @@ pub fn name_to_lowercase_zig(name: &str) -> String {
     } else {
         sanitized
     }
-}
-fn name_to_lowercase_local_zig(output: &mut String, name: &str) {
-    let mut sanitized: String = name.replace("-", "_");
-    if let Some(first) = sanitized.get_mut(0..=0) {
-        first.make_ascii_lowercase();
-    }
-    output.push_str("@\"%");
-    output.push_str(&sanitized);
-    output.push('"');
 }
 fn name_to_lowercase_local_zig_introduced_at(
     output: &mut String,
@@ -15679,7 +15748,7 @@ pub fn syntax_project_symbol_uses(
                         }
                         if let Some(result) = result {
                             let mut parameter_introduced_variables =
-                                std::collections::HashSet::new();
+                                std::collections::HashSet::with_capacity(2);
                             for parameter in parameters {
                                 syntax_parameter_pattern_variables_for_each(
                                     parameter,
