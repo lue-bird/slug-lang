@@ -4901,15 +4901,75 @@ fn project_type_alias_to_zig(
         output.push_str(") type {\n");
         for parameter in parameters {
             // slots and spans omit their parameters, so we need to mark them as used
-            output.push_str("_ = @TypeOf(");
-            name_to_uppercase_local_zig(output, parameter);
-            output.push_str(");\n");
+            zig_ignore(output, |output| {
+                name_to_uppercase_local_zig(output, parameter)
+            });
         }
         output.push_str("return ");
         type_to_zig(output, aliased_type, type_aliases);
         output.push_str("; }");
     }
-    output.push_str("\n\n");
+    output.push_str("\n");
+    {
+        output.push_str("fn @\"clone ");
+        output.push_str(&name_to_uppercase_zig(name));
+        output.push_str("\"(");
+        for parameter in parameters {
+            output.push_str("comptime ");
+            name_to_uppercase_local_zig(output, parameter);
+            output.push_str(": SlugType, ");
+        }
+        zig_context_variable(
+            output,
+            lsp_types::Position {
+                line: 0,
+                character: 0,
+            },
+        );
+        output.push_str(": anytype, it: anytype) void {\n");
+        zig_ignore(output, |output| {
+            zig_context_variable(
+                output,
+                lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+            )
+        });
+        zig_ignore(output, |output| output.push_str("it"));
+        zig_variable_clone(output, "it", aliased_type, 0, type_aliases);
+        output.push_str("}\n");
+    }
+    {
+        output.push_str("fn @\"drop ");
+        output.push_str(&name_to_uppercase_zig(name));
+        output.push_str("\"(");
+        for parameter in parameters {
+            output.push_str("comptime ");
+            name_to_uppercase_local_zig(output, parameter);
+            output.push_str(": SlugType, ");
+        }
+        zig_context_variable(
+            output,
+            lsp_types::Position {
+                line: 0,
+                character: 0,
+            },
+        );
+        output.push_str(": anytype, it: anytype) void {\n");
+        zig_ignore(output, |output| {
+            zig_context_variable(
+                output,
+                lsp_types::Position {
+                    line: 0,
+                    character: 0,
+                },
+            )
+        });
+        zig_ignore(output, |output| output.push_str("it"));
+        zig_variable_drop(output, "it", aliased_type, 0, type_aliases);
+        output.push_str("}\n\n");
+    }
 }
 fn syntax_project_fn_to_zig(
     output: &mut String,
@@ -5040,9 +5100,24 @@ fn zig_update_context_variable_with_new_reachable_bufs(
         }
         output.push_str("}))");
     }
-    output.push_str(";\n_ = @TypeOf(");
-    zig_context_variable(output, new_context_scope_start);
-    output.push_str(");\n");
+    output.push_str(";\n");
+    zig_ignore(output, |output| {
+        zig_context_variable(output, new_context_scope_start)
+    });
+}
+fn zig_ctx_buf(
+    output: &mut String,
+    context_scope_start: lsp_types::Position,
+    origin_dealiased: &Type,
+    item_dealiased: &Type,
+) {
+    output.push_str("@constCast(@field(");
+    zig_context_variable(output, context_scope_start);
+    output.push_str(", ctxBufName(");
+    sloe_type_name_zig(output, origin_dealiased);
+    output.push_str(", ");
+    sloe_type_name_zig(output, item_dealiased);
+    output.push_str(")))");
 }
 fn zig_context_variable(output: &mut String, scope_start: lsp_types::Position) {
     use std::fmt::Write as _;
@@ -5068,7 +5143,6 @@ fn syntax_pattern_to_zig_matches_condition(
             output.push_str("true");
         }
         SyntaxPattern::Variant { name, values } => {
-            // not sure if std.mem.eql(@tagName(...), "...") would simpler
             output.push_str("switch (");
             output.push_str(to_match);
             output.push_str(") { .");
@@ -5147,9 +5221,10 @@ fn syntax_pattern_to_zig_destructuring<'a>(
             name_to_lowercase_local_zig_introduced_at(output, &name.value, name.start);
             output.push_str(" = ");
             output.push_str(to_destructure);
-            output.push_str(";\n_ = @TypeOf(");
-            name_to_lowercase_local_zig_introduced_at(output, &name.value, name.start);
-            output.push_str(");\n");
+            output.push_str(";\n");
+            zig_ignore(output, |output| {
+                name_to_lowercase_local_zig_introduced_at(output, &name.value, name.start)
+            });
             introduced_variables.insert(
                 &name.value,
                 ZigLocalVariable {
@@ -5472,7 +5547,7 @@ fn syntax_expression_to_zig<'a>(
                 output.push_str(&name_to_lowercase_zig(&name.value));
                 output.push('(');
                 for type_variable_argument in checked_call.type_variable_replacements.values() {
-                    slug_type_zig(output, type_variable_argument, type_aliases);
+                    slug_type_zig(output, type_variable_argument, 0, type_aliases);
                     output.push_str(", ");
                 }
                 specialize_implicits_zig_comma(
@@ -5737,9 +5812,9 @@ fn syntax_expression_to_zig<'a>(
             output.push_str(") Error!");
             type_to_zig(output, &checked_local_fn.result_type, type_aliases);
             output.push_str(" {\n");
-            output.push_str("_ = @TypeOf(");
-            zig_context_variable(output, local_function_scope_start);
-            output.push_str(");\n");
+            zig_ignore(output, |output| {
+                zig_context_variable(output, local_function_scope_start)
+            });
             let mut parameter_introduced_variables = std::collections::HashMap::new();
             let mut parameter_introduced_reachable_bufs = std::collections::HashMap::new();
             for syntax_parameter in parameters {
@@ -5954,9 +6029,8 @@ fn syntax_expression_to_zig<'a>(
                     );
                 }
             }
-            output.push_str(";\n_ = @TypeOf(");
-            output.push_str(&queried_variable_name);
-            output.push_str(");\n");
+            output.push_str(";\n");
+            zig_ignore(output, |output| output.push_str(&queried_variable_name));
             match result {
                 None => {
                     zig_incomplete_expression(output);
@@ -6056,9 +6130,8 @@ fn syntax_expression_to_zig<'a>(
                     );
                 }
             }
-            output.push_str(";\n_ = @TypeOf(");
-            output.push_str(&queried_variable_name);
-            output.push_str(");\n");
+            output.push_str(";\n");
+            zig_ignore(output, |output| output.push_str(&queried_variable_name));
             for (case_index, case) in cases.iter().enumerate() {
                 if !checked_query.invalid_case_indexes.contains(&case_index) {
                     if cases.len() >= 2 {
@@ -6194,6 +6267,7 @@ fn specialize_implicits_zig_comma(
 fn slug_type_zig(
     output: &mut String,
     type_: &Type,
+    depth: u32,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     if let Type::Variable(type_variable) = type_ {
@@ -6208,12 +6282,422 @@ fn slug_type_zig(
     output.push_str(", .Ty = ");
     type_to_zig(output, type_, type_aliases);
     output.push_str(", .drop = ");
-    output.push_str("undefined"); // TODO remove and replace with
-    //     zig_drop_function(output, type_variable_replacement_type, type_aliases);
+    zig_drop_function(output, type_, depth, type_aliases);
     output.push_str(", .clone = ");
-    output.push_str("undefined"); // TODO remove and replace with
-    //     zig_clone_function(output, type_variable_replacement_type, type_aliases);
+    zig_clone_function(output, type_, depth, type_aliases);
     output.push_str(", }");
+}
+fn zig_drop_function(
+    output: &mut String,
+    type_: &Type,
+    depth: u32,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    output.push_str("struct { fn f(");
+    zig_context_variable(
+        output,
+        lsp_types::Position {
+            line: depth,
+            character: 0,
+        },
+    );
+    output.push_str(": anytype, ");
+    let to_drop_variable_name = format!("it{}", depth);
+    output.push_str(&to_drop_variable_name);
+    output.push_str(": anytype) void {\n");
+    zig_ignore(output, |output| {
+        zig_context_variable(
+            output,
+            lsp_types::Position {
+                line: depth,
+                character: 0,
+            },
+        )
+    });
+    zig_ignore(output, |output| output.push_str(&to_drop_variable_name));
+    zig_variable_drop(output, &to_drop_variable_name, type_, depth, type_aliases);
+    output.push_str("} }.f");
+}
+fn zig_clone_function(
+    output: &mut String,
+    type_: &Type,
+    depth: u32,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    // TODO track depth and append it to the ctx and it variable name
+    output.push_str("struct { fn f(");
+    zig_context_variable(
+        output,
+        lsp_types::Position {
+            line: depth,
+            character: 0,
+        },
+    );
+    output.push_str(": anytype, ");
+    let to_clone_variable_name = format!("it{}", depth);
+    output.push_str(&to_clone_variable_name);
+    output.push_str(": anytype) void {\n");
+    zig_ignore(output, |output| {
+        zig_context_variable(
+            output,
+            lsp_types::Position {
+                line: depth,
+                character: 0,
+            },
+        )
+    });
+    zig_ignore(output, |output| output.push_str(&to_clone_variable_name));
+    zig_variable_clone(output, &to_clone_variable_name, type_, depth, type_aliases);
+    output.push_str("} }.f");
+}
+
+fn zig_variable_drop(
+    output: &mut String,
+    variable_name: &str,
+    type_: &Type,
+    depth: u32,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    match type_ {
+        Type::Variable(type_variable) => {
+            name_to_uppercase_local_zig(output, type_variable);
+            output.push_str(".drop(");
+            zig_context_variable(
+                output,
+                lsp_types::Position {
+                    line: depth,
+                    character: 0,
+                },
+            );
+            output.push_str(", ");
+            output.push_str(variable_name);
+            output.push_str(");\n");
+        }
+        Type::Tuple(parts) => {
+            for (part_index, part) in parts.iter().enumerate() {
+                zig_variable_drop(
+                    output,
+                    &format!("{variable_name}.@\"{part_index}\""),
+                    part,
+                    depth,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Record(fields) => {
+            for TypeField { name, value } in fields {
+                zig_variable_drop(
+                    output,
+                    &format!("{variable_name}.{}", name_to_lowercase_zig(name)),
+                    value,
+                    depth,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Choice(variants) => {
+            for TypeVariant { name, values } in variants {
+                output.push_str("if (switch (");
+                output.push_str(variable_name);
+                output.push_str(") { .");
+                let variant_name_zig = name_to_lowercase_zig(name);
+                output.push_str(&variant_name_zig);
+                output.push_str(" => true, else => false }) {\n");
+                for (value_index, value) in values.iter().enumerate() {
+                    zig_variable_drop(
+                        output,
+                        &if values.len() >= 2 {
+                            format!("{variable_name}.{variant_name_zig}.@\"{value_index}\"")
+                        } else {
+                            format!("{variable_name}.{variant_name_zig}")
+                        },
+                        value,
+                        depth,
+                        type_aliases,
+                    );
+                }
+                output.push_str("} else ");
+            }
+            output.push_str("{}\n");
+        }
+        Type::CoreConstruct { name, arguments } => {
+            if name == type_slot_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                zig_ctx_buf(
+                    output,
+                    lsp_types::Position {
+                        line: depth,
+                        character: 0,
+                    },
+                    &{
+                        let mut origin_dealiased = origin.clone();
+                        type_fully_resolve_aliases(
+                            &mut origin_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        origin_dealiased
+                    },
+                    &{
+                        let mut item_dealiased = item.clone();
+                        type_fully_resolve_aliases(
+                            &mut item_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        item_dealiased
+                    },
+                );
+                output.push_str(".dropSlot(");
+                zig_context_variable(
+                    output,
+                    lsp_types::Position {
+                        line: depth,
+                        character: 0,
+                    },
+                );
+                output.push_str(", ");
+                output.push_str(variable_name);
+                output.push_str(", ");
+                zig_drop_function(output, item, depth + 1, type_aliases);
+                output.push_str(");\n");
+            } else if name == type_span_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                zig_ctx_buf(
+                    output,
+                    lsp_types::Position {
+                        line: depth,
+                        character: 0,
+                    },
+                    &{
+                        let mut origin_dealiased = origin.clone();
+                        type_fully_resolve_aliases(
+                            &mut origin_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        origin_dealiased
+                    },
+                    &{
+                        let mut item_dealiased = item.clone();
+                        type_fully_resolve_aliases(
+                            &mut item_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        item_dealiased
+                    },
+                );
+                output.push_str(".dropSpan(");
+                zig_context_variable(
+                    output,
+                    lsp_types::Position {
+                        line: depth,
+                        character: 0,
+                    },
+                );
+                output.push_str(", ");
+                output.push_str(variable_name);
+                output.push_str(", ");
+                zig_drop_function(output, item, depth + 1, type_aliases);
+                output.push_str(");\n");
+            } else {
+                output.push_str(variable_name);
+                output.push_str(".drop(");
+                zig_context_variable(
+                    output,
+                    lsp_types::Position {
+                        line: depth,
+                        character: 0,
+                    },
+                );
+                output.push_str(".allocator);\n");
+            }
+        }
+        Type::Fn { .. } => {}
+        Type::Alias { name, arguments } => {
+            // TODO generate those functions
+            output.push_str("@\"drop ");
+            output.push_str(&name_to_uppercase_zig(name));
+            output.push_str("\"(");
+            for argument in arguments {
+                slug_type_zig(output, argument, depth + 1, type_aliases);
+                output.push_str(", ");
+            }
+            zig_context_variable(
+                output,
+                lsp_types::Position {
+                    line: depth,
+                    character: 0,
+                },
+            );
+            output.push_str(", ");
+            output.push_str(variable_name);
+            output.push_str(");\n");
+        }
+    }
+}
+fn zig_variable_clone(
+    output: &mut String,
+    variable_name: &str,
+    type_: &Type,
+    depth: u32,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
+    // TODO track depth and append it to the ctx variable name
+    match type_ {
+        Type::Variable(type_variable) => {
+            name_to_uppercase_local_zig(output, type_variable);
+            output.push_str(".clone(");
+            zig_context_variable(
+                output,
+                lsp_types::Position {
+                    line: depth,
+                    character: 0,
+                },
+            );
+            output.push_str(", ");
+            output.push_str(variable_name);
+            output.push_str(");\n");
+        }
+        Type::Tuple(parts) => {
+            for (part_index, part) in parts.iter().enumerate() {
+                zig_variable_clone(
+                    output,
+                    &format!("{variable_name}.@\"{part_index}\""),
+                    part,
+                    depth,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Record(fields) => {
+            for TypeField { name, value } in fields {
+                zig_variable_clone(
+                    output,
+                    &format!("{variable_name}.{}", name_to_lowercase_zig(name)),
+                    value,
+                    depth,
+                    type_aliases,
+                );
+            }
+        }
+        Type::Choice(variants) => {
+            for TypeVariant { name, values } in variants {
+                output.push_str("if (switch (");
+                output.push_str(variable_name);
+                output.push_str(") { .");
+                let variant_name_zig = name_to_lowercase_zig(name);
+                output.push_str(&variant_name_zig);
+                output.push_str(" => true, else => false }) {\n");
+                for (value_index, value) in values.iter().enumerate() {
+                    zig_variable_clone(
+                        output,
+                        &if values.len() >= 2 {
+                            format!("{variable_name}.{variant_name_zig}.@\"{value_index}\"")
+                        } else {
+                            format!("{variable_name}.{variant_name_zig}")
+                        },
+                        value,
+                        depth,
+                        type_aliases,
+                    );
+                }
+                output.push_str("} else ");
+            }
+            output.push_str("{}\n");
+        }
+        Type::CoreConstruct { name, arguments } => {
+            if name == type_slot_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                zig_ctx_buf(
+                    output,
+                    lsp_types::Position {
+                        line: depth,
+                        character: 0,
+                    },
+                    &{
+                        let mut origin_dealiased = origin.clone();
+                        type_fully_resolve_aliases(
+                            &mut origin_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        origin_dealiased
+                    },
+                    &{
+                        let mut item_dealiased = item.clone();
+                        type_fully_resolve_aliases(
+                            &mut item_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        item_dealiased
+                    },
+                );
+                output.push_str(".cloneSlot(");
+                output.push_str(variable_name);
+                output.push_str(");\n");
+            } else if name == type_span_name
+                && let [origin, item] = arguments.as_slice()
+            {
+                zig_ctx_buf(
+                    output,
+                    lsp_types::Position {
+                        line: depth,
+                        character: 0,
+                    },
+                    &{
+                        let mut origin_dealiased = origin.clone();
+                        type_fully_resolve_aliases(
+                            &mut origin_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        origin_dealiased
+                    },
+                    &{
+                        let mut item_dealiased = item.clone();
+                        type_fully_resolve_aliases(
+                            &mut item_dealiased,
+                            &mut Vec::new(),
+                            type_aliases,
+                        );
+                        item_dealiased
+                    },
+                );
+                output.push_str(".cloneSpan(");
+                output.push_str(variable_name);
+                output.push_str(");\n");
+            } else {
+                output.push_str(variable_name);
+                output.push_str(".clone();\n");
+            }
+        }
+        Type::Fn { .. } => {}
+        Type::Alias { name, arguments } => {
+            output.push_str("@\"clone ");
+            output.push_str(&name_to_uppercase_zig(name));
+            output.push_str("\"(");
+            for argument in arguments {
+                slug_type_zig(output, argument, depth + 1, type_aliases);
+                output.push_str(", ");
+            }
+            zig_context_variable(
+                output,
+                lsp_types::Position {
+                    line: depth,
+                    character: 0,
+                },
+            );
+            output.push_str(", ");
+            output.push_str(variable_name);
+            output.push_str(");\n");
+        }
+    }
 }
 pub fn type_format_single_line_with_zig_variables(formatted: &mut String, type_: &Type) {
     match type_ {
@@ -6328,6 +6812,12 @@ fn zig_block_label_for_start_position(output: &mut String, position: lsp_types::
     _ = write!(output, "{}", position.character);
     output.push('"');
 }
+/// mark as not unused, regardless of whether the given variable name is used later or not
+fn zig_ignore(output: &mut String, variable_name: impl FnOnce(&mut String)) {
+    output.push_str("_ = @TypeOf(");
+    variable_name(output);
+    output.push_str(");\n");
+}
 fn type_to_zig(
     output: &mut String,
     type_: &Type,
@@ -6407,7 +6897,7 @@ fn type_to_zig(
             if !arguments.is_empty() {
                 output.push('(');
                 for argument in arguments {
-                    slug_type_zig(output, argument, type_aliases);
+                    slug_type_zig(output, argument, 0, type_aliases);
                     output.push_str(", ");
                 }
                 output.push(')');

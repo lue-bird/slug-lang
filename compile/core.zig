@@ -1158,11 +1158,10 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
         }
         pub fn cloneSpan(
             @"%buf": *@This(),
-            ctx: anytype,
             @"%span": Span(@"%Origin", @"%Item"),
         ) void {
             for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index"| {
-                @"%buf".cloneSlot(ctx, .{ .index = @"%index" });
+                @"%buf".cloneSlot(.{ .index = @"%index" });
             }
         }
     };
