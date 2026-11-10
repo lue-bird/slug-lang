@@ -570,11 +570,16 @@ pub const SpanCore =
             return .{ .going = @"%state" };
         }
     };
-/// TODO change to ref-counted
 /// slice whose actual items are undefined
 pub fn Unset_slice(@"%Item": type) type {
+    return *Unset_sliceCore(@"%Item");
+}
+pub fn Unset_sliceCore(@"%Item": type) type {
     return struct {
         undefined_items: []@"%Item",
+        reference_count: ReferenceCount,
+
+        pub const ReferenceCount = enum(u32) { invalid = 0, leaked = std.math.maxInt(u32), _ };
 
         pub fn allocateLength(
             @"%allocator": std.mem.Allocator,
@@ -585,7 +590,7 @@ pub fn Unset_slice(@"%Item": type) type {
         pub fn capacity(@"%unset_slice": @This()) u32 {
             return @intCast(@"%unset_slice".undefined_items.len);
         }
-        /// the given unset slice is invalid after
+        /// the given unset slice may be invalid after
         pub fn castOrRidAndAllocate(
             @"%unset_slice": @This(),
             @"%NewItem": type,
@@ -596,21 +601,53 @@ pub fn Unset_slice(@"%Item": type) type {
             // The alternative would be carrying original allocation alignment
             // through all uses (Buf, Unset_slice, future collections)
             // which is a price I'm not willing to pay for a niche feature
-            if (strideOf(@"%NewItem") == strideOf(@"%Item") and @alignOf(@"%NewItem") == @alignOf(@"%Item")) {
+            if (strideOf(@"%NewItem") == strideOf(@"%Item") and @alignOf(@"%NewItem") == @alignOf(
+                @"%Item",
+            ) and @"%unset_slice".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
                 return .{ .undefined_items = @as(
                     []@"%NewItem",
                     @ptrCast(@"%unset_slice".undefined_items),
                 ) };
             } else {
-                @"%unset_slice".drop(@"%allocator");
+                @"%unset_slice".dropAndDestroy(@"%allocator");
                 return Unset_slice(@"%NewItem").allocateLength(@"%allocator", @"%unset_slice".capacity());
             }
         }
+        pub fn clone(@"%unset_slice": *@This()) void {
+            switch (@"%unset_slice".reference_count) {
+                .invalid => unreachable,
+                .leaked => {},
+                _ => |@"%reference_count"| {
+                    @"%unset_slice".reference_count = @fromBackingInt(@"%reference_count" + 1);
+                },
+            }
+        }
+        /// the given unset slice will be invalid after if reference_count == 1
+        pub fn dropAndDestroy(
+            @"%unset_slice": *@This(),
+            @"%allocator": std.mem.Allocator,
+        ) void {
+            if (@"%unset_slice".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                @"%allocator".free(@"%unset_slice".undefined_items);
+                @"%allocator".destroy(@"%unset_slice");
+            } else {
+                @"%unset_slice".reference_count = if (@"%unset_slice".reference_count == .leaked) .leaked else @fromBackingInt(
+                    @backingInt(@"%unset_slice".reference_count) - 1,
+                );
+            }
+        }
+        /// the given unset slice will be invalid after if reference_count == 1
         pub fn drop(
             @"%unset_slice": @This(),
             @"%allocator": std.mem.Allocator,
         ) void {
-            return @"%allocator".free(@"%unset_slice".undefined_items);
+            if (@"%unset_slice".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                @"%allocator".free(@"%unset_slice".undefined_items);
+            } else {
+                @"%unset_slice".reference_count = if (@"%unset_slice".reference_count == .leaked) .leaked else @fromBackingInt(
+                    @backingInt(@"%unset_slice".reference_count) - 1,
+                );
+            }
         }
     };
 }
@@ -767,6 +804,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf": *@This(),
             @"%slot": Slot(@"%Origin", @"%Item"),
         ) @"%Item" {
+            // TODO
             const @"%item" = @"%buf".item(@"%slot");
             @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
             return @"%item";
@@ -1199,7 +1237,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         pub fn clone(@"%buf": *@This()) void {
             switch (@"%buf".reference_count) {
                 .invalid => unreachable,
-                .leaked => .leaked,
+                .leaked => {},
                 _ => |@"%reference_count"| {
                     @"%buf".reference_count = @fromBackingInt(@"%reference_count" + 1);
                 },
@@ -1700,7 +1738,6 @@ pub fn buf_pre_allocate_at_least(
 ) Error!void {
     try @"%buf".preAllocateAtLeast(ctx.allocator, @"%length");
 }
-// TODO correct return type to union(enum)
 pub fn buf_try_pre_allocate_at_least(
     comptime @"%Item": SlugType,
     comptime @"%Origin": SlugType,
@@ -2156,6 +2193,7 @@ pub fn span_sort(
     @"%order": *const fn (Ctx(&.{@"%Item".Bufs}), @"%Item".Ty, @"%Item".Ty) Error!Order,
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) Error!void {
+    // TODO
     const @"%SortState" = struct {
         buf_items: []@"%Item",
         order: @TypeOf(@"%order"),
@@ -2227,13 +2265,7 @@ pub fn opt_span_sort(
             return .{ .no = {} };
         },
         .yes => |@"%span"| {
-            try span_sort(
-                @"%Item",
-                @"%Origin",
-                ctx,
-                @"%span",
-                @"%order",
-            );
+            try span_sort(@"%Item", @"%Origin", ctx, @"%span", @"%order");
         },
     }
 }
@@ -2250,7 +2282,9 @@ pub fn unset_slice_allocate_length(
     ctx: anytype,
     @"%length": U32,
 ) Error!Unset_slice(@"%Item".Ty) {
-    return Unset_slice(@"%Item".Ty).allocateLength(ctx, @"%length");
+    const @"%unset_slice" = ctx.allocator.create(Unset_sliceCore(@"%Item".Ty));
+    @"%unset_slice".* = Unset_slice(@"%Item".Ty).allocateLength(ctx, @"%length");
+    return @"%unset_slice";
 }
 pub fn unset_slice_cast_or_rid_and_allocate(
     comptime @"%Item": SlugType,

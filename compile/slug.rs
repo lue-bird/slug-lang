@@ -6608,11 +6608,18 @@ fn zig_variable_drop(
                 output.push_str(", ");
                 zig_drop_function(output, item, context_scope_start, depth + 1, type_aliases);
                 output.push_str(");\n");
-            } else {
+            } else if name == type_buf_name {
                 output.push_str(variable_name);
                 output.push_str(".dropAndDestroy(");
                 zig_context_variable_at_depth(output, context_scope_start, depth);
                 output.push_str(".allocator);\n");
+            } else if name == type_unset_slice_name {
+                output.push_str(variable_name);
+                output.push_str(".dropAndDestroy(");
+                zig_context_variable_at_depth(output, context_scope_start, depth);
+                output.push_str(".allocator);\n");
+            } else {
+                // stack-only type
             }
         }
         Type::Fn { .. } => {}
@@ -6755,9 +6762,14 @@ fn zig_variable_clone(
                 output.push_str(".cloneSpan(");
                 output.push_str(variable_name);
                 output.push_str(");\n");
-            } else {
+            } else if name == type_buf_name {
                 output.push_str(variable_name);
                 output.push_str(".clone();\n");
+            } else if name == type_unset_slice_name {
+                output.push_str(variable_name);
+                output.push_str(".clone();\n");
+            } else {
+                // stack-only type
             }
         }
         Type::Fn { .. } => {}
@@ -7084,7 +7096,13 @@ fn name_to_uppercase_zig(name: &str) -> String {
         | "Ctx"
         | "CtxBuf"
         | "Error"
-        | "SlugType" => sanitized + "ø",
+        | "SlugType"
+        | "SlotCore"
+        | "SpanCore"
+        | "BufCore"
+        | "Unset_sliceCore"
+        | "ReferenceCount"
+        | "ItemCount" => sanitized + "ø",
         _ => sanitized,
     }
 }
@@ -12114,9 +12132,10 @@ fn type_span(origin: Type, item: Type) -> Type {
         arguments: vec![origin, item],
     }
 }
+const type_unset_slice_name: &str = "unset-slice";
 fn type_unset_slice(item: Type) -> Type {
     Type::CoreConstruct {
-        name: Name::from_static("unset-slice"),
+        name: Name::from_static(type_unset_slice_name),
         arguments: vec![item],
     }
 }
