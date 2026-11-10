@@ -6610,7 +6610,7 @@ fn zig_variable_drop(
                 output.push_str(");\n");
             } else {
                 output.push_str(variable_name);
-                output.push_str(".drop(");
+                output.push_str(".dropAndDestroy(");
                 zig_context_variable_at_depth(output, context_scope_start, depth);
                 output.push_str(".allocator);\n");
             }
@@ -6639,7 +6639,6 @@ fn zig_variable_clone(
     depth: u32,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
-    // TODO track depth and append it to the ctx variable name
     match type_ {
         Type::Variable(type_variable) => {
             name_to_uppercase_local_zig(output, type_variable);
@@ -13674,7 +13673,8 @@ pub fn is_core_fn_that_can_run_out_of_memory_in_zig(fn_name: &str) -> bool {
         | "insert"
         | "set-or-insert"
         | "buf-pre-allocation-rid"
-        | "buf-pre-allocate-at-least" => true,
+        | "buf-pre-allocate-at-least"
+        | "buf-empty" => true,
         _ => false,
     }
 }

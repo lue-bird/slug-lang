@@ -223,11 +223,8 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - check that moving spans does a clone if necessary
-- zig output generate clone and drop
-- represent zig Buf as Buf=*BufCore and pass reachable bufs as *BufCore, where BufCore is the current buf impl + reference_count: u16
+- core.zig don't do @"%buf_mut" stuff since the ptr is mut anyway
 - when adding items (e.g. optSpanAdd), make sure to drop the item
-- add zig codegen
-  Interesting: can implement leak-free error handling via "for all reachable bufs: clearAndFree(allocator)"
 - add more examples
 - check if `if containing-never-type {}` is handled correctly. It should either report an error and recommend using `Choice-empty-to<>` or return `[]`
 - show implicitly passed bufs when hovering a project fn
@@ -273,6 +270,7 @@ cargo install --offline --debug --path . slug
     - `buf` could also be specialized to e.g. `arena`
 
 ## potential improvements in the future
+- zig codegen: implement leak-free error handling via "errdefer { for all reachable bufs: clearAndFree(allocator) }"
 - consider requiring `:` for parameter pattern variables between the name and type. This is probably more obvious and is a little more robust. Downside: more typing and still not super clear. Format: name: type
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
 - should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.

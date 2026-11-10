@@ -174,7 +174,7 @@ fn CtxBuf(@"%Origin": anytype, @"%Item": anytype) type {
         .auto,
         null,
         &.{"buf(" ++ @"%Origin".name ++ " " ++ @"%Item".name ++ ")"},
-        &.{*Buf(@"%Origin".Ty, @"%Item".Ty)},
+        &.{*BufCore(@"%Origin".Ty, @"%Item".Ty)},
         &.{std.lang.Type.Struct.FieldAttributes{}},
     );
 }
@@ -189,8 +189,8 @@ fn ctxBuf(
     ctx: anytype,
     @"%Origin": anytype,
     @"%Item": anytype,
-) *Buf(@"%Origin".Ty, @"%Item".Ty) {
-    return @constCast(@field(ctx, ctxBufName(@"%Origin".name, @"%Item".name)));
+) *BufCore(@"%Origin".Ty, @"%Item".Ty) {
+    return @field(ctx, ctxBufName(@"%Origin".name, @"%Item".name)).*;
 }
 const SlugType = struct {
     Ty: type,
@@ -615,8 +615,11 @@ pub fn Unset_slice(@"%Item": type) type {
     };
 }
 /// Not thread-safe.
-/// TODO change to ref-counted
 pub fn Buf(@"%Origin": type, @"%Item": type) type {
+    return *BufCore(@"%Origin", @"%Item");
+}
+/// Not thread-safe.
+pub fn BufCore(@"%Origin": type, @"%Item": type) type {
     return struct {
         /// Assumed to have an .items.len that fits into a u32.
         /// .items.capacity has no such constraint.
@@ -632,15 +635,18 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
         /// - _ points to a valid index in items
         /// - _ points to the first true index in .unsetBitSet()
         first_unset_index: UnsetIndexOrNone,
-        pub const origin = @"%Origin";
+        reference_count: ReferenceCount,
 
+        pub const ReferenceCount = enum(u32) { invalid = 0, leaked = std.math.maxInt(u32), _ };
         pub const ItemCount = enum(u16) { leaked = std.math.maxInt(u16), _ };
         pub const UnsetIndexOrNone = enum(u32) { none_unset = std.math.maxInt(u32), _ };
 
+        /// usually used with std.mem.Allocator.create()
         pub const empty: @This() = .{
             .items = .empty,
             .unset_masks = (std.bit_set.Dynamic{}).masks,
             .first_unset_index = UnsetIndexOrNone.none_unset,
+            .reference_count = @fromBackingInt(1),
         };
 
         pub fn len_including_unset(@"%buf": @This()) u32 {
@@ -757,7 +763,7 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
         pub fn item(@"%buf": @This(), @"%slot": Slot(@"%Origin", @"%Item")) @"%Item" {
             return @"%buf".items.items[@"%slot".index];
         }
-        pub fn remove(
+        pub fn take(
             @"%buf": *@This(),
             @"%slot": Slot(@"%Origin", @"%Item"),
         ) @"%Item" {
@@ -795,7 +801,7 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
             };
         }
         /// The returned slice is only valid while buf.items.items is live
-        pub fn removeSpan(
+        pub fn takeSpan(
             @"%buf": *@This(),
             @"%span": Span(@"%Origin", @"%Item"),
         ) []@"%Item" {
@@ -804,14 +810,14 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
             return @"%slice";
         }
         /// The returned slice is only valid while buf.items.items is live
-        pub fn removeOptSpan(
+        pub fn takeOptSpan(
             @"%buf": *@This(),
             @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
         ) []@"%Item" {
             switch (@"%opt_span") {
                 .no => return []@"%Item",
                 .yes => |@"%span"| {
-                    return @"%buf".removeSpan(@"%span");
+                    return @"%buf".takeSpan(@"%span");
                 },
             }
         }
@@ -1106,26 +1112,67 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
             std.mem.reverse(@"%Item", @"%buf".optSpanSlice(@"%opt_span"));
             return @"%opt_span";
         }
-        /// buf is invalid after
+        /// buf is invalid after if .reference_count is 1
         pub fn intoUnsetSlice(
             @"%buf": @This(),
             @"%allocator": std.mem.Allocator,
         ) Unset_slice(@"%Item") {
-            var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
-            @"%unset_bit_set".deinit(@"%allocator");
-            var @"%items" = @"%buf".items;
-            @"%items".clearRetainingCapacity();
-            return .{ .undefined_items = @"%items".allocatedSlice() };
+            if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
+                @"%unset_bit_set".deinit(@"%allocator");
+                var @"%items" = @"%buf".items;
+                @"%items".clearRetainingCapacity();
+                return .{ .undefined_items = @"%items".allocatedSlice() };
+            } else {
+                return .{ .undefined_items = &.{} };
+            }
         }
-        /// buf is invalid after
+        /// buf is invalid after if .reference_count is 1
+        pub fn intoUnsetSliceAndDestroy(
+            @"%buf": *@This(),
+            @"%allocator": std.mem.Allocator,
+        ) Unset_slice(@"%Item") {
+            if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
+                @"%unset_bit_set".deinit(@"%allocator");
+                var @"%items" = @"%buf".items;
+                @"%items".clearRetainingCapacity();
+                @"%allocator".destroy(@"%buf");
+                return .{ .undefined_items = @"%items".allocatedSlice() };
+            } else {
+                return .{ .undefined_items = &.{} };
+            }
+        }
+        /// buf is invalid after if .reference_count is 1
         pub fn drop(
-            @"%buf": @This(),
-            allocator: std.mem.Allocator,
+            @"%buf": *@This(),
+            @"%allocator": std.mem.Allocator,
         ) void {
-            var @"%buf_mut" = @"%buf";
-            @"%buf_mut".items.deinit(allocator);
-            var @"%unset_bit_set" = @"%buf_mut".unsetBitSetUntilCapacity();
-            @"%unset_bit_set".deinit(allocator);
+            if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                @"%buf".items.deinit(@"%allocator");
+                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
+                @"%unset_bit_set".deinit(@"%allocator");
+            } else {
+                @"%buf".reference_count = if (@"%buf".reference_count == .leaked) .leaked else @fromBackingInt(
+                    @backingInt(@"%buf".reference_count) - 1,
+                );
+            }
+        }
+        /// buf is invalid after if .reference_count is 1
+        pub fn dropAndDestroy(
+            @"%buf": *@This(),
+            @"%allocator": std.mem.Allocator,
+        ) void {
+            if (@"%buf".reference_count == @as(ReferenceCount, @fromBackingInt(1))) {
+                @"%buf".items.deinit(@"%allocator");
+                var @"%unset_bit_set" = @"%buf".unsetBitSetUntilCapacity();
+                @"%unset_bit_set".deinit(@"%allocator");
+                @"%allocator".destroy(@"%buf");
+            } else {
+                @"%buf".reference_count = if (@"%buf".reference_count == .leaked) .leaked else @fromBackingInt(
+                    @backingInt(@"%buf".reference_count) - 1,
+                );
+            }
         }
         pub fn dropSlot(
             @"%buf": *@This(),
@@ -1146,6 +1193,15 @@ pub fn Buf(@"%Origin": type, @"%Item": type) type {
         ) void {
             for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index"| {
                 @"%buf".dropSlot(ctx, .{ .index = @"%index" }, @"drop Item");
+            }
+        }
+        pub fn clone(@"%buf": *@This()) void {
+            switch (@"%buf".reference_count) {
+                .invalid => unreachable,
+                .leaked => .leaked,
+                _ => |@"%reference_count"| {
+                    @"%buf".reference_count = @fromBackingInt(@"%reference_count" + 1);
+                },
             }
         }
         pub fn cloneSlot(
@@ -1612,23 +1668,27 @@ pub fn span_step_while(
 pub fn buf_empty(
     comptime @"%Item": SlugType,
     comptime @"%Origin": SlugType,
-    _: anytype,
-) Buf(@"%Origin".Ty, @"%Item".Ty) {
-    return .empty;
+    ctx: anytype,
+) Error!Buf(@"%Origin".Ty, @"%Item".Ty) {
+    const @"%buf" = try ctx.allocator.create(BufCore(@"%Origin".Ty, @"%Item".Ty));
+    @"%buf".* = .empty;
+    return @"%buf";
 }
 pub fn buf_reuse(
     comptime @"%Item": SlugType,
     comptime @"%Origin": SlugType,
-    _: anytype,
+    ctx: anytype,
     @"%": Unset_slice(@"%Item".Ty),
 ) Buf(@"%Origin".Ty, @"%Item".Ty) {
     var items = std.ArrayList(@"%Item").fromOwnedSlice(@"%".slice.undefined_items);
     items.clearRetainingCapacity();
-    return .{
+    const @"%buf" = try ctx.allocator.create(BufCore(@"%Origin".Ty, @"%Item".Ty));
+    @"%buf".* = .{
         .items = items,
         .unset_masks = (std.bit_set.Dynamic{}).masks,
         .first_unset_index = .none_unset,
     };
+    return @"%buf";
 }
 pub fn buf_pre_allocate_at_least(
     comptime @"%Item": SlugType,
@@ -1715,7 +1775,7 @@ pub fn item(
     @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
 ) @"%Item".Ty {
     var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%item" = @"%buf_mut".remove(@"%slot");
+    const @"%item" = @"%buf_mut".take(@"%slot");
     return @"%item";
 }
 pub fn replace(
@@ -2194,7 +2254,7 @@ pub fn buf_to_unset(
     ctx: anytype,
     @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
 ) Unset_slice(@"%Item") {
-    return @"%buf".intoUnsetSlice(ctx.allocator);
+    return @"%buf".intoUnsetSliceAndDestroy(ctx.allocator);
 }
 pub fn unset_slice_allocate_length(
     comptime @"%Item": SlugType,
