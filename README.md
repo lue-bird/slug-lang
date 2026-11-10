@@ -223,7 +223,6 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - check that moving spans does a clone if necessary
-- core.zig don't do @"%buf_mut" stuff since the ptr is mut anyway
 - when adding items (e.g. optSpanAdd), make sure to drop the item
 - add more examples
 - check if `if containing-never-type {}` is handled correctly. It should either report an error and recommend using `Choice-empty-to<>` or return `[]`

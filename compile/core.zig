@@ -805,6 +805,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf": *@This(),
             @"%span": Span(@"%Origin", @"%Item"),
         ) []@"%Item" {
+            // TODO
             const @"%slice" = @"%buf".spanSlice(@"%span");
             @"%buf".unsetSpanRid(.{ .start = @"%span".start, .length = @"%span".length });
             return @"%slice";
@@ -1497,8 +1498,8 @@ pub fn slot_index(
     ctx: anytype,
     @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
 ) U32 {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    @"%buf_mut".dropSlot(ctx, @"%slot", @"%Item".drop);
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    @"%buf".dropSlot(ctx, @"%slot", @"%Item".drop);
     return @"%slot".index;
 }
 pub fn slot_to_span(
@@ -1515,8 +1516,8 @@ pub fn span_start_index(
     ctx: anytype,
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) U32 {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    @"%buf_mut".dropSpan(ctx, @"%span", @"%Item".drop);
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    @"%buf".dropSpan(ctx, @"%span", @"%Item".drop);
     return @"%span".start;
 }
 pub fn span_length(
@@ -1525,8 +1526,8 @@ pub fn span_length(
     ctx: anytype,
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) P32 {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    @"%buf_mut".dropSpan(ctx, @"%span", @"%Item".drop);
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    @"%buf".dropSpan(ctx, @"%span", @"%Item".drop);
     return @"%span".length;
 }
 pub fn opt_span_length(
@@ -1697,8 +1698,7 @@ pub fn buf_pre_allocate_at_least(
     @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
     @"%length": u32,
 ) Error!void {
-    var @"%buf_mut" = @"%buf";
-    try @"%buf_mut".preAllocateAtLeast(ctx.allocator, @"%length");
+    try @"%buf".preAllocateAtLeast(ctx.allocator, @"%length");
 }
 // TODO correct return type to union(enum)
 pub fn buf_try_pre_allocate_at_least(
@@ -1708,8 +1708,7 @@ pub fn buf_try_pre_allocate_at_least(
     @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
     @"%length": u32,
 ) @"[Out-of-memory Success]"(void, void) {
-    var @"%buf_mut" = @"%buf";
-    @"%buf_mut".preAllocateAtLeast(ctx.allocator, @"%length") catch {
+    @"%buf".preAllocateAtLeast(ctx.allocator, @"%length") catch {
         return .{ .out_of_memory = {} };
     };
     return .{ .success = {} };
@@ -1720,9 +1719,8 @@ pub fn buf_pre_allocation_rid(
     ctx: anytype,
     @"%buf": Buf(@"%Origin".Ty, @"%Item".Ty),
 ) Error!void {
-    var @"%buf_mut" = @"%buf";
-    try @"%buf_mut".preAllocationRid(ctx.allocator);
-    return @"%buf_mut";
+    try @"%buf".preAllocationRid(ctx.allocator);
+    return @"%buf";
 }
 pub fn insert(
     comptime @"%Item": SlugType,
@@ -1730,9 +1728,8 @@ pub fn insert(
     ctx: anytype,
     @"%new": @"%Item".Ty,
 ) Error!Slot(@"%Origin".Ty, @"%Item".Ty) {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%slot" = try @"%buf_mut".insert(ctx.allocator, @"%new");
-    return @"%slot";
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    return @"%buf".insert(ctx.allocator, @"%new");
 }
 pub fn set_or_insert(
     comptime @"%Item": SlugType,
@@ -1741,9 +1738,8 @@ pub fn set_or_insert(
     @"%index": U32,
     @"%new": @"%Item".Ty,
 ) Error!Slot(@"%Origin".Ty, @"%Item".Ty) {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%slot" = try @"%buf_mut".setOrInsert(ctx, @"%index", @"%new");
-    return @"%slot";
+    var @"%bufmut" = ctxBuf(ctx, @"%Origin", @"%Item");
+    return @"%bufmut".setOrInsert(ctx, @"%index", @"%new");
 }
 pub fn add(
     comptime @"%Item": SlugType,
@@ -1751,17 +1747,16 @@ pub fn add(
     ctx: anytype,
     @"%new": @"%Item".Ty,
 ) Error!Slot(@"%Origin".Ty, @"%Item".Ty) {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%slot" = try @"%buf_mut".add(ctx.allocator, @"%new");
-    return .{ .buf = ctxBuf(ctx, @"%Origin", @"%Item"), .slot = @"%slot" };
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    return @"%buf".add(ctx.allocator, @"%new");
 }
 pub fn add_str_chars(
     comptime @"%Origin": SlugType,
     ctx: anytype,
     @"%new": Str,
 ) Error!Span(@"%Origin".Ty, Char) {
-    var @"%buf_mut" = @field(ctx, ctxBufName(@"%Origin".name, "char"));
-    const @"%new_span" = try @"%buf_mut".addIterator(
+    var @"%buf" = @field(ctx, ctxBufName(@"%Origin".name, "char"));
+    const @"%new_span" = try @"%buf".addIterator(
         ctx.allocator,
         @"%new".utf8.iterator(),
         std.unicode.Utf8Iterator.nextCodepoint,
@@ -1774,8 +1769,8 @@ pub fn item(
     ctx: anytype,
     @"%slot": Slot(@"%Origin".Ty, @"%Item".Ty),
 ) @"%Item".Ty {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%item" = @"%buf_mut".take(@"%slot");
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    const @"%item" = @"%buf".take(@"%slot");
     return @"%item";
 }
 pub fn replace(
@@ -1805,9 +1800,8 @@ pub fn opt_span_add(
     @"%span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
     @"%new": @"%Item".Ty,
 ) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%combined_span" = try @"%buf_mut".optSpanAdd(ctx.allocator, @"%span", @"%new");
-    return @"%combined_span";
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    return @"%buf".optSpanAdd(ctx.allocator, @"%span", @"%new");
 }
 pub fn span_add(
     comptime @"%Item": SlugType,
@@ -1816,9 +1810,8 @@ pub fn span_add(
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
     @"%new": @"%Item".Ty,
 ) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%combined_span" = try @"%buf_mut".spanAdd(ctx.allocator, @"%span", @"%new");
-    return @"%combined_span";
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    return @"%buf".spanAdd(ctx.allocator, @"%span", @"%new");
 }
 pub fn span_add_str_chars(
     comptime @"%Origin": SlugType,
@@ -1826,14 +1819,13 @@ pub fn span_add_str_chars(
     @"%span": Span(@"%Origin".Ty, Char),
     @"%new": Str,
 ) Error!Span(@"%Origin".Ty, Char) {
-    var @"%buf_mut" = @field(ctx, ctxBufName(@"%Origin".name, "char"));
-    const @"%combined_span" = try @"%buf_mut".spanAddIterator(
+    var @"%buf" = @field(ctx, ctxBufName(@"%Origin".name, "char"));
+    return @"%buf".spanAddIterator(
         ctx.allocator,
         @"%span",
         @"%new".utf8.iterator(),
         std.unicode.Utf8Iterator.nextCodepoint,
     );
-    return @"%combined_span";
 }
 pub fn opt_span_add_str_chars(
     comptime @"%Origin": SlugType,
@@ -1841,8 +1833,8 @@ pub fn opt_span_add_str_chars(
     @"%span": Opt(Span(@"%Origin".Ty, Char)),
     @"%new": Str,
 ) Error!Span(@"%Origin".Ty, Char) {
-    var @"%buf_mut" = @field(ctx, ctxBufName(@"%Origin".name, "char"));
-    const @"%combined_span" = try @"%buf_mut".optSpanAddIterator(
+    var @"%buf" = @field(ctx, ctxBufName(@"%Origin".name, "char"));
+    const @"%combined_span" = try @"%buf".optSpanAddIterator(
         ctx.allocator,
         @"%span",
         @"%new".utf8.iterator(),
@@ -1969,12 +1961,10 @@ pub fn span_add_span(
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
     @"%source": Span(@"%Source_origin".Ty),
 ) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
-    var @"%source_mut" = ctxBuf(ctx, @"%Source_origin", @"%Item");
-    const @"%source_slice" = try @"%source_mut".spanSlice(ctx, @"%source");
-    var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-    const @"%combined_span" = try @"%buf_mut".spanAddSlice(ctx, @"%span", @"%source_slice");
-    @"%source_mut".dropSpan(@"%source");
-    return @"%combined_span";
+    var @"%source_buf" = ctxBuf(ctx, @"%Source_origin", @"%Item");
+    const @"%source_slice" = try @"%source_buf".takeSpan(ctx, @"%source");
+    var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+    return @"%buf".spanAddSlice(ctx, @"%span", @"%source_slice");
 }
 pub fn span_add_opt_span(
     comptime @"%Item": SlugType,
@@ -2003,11 +1993,10 @@ pub fn opt_span_add_span(
 ) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
     switch (@"%opt_span") {
         .no => {
-            var @"%source_mut" = ctx.@"buf(Source-origin Item)";
-            const @"%source_slice" = try @"%source_mut".spanSlice(ctx, @"%source");
-            var @"%buf_mut" = ctxBuf(ctx, @"%Origin", @"%Item");
-            const @"%combined_span" = try @"%buf_mut".addSlice(ctx, @"%source_slice");
-            @"%source_mut".dropSpan(@"%source");
+            var @"%source_buf" = ctxBuf(ctx, @"%Source_origin", @"%Item");
+            const @"%source_slice" = try @"%source_buf".takeSpan(ctx, @"%source");
+            var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
+            const @"%combined_span" = try @"%buf".addSlice(ctx, @"%source_slice");
             return .{
                 .source = @"%source",
                 .span = @"%combined_span".yes,

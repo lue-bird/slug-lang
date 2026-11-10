@@ -5116,13 +5116,13 @@ fn zig_ctx_buf(
     origin_dealiased: &Type,
     item_dealiased: &Type,
 ) {
-    output.push_str("@constCast(@field(");
+    output.push_str("@field(");
     context_variable(output);
     output.push_str(", ctxBufName(");
     sloe_type_name_zig(output, origin_dealiased);
     output.push_str(", ");
     sloe_type_name_zig(output, item_dealiased);
-    output.push_str(")))");
+    output.push_str("))");
 }
 fn zig_context_variable(output: &mut String, scope_start: lsp_types::Position) {
     use std::fmt::Write as _;
