@@ -3498,7 +3498,9 @@ fn type_alias_resolve_to_non_alias_or_error<'a>(
             name: actual_name,
             arguments: actual_arguments,
         } => {
-            if let Some(actual_origin_type_alias) = type_aliases.get(actual_name)
+            if let Some(actual_origin_type_alias) = type_aliases
+                .get(actual_name)
+                .or_else(|| core_type_aliases.get(actual_name))
                 && let Some(actual_resolved_alias) = type_construct_resolve_type_alias(
                     actual_origin_type_alias,
                     actual_arguments.iter().cloned(),
@@ -3573,7 +3575,9 @@ fn type_fully_resolve_aliases(
         }
         Type::Alias { name, arguments } => {
             if !type_aliases_to_keep_unresolved.contains(name)
-                && let Some(actual_origin_type_alias) = type_aliases.get(name)
+                && let Some(actual_origin_type_alias) = type_aliases
+                    .get(name)
+                    .or_else(|| core_type_aliases.get(name))
                 && let Some(mut actual_resolved_alias) = type_construct_resolve_type_alias(
                     actual_origin_type_alias,
                     arguments.iter().cloned(),
@@ -3768,7 +3772,9 @@ fn type_to_possible_specific_pattern_catches(
             possibilities.push(SpecificPatternCatch::OnlyMatchableByVariable);
         }
         Type::Alias { name, arguments } => {
-            if let Some(origin_type_alias) = type_aliases.get(name)
+            if let Some(origin_type_alias) = type_aliases
+                .get(name)
+                .or_else(|| core_type_aliases.get(name))
                 && let Some(resolved_alias) =
                     type_construct_resolve_type_alias(origin_type_alias, arguments.iter().cloned())
             {
@@ -4552,7 +4558,9 @@ fn type_reachable_bufs(
         }
         Type::Fn { .. } => {}
         Type::Alias { name, arguments } => {
-            if let Some(origin_type_alias) = type_aliases.get(name)
+            if let Some(origin_type_alias) = type_aliases
+                .get(name)
+                .or_else(|| core_type_aliases.get(name))
                 && let Some(resolved_alias) =
                     type_construct_resolve_type_alias(origin_type_alias, arguments.iter().cloned())
             {
@@ -4717,39 +4725,11 @@ fn type_implicit_bufs(
                 }
             }
         }
-        Type::Fn { parameters, result } => {
-            {
-                let mut parameter_type_bufs_to_ignore =
-                    std::borrow::Cow::Borrowed(type_bufs_to_ignore);
-                for parameter in parameters {
-                    type_reachable_bufs(
-                        parameter,
-                        vec![],
-                        type_aliases,
-                        &mut |newly_reachable, _| {
-                            parameter_type_bufs_to_ignore
-                                .to_mut()
-                                .insert(newly_reachable);
-                        },
-                    );
-                }
-                for parameter in parameters {
-                    type_implicit_bufs(
-                        parameter,
-                        &parameter_type_bufs_to_ignore,
-                        type_aliases,
-                        type_bufs,
-                    );
-                }
-            }
-            let mut result_type_bufs_to_ignore = std::borrow::Cow::Borrowed(type_bufs_to_ignore);
-            type_reachable_bufs(result, vec![], type_aliases, &mut |newly_reachable, _| {
-                result_type_bufs_to_ignore.to_mut().insert(newly_reachable);
-            });
-            type_implicit_bufs(result, &result_type_bufs_to_ignore, type_aliases, type_bufs);
-        }
+        Type::Fn { .. } => {}
         Type::Alias { name, arguments } => {
-            if let Some(origin_type_alias) = type_aliases.get(name)
+            if let Some(origin_type_alias) = type_aliases
+                .get(name)
+                .or_else(|| core_type_aliases.get(name))
                 && let Some(resolved_alias) =
                     type_construct_resolve_type_alias(origin_type_alias, arguments.iter().cloned())
             {
@@ -5102,7 +5082,6 @@ fn zig_update_context_variable_with_new_reachable_bufs(
         }
         output.push_str("}, .{");
         for (zig_path, buf_reach_path) in introduced_reachable_bufs.values() {
-            output.push('&'); // TODO remove once zig internal representation of Buf changes to *Rc(BufCore)
             output.push_str(zig_path.as_ref());
             reachable_type_buf_path_js(output, buf_reach_path);
             output.push_str(", ");
@@ -5579,7 +5558,14 @@ fn syntax_expression_to_zig<'a>(
                     &name.value,
                     local_variable.introduced_start,
                 );
-                js_variable_clone(output, &zig_variable_name, type_, type_aliases);
+                zig_variable_clone(
+                    output,
+                    &zig_variable_name,
+                    type_,
+                    context_scope_start,
+                    0,
+                    type_aliases,
+                );
                 zig_break_start(output, label);
                 output.push_str(&zig_variable_name);
                 zig_break_end(output);
@@ -6989,9 +6975,16 @@ fn type_to_zig(
             output.push_str(&name_to_uppercase_zig(name));
             if !arguments.is_empty() {
                 output.push('(');
-                for argument in arguments {
-                    slug_type_zig(output, argument, 0, type_aliases);
-                    output.push_str(", ");
+                if core_type_aliases.contains_key(name) {
+                    for argument in arguments {
+                        type_to_zig(output, argument, type_aliases);
+                        output.push_str(", ");
+                    }
+                } else {
+                    for argument in arguments {
+                        slug_type_zig(output, argument, 0, type_aliases);
+                        output.push_str(", ");
+                    }
                 }
                 output.push(')');
             }
@@ -8547,7 +8540,10 @@ fn js_variable_drop(
         }
         Type::Fn { .. } => {}
         Type::Alias { name, arguments } => {
-            let Some(type_alias_info) = type_aliases.get(name) else {
+            let Some(type_alias_info) = type_aliases
+                .get(name)
+                .or_else(|| core_type_aliases.get(name))
+            else {
                 return;
             };
             let Some(aliased_type) = &type_alias_info.type_ else {
@@ -8681,7 +8677,10 @@ fn js_variable_clone(
         }
         Type::Fn { .. } => {}
         Type::Alias { name, arguments } => {
-            let Some(type_alias_info) = type_aliases.get(name) else {
+            let Some(type_alias_info) = type_aliases
+                .get(name)
+                .or_else(|| core_type_aliases.get(name))
+            else {
                 return;
             };
             let Some(aliased_type) = &type_alias_info.type_ else {
@@ -11103,7 +11102,9 @@ fn type_collect_variables_that_are_concrete_into(
                 }
             }
             _ => {
-                if let Some(origin_type_alias) = type_aliases.get(name)
+                if let Some(origin_type_alias) = type_aliases
+                    .get(name)
+                    .or_else(|| core_type_aliases.get(name))
                     && let Some(resolved_alias) = type_construct_resolve_type_alias(
                         origin_type_alias,
                         arguments.iter().cloned(),
