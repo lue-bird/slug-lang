@@ -404,13 +404,10 @@ pub const SpanCore =
         pub fn endIndex(@"%span": @This()) u32 {
             return @"%span".start + @"%span".length.predecessor();
         }
-        pub fn splitStart(@"%span": @This()) struct {
-            after: Opt(SpanCore),
-            start: SlotCore,
-        } {
+        pub fn splitStart(@"%span": @This()) struct { SlotCore, Opt(SpanCore) } {
             return .{
-                .start = .{ .index = @"%span".start },
-                .after = if (P32.fromU32(@"%span".length.predecessor())) |@"%end_length"|
+                .{ .index = @"%span".start },
+                if (P32.fromU32(@"%span".length.predecessor())) |@"%end_length"|
                     .{ .yes = .{
                         .start = @"%span".start + 1,
                         .length = @"%end_length",
@@ -511,19 +508,19 @@ pub const SpanCore =
             }
             return @"%state";
         }
-        pub fn step_while(
+        pub fn stepWhile(
             @"%span": @This(),
             @"%Done": type,
             ctx: anytype,
             @"%direction": @"[Down Up]"(void, void),
             @"%initial_state": anytype,
             @"%step": *const fn (
-                std.mem.Allocator,
+                @TypeOf(ctx),
                 @TypeOf(@"%initial_state"),
                 SlotCore,
             ) Error!@"[Done Going]"(@"%Done", @TypeOf(@"%initial_state")),
         ) Error!@"[Done Going]"(
-            struct { @"%Done", Opt(SpanCore) },
+            struct { @"%Done", Opt(@This()) },
             @TypeOf(@"%initial_state"),
         ) {
             var @"%state" = @"%initial_state";
@@ -531,11 +528,7 @@ pub const SpanCore =
                 .up => {
                     for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index_usize"| {
                         const @"%index": u32 = @intCast(@"%index_usize");
-                        switch (try @"%step"(
-                            ctx,
-                            @"%state",
-                            .{ .index = @"%index" },
-                        )) {
+                        switch (try @"%step"(ctx, @"%state", .{ .index = @"%index" })) {
                             .going => |@"%new_state"| {
                                 @"%state" = @"%new_state";
                             },
@@ -557,10 +550,7 @@ pub const SpanCore =
                     var @"%index": u32 = @"%span".start + @"%span".length.positive;
                     while (@"%index" > @"%span".start) {
                         @"%index" -= 1;
-                        switch (try @"%step"(ctx, .{
-                            .state = @"%state",
-                            .slot = .{ .index = @"%index" },
-                        })) {
+                        switch (try @"%step"(ctx, @"%state", .{ .index = @"%index" })) {
                             .going => |@"%going"| {
                                 @"%state" = @"%going";
                             },
@@ -1284,14 +1274,14 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf": *@This(),
             @"%slot": Slot(@"%Origin", @"%Item"),
         ) void {
-            @"%buf".counts()[@"%slot".index] = @"%buf".counts()[@"%slot".index].increment();
+            @"%buf".countsSlice()[@"%slot".index] = @"%buf".countsSlice()[@"%slot".index].increment();
         }
         pub fn cloneSpan(
             @"%buf": *@This(),
             @"%span": Span(@"%Origin", @"%Item"),
         ) void {
             for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index"| {
-                @"%buf".cloneSlot(.{ .index = @"%index" });
+                @"%buf".cloneSlot(.{ .index = @intCast(@"%index") });
             }
         }
     };
@@ -1526,8 +1516,8 @@ pub fn str_char_count(@"%str": Str) P32 {
 pub fn str_start(@"%str": Str) struct { Char, Opt(Str) } {
     const @"%split" = @"%str".splitStart();
     return .{
-        .start = @"%split".start,
-        .after = if (Str.fromUtf8View(@"%split".after)) |@"%after"| .{ .yes = @"%after" } else .{ .no = {} },
+        @"%split".@"0",
+        if (Str.fromUtf8View(@"%split".@"1")) |@"%after"| .{ .yes = @"%after" } else .{ .no = {} },
     };
 }
 pub fn str_end(@"%str": Str) struct { Opt(Str), Char } {
@@ -1665,12 +1655,12 @@ pub fn opt_span_step(
     comptime @"%Origin": SlugType,
     comptime @"%State": SlugType,
     ctx: anytype,
-    @"%direction": @"[Down Up]"(void, void),
     @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
+    @"%direction": @"[Down Up]"(void, void),
     @"%state": @"%State".Ty,
     @"%step": *const fn (
         Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
-        @"%State",
+        @"%State".Ty,
         Slot(@"%Origin".Ty, @"%Item".Ty),
     ) Error!@"%State".Ty,
 ) Error!@"%State".Ty {
@@ -1684,12 +1674,12 @@ pub fn span_step(
     comptime @"%Origin": SlugType,
     comptime @"%State": SlugType,
     ctx: anytype,
-    @"%direction": @"[Down Up]"(void, void),
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
+    @"%direction": @"[Down Up]"(void, void),
     @"%state": @"%State".Ty,
     @"%step": *const fn (
         Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
-        @"%State",
+        @"%State".Ty,
         Slot(@"%Origin".Ty, @"%Item".Ty),
     ) Error!@"%State".Ty,
 ) Error!@"%State".Ty {
@@ -1701,22 +1691,28 @@ pub fn opt_span_step_while(
     comptime @"%Origin": SlugType,
     comptime @"%State": SlugType,
     ctx: anytype,
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
     @"%direction": @"[Down Up]"(void, void),
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
-    @"%state": @"%State",
+    @"%state": @"%State".Ty,
     @"%step": *const fn (
         Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
-        @"%State",
+        @"%State".Ty,
         Slot(@"%Origin".Ty, @"%Item".Ty),
-    ) Error!@"[Done Going]"(@"%Done", @"%State"),
+    ) Error!@"[Done Going]"(@"%Done".Ty, @"%State".Ty),
 ) Error!@"[Done Going]"(
     struct { @"%Done".Ty, Opt(Span(@"%Origin".Ty, @"%Item".Ty)) },
     @"%State".Ty,
 ) {
-    return switch (@"%opt_span") {
-        .no => .{ .going = @"%state" },
-        .yes => |@"%span"| @"%span".step_while(@"%Done", ctx, @"%direction", @"%state", @"%step"),
-    };
+    switch (@"%opt_span") {
+        .no => return .{ .going = @"%state" },
+        .yes => |@"%span"| {
+            const @"%step_ctx" = structSubset(
+                ctx,
+                Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
+            );
+            return @"%span".stepWhile(@"%Done".Ty, @"%step_ctx", @"%direction", @"%state", @"%step");
+        },
+    }
 }
 pub fn span_step_while(
     comptime @"%Done": SlugType,
@@ -1724,19 +1720,23 @@ pub fn span_step_while(
     comptime @"%Origin": SlugType,
     comptime @"%State": SlugType,
     ctx: anytype,
-    @"%direction": @"[Down Up]"(void, void),
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
-    @"%state": @"%State",
+    @"%direction": @"[Down Up]"(void, void),
+    @"%state": @"%State".Ty,
     @"%step": *const fn (
         Ctx(&.{ @"%Done".Bufs, @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
-        @"%State",
-        Slot(@"%Origin", @"%Item"),
-    ) Error!@"[Done Going]"(@"%Done", @"%State"),
+        @"%State".Ty,
+        Slot(@"%Origin".Ty, @"%Item".Ty),
+    ) Error!@"[Done Going]"(@"%Done".Ty, @"%State".Ty),
 ) Error!@"[Done Going]"(
     struct { @"%Done".Ty, Opt(Span(@"%Origin".Ty, @"%Item".Ty)) },
     @"%State".Ty,
 ) {
-    return @"%span".step_while(@"%Done", ctx, @"%direction", @"%state", @"%step");
+    const @"%step_ctx" = structSubset(
+        ctx,
+        Ctx(&.{ @"%Item".Bufs, @"%Origin".Bufs, @"%State".Bufs, CtxBuf(@"%Origin", @"%Item") }),
+    );
+    return @"%span".stepWhile(@"%Done".Ty, @"%step_ctx", @"%direction", @"%state", @"%step");
 }
 
 pub fn buf_empty(
@@ -2212,7 +2212,7 @@ pub fn opt_span_reverse(
     comptime @"%Item": SlugType,
     comptime @"%Origin": SlugType,
     ctx: anytype,
-    @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
+    @"%opt_span": Opt(Span(@"%Origin".Ty, @"%Item".Ty)),
 ) void {
     switch (@"%opt_span") {
         .no => {},
