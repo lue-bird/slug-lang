@@ -222,7 +222,6 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins (like Box<> or gc or shared_ptr)
 
 ## TODO
-- core.zig factor out CountOrLeaked() as super of ReferenceCount/SlotCount with methods increase and decrease
 - check that moving spans does a clone if necessary
 - when adding items (e.g. optSpanAdd), make sure to drop the item
 - add more examples
