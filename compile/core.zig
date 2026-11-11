@@ -169,7 +169,7 @@ fn Ctx(@"%AdditionalFields": []const type) type {
     );
 }
 /// pass either SlugType or .{ name = "..slug..", .Ty = ZigType }
-fn CtxBuf(@"%Origin": anytype, @"%Item": anytype) type {
+pub fn CtxBuf(@"%Origin": anytype, @"%Item": anytype) type {
     return @Struct(
         .auto,
         null,
@@ -178,21 +178,21 @@ fn CtxBuf(@"%Origin": anytype, @"%Item": anytype) type {
         &.{std.lang.Type.Struct.FieldAttributes{}},
     );
 }
-fn ctxBufName(
+pub fn ctxBufName(
     comptime @"%origin_name": []const u8,
     comptime @"%item_name": []const u8,
 ) []const u8 {
     return "buf(" ++ @"%origin_name" ++ " " ++ @"%item_name" ++ ")";
 }
 /// pass either SlugType or .{ name = "..slug..", .Ty = ZigType }
-fn ctxBuf(
+pub fn ctxBuf(
     ctx: anytype,
     @"%Origin": anytype,
     @"%Item": anytype,
 ) *BufCore(@"%Origin".Ty, @"%Item".Ty) {
     return @field(ctx, ctxBufName(@"%Origin".name, @"%Item".name)).*;
 }
-const SlugType = struct {
+pub const SlugType = struct {
     Ty: type,
     Bufs: type = void,
     drop: fn (
@@ -209,21 +209,6 @@ const SlugType = struct {
     }.f,
     name: []const u8,
 };
-fn slugType(
-    @"%Ty": type,
-    comptime @"%name": []const u8,
-    @"%Bufs": type,
-    @"%drop": fn (Ctx(.{@"%Bufs"}), @"%Ty") void,
-    @"%clone": fn (@"%Bufs", @"%Ty") void,
-) SlugType {
-    return .{
-        .Ty = @"%Ty",
-        .Bufs = @"%Bufs",
-        .drop = @"%drop",
-        .clone = @"%clone",
-        .name = @"%name",
-    };
-}
 
 // If you're wondering about the strange names:
 // - @"'variant_a'variant_b": since zig removed

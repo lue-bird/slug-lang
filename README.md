@@ -222,6 +222,11 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins (like Box<> or gc or shared_ptr)
 
 ## TODO
+- correct formatting of project fn documentation (should not be indented)
+- correct formatting of project fn result type (should linebreak if header is multiline)
+- correctly report missing reachable bufs in local function calls.
+  I think the issue is that taking a local function automatically asks for an implicit buf.
+  Should that change? I think yes! Local function types should _never_ introduce implicit bufs
 - check that moving spans does a clone if necessary
 - when adding items (e.g. optSpanAdd), make sure to drop the item
 - add more examples

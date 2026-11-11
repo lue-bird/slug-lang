@@ -2084,11 +2084,11 @@ If you were trying to start a type variable, no type was expected here. Maybe yo
                     } else if unknown_source
                         .starts_with(|c: char| c.is_ascii_lowercase())
                     {
-                        "It could be that a name starting with an uppercase letter is expected here (only types with parameters and project function names start uppercase). Also, is it indented correctly?"
+                        "It could be that a name starting with an uppercase letter is expected here (only type variable and variant names start uppercase). Also, is it indented correctly?"
                     } else if unknown_source
                         .starts_with(|c: char| c.is_ascii_uppercase())
                     {
-                        "It could be that a name starting with a lowercase letter is expected here (only types with parameters and project function names start uppercase). Also, is it indented correctly?"
+                        "It could be that a name starting with a lowercase letter is expected here (only type variable and variant names start uppercase). Also, is it indented correctly?"
                     } else if unknown_source
                         .starts_with('#')
                     {
@@ -2188,7 +2188,7 @@ Choose a different ty name.",
                     errors.push(ErrorNode {
                         range: symbol_range(*fn_keyword_start, "fn"),
                         message: Box::from(
-                            "missing name. Function names start with an uppercase letter and only use ascii letters, digits and -"
+                            "missing name. Function names start with a lowercase letter and only use ascii letters, digits and -"
                         )
                     });
                     continue 'building_graph_across_items;
@@ -3270,9 +3270,15 @@ pub fn syntax_type_check(
             {
                 (
                     &origin_core_type.parameters,
-                    Type::CoreConstruct {
-                        name: name.value.clone(),
-                        arguments: argument_types,
+                    match origin_core_type.type_ {
+                        None => Type::CoreConstruct {
+                            name: name.value.clone(),
+                            arguments: argument_types,
+                        },
+                        Some(_) => Type::Alias {
+                            name: name.value.clone(),
+                            arguments: argument_types,
+                        },
                     },
                 )
             } else if let Some(recursive_origin_type_alias_parameters) =
@@ -4790,9 +4796,7 @@ pub fn checked_project_to_zig(
     output.reserve(checked_project_fns.len() * 12 + checked_type_aliases.len() * 5);
 
     for (checked_type_alias_name, checked_type_alias) in checked_type_aliases {
-        if let Some(checked_aliased_type) = &checked_type_alias.type_
-            && !core_type_aliases.contains_key(checked_type_alias_name)
-        {
+        if let Some(checked_aliased_type) = &checked_type_alias.type_ {
             project_type_alias_to_zig(
                 &mut output,
                 checked_type_alias.documentation.as_deref(),
@@ -7249,9 +7253,7 @@ pub fn checked_project_to_js(
     output.reserve(checked_project_fns.len() * 12 + checked_type_aliases.len() * 5);
 
     for (checked_type_alias_name, checked_type_alias) in checked_type_aliases {
-        if let Some(checked_aliased_type) = &checked_type_alias.type_
-            && !core_type_aliases.contains_key(checked_type_alias_name)
-        {
+        if let Some(checked_aliased_type) = &checked_type_alias.type_ {
             project_type_alias_to_js(
                 &mut output,
                 checked_type_alias.documentation.as_deref(),
@@ -11393,7 +11395,9 @@ fn type_diff(
                 })
             }
             _ => {
-                if let Some(expected_origin_type_alias) = type_aliases.get(expected_name)
+                if let Some(expected_origin_type_alias) = type_aliases
+                    .get(expected_name)
+                    .or_else(|| core_type_aliases.get(expected_name))
                     && let Some(expected_resolved_alias) = type_construct_resolve_type_alias(
                         expected_origin_type_alias,
                         expected_arguments.iter().cloned(),
@@ -14210,11 +14214,32 @@ fn syntax_expression_format(
             fields,
             closed_curly_start: _,
         } => {
-            let line_span = range_line_span(expression_range(expression, expressions));
-            for field in fields {
-                space_or_linebreak_indented_into(formatted, line_span, indent);
-                syntax_expression_record_field_format(formatted, indent, expressions, field);
+            formatted.push('{');
+            if let Some((field0, field1_up)) = fields.split_first() {
+                let line_span = range_line_span(expression_range(expression, expressions));
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, indent);
+                }
+                syntax_expression_record_field_format(
+                    formatted,
+                    next_indent(indent),
+                    expressions,
+                    field0,
+                );
+                for part in field1_up {
+                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    syntax_expression_record_field_format(
+                        formatted,
+                        next_indent(indent),
+                        expressions,
+                        part,
+                    );
+                }
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
             }
+            formatted.push('}');
         }
         SyntaxExpression::Commented {
             comments,
@@ -14231,7 +14256,7 @@ fn syntax_expression_format(
             }
         }
         SyntaxExpression::Destruct {
-            equals_start: _,
+            equals_start,
             pattern,
             queried,
             result,
@@ -14254,7 +14279,10 @@ fn syntax_expression_format(
                 None => {}
                 Some(queried) => {
                     let queried = expressions.item(queried);
-                    let queried_line_span = range_line_span(expression_range(queried, expressions));
+                    let queried_line_span = range_line_span(lsp_types::Range {
+                        start: *equals_start,
+                        end: expression_end(queried, expressions),
+                    });
                     space_or_linebreak_indented_into(
                         formatted,
                         queried_line_span,
