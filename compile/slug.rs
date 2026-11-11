@@ -8948,18 +8948,14 @@ fn syntax_expression_local_variables_last_uses<'a>(
         }
         SyntaxExpression::Call {
             first_argument_dot,
-            name,
+            name: _,
             type_arguments: _,
             open_paren_start: _,
             arguments_rest,
             closed_paren_start: _,
         } => {
-            if let Some(last_uses) = local_variables_last_uses.get_mut(&name.value) {
-                let local_variable_was_unused = local_variables_used.insert(&name.value);
-                if local_variable_was_unused {
-                    last_uses.push(name.start);
-                }
-            }
+            // no need to record called variables as they never need to be cloned
+            // since they are simple function pointers
             for value in first_argument_dot
                 .iter()
                 .map(|first| expressions.item(&first.argument))
@@ -9063,7 +9059,6 @@ fn syntax_expression_local_variables_last_uses<'a>(
             cases,
             closed_curly_start: _,
         } => {
-            let mut local_variables_used_across_cases = std::collections::HashSet::new();
             for SyntaxExpressionIfCase { pattern: _, result } in cases {
                 if let Some(result) = result {
                     let mut case_local_variables_used = std::collections::HashSet::new();
@@ -9073,12 +9068,9 @@ fn syntax_expression_local_variables_last_uses<'a>(
                         &mut case_local_variables_used,
                         local_variables_last_uses,
                     );
-                    local_variables_used_across_cases.extend(case_local_variables_used);
+                    local_variables_used.extend(case_local_variables_used);
                 }
             }
-            local_variables_used.retain(|local_variable_used| {
-                !local_variables_used_across_cases.contains(local_variable_used)
-            });
             if let Some(queried) = queried {
                 syntax_expression_local_variables_last_uses(
                     expressions.item(queried),
@@ -9453,19 +9445,12 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     ) else {
                         return None;
                     };
-                    {
-                        let mut expected_argument_type = expected_argument_type.clone();
-                        type_replace_variables(
-                            &type_variable_replacements,
-                            &mut expected_argument_type,
-                        ); // is this really necessary?
-                        type_collect_variables_that_are_concrete_into(
-                            &mut type_variable_replacements,
-                            &expected_argument_type,
-                            &checked_argument_type,
-                            type_aliases,
-                        );
-                    }
+                    type_collect_variables_that_are_concrete_into(
+                        &mut type_variable_replacements,
+                        &expected_argument_type,
+                        &checked_argument_type,
+                        type_aliases,
+                    );
                     type_replace_variables(
                         &type_variable_replacements,
                         &mut expected_argument_type,
@@ -14090,7 +14075,12 @@ fn syntax_expression_format(
                 if arguments_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
-                syntax_expression_format(formatted, indent, expressions, rest_argument0);
+                syntax_expression_format(
+                    formatted,
+                    next_indent(indent),
+                    expressions,
+                    rest_argument0,
+                );
                 for argument in rest_argument1_up {
                     space_or_linebreak_indented_into(
                         formatted,
