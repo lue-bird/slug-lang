@@ -12801,10 +12801,10 @@ An example can be found in `opt-span-step-while`",
                 result: type_choice([
                     (
                         "Done",
-                        vec![type_tuple([
+                        vec![
                             type_variable("Done"),
                             type_opt(type_span(type_variable("Origin"), type_variable("Item")))
-                        ])]
+                        ]
                     ),
                     ("Going", vec![type_variable("State")])
                 ]),
@@ -12857,10 +12857,10 @@ Note that `span-after` does not include any slot given to the step function, eve
                 result: type_choice([
                     (
                         "Done",
-                        vec![type_tuple([
+                        vec![
                             type_variable("Done"),
                             type_opt(type_span(type_variable("Origin"), type_variable("Item")))
-                        ])]
+                        ]
                     ),
                     ("Going", vec![type_variable("State")])
                 ]),
@@ -14091,7 +14091,7 @@ fn syntax_expression_format(
                         arguments_line_span,
                         next_indent(indent),
                     );
-                    syntax_expression_format(formatted, indent, expressions, argument);
+                    syntax_expression_format(formatted, next_indent(indent), expressions, argument);
                 }
                 if arguments_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
@@ -14183,7 +14183,12 @@ fn syntax_expression_format(
                     range_line_span(expression_range(expression, expressions)),
                     next_indent(indent),
                 );
-                syntax_expression_format(formatted, indent, expressions, expressions.item(result));
+                syntax_expression_format(
+                    formatted,
+                    next_indent(indent),
+                    expressions,
+                    expressions.item(result),
+                );
             }
         }
         SyntaxExpression::Tuple {
@@ -16878,11 +16883,13 @@ pub fn checked_type_alias_format(
     formatted.push_str("ty ");
     formatted.push_str(name);
     if let Some((parameter0, parameter1_up)) = type_alias.parameters.split_first() {
+        formatted.push('(');
         formatted.push_str(parameter0);
         for parameter in parameter1_up {
             formatted.push(' ');
             formatted.push_str(parameter);
         }
+        formatted.push(')');
     }
     formatted.push_str("\n    ");
     if let Some(type_) = &type_alias.type_ {

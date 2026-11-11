@@ -231,6 +231,7 @@ cargo install --offline --debug --path . slug
 - add more examples
 - show implicitly passed bufs when hovering a project fn
 - consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
+- don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
 
 ## implementation details
