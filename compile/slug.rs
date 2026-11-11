@@ -12178,14 +12178,14 @@ pub static core_fns: std::sync::LazyLock<std::collections::HashMap<Name, Checked
             },
             CoreFnInfo {
                 name: "p32-order",
-                documentation: "Compare left to right. For example 'less means left < right",
+                documentation: "Compare left to right. For example Less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_p32, type_p32],
                 result: type_order,
             },
             CoreFnInfo {
                 name: "u32-to-p32",
-                documentation: "Convert to a p32. If 0, returns 'no .",
+                documentation: "Convert to a p32. If 0, returns No",
                 type_parameters: vec![],
                 parameters: vec![type_u32],
                 result: type_opt(type_p32),
@@ -12251,14 +12251,14 @@ or performance is critical.",
             },
             CoreFnInfo {
                 name: "u32-order",
-                documentation: "Compare left to right. For example 'less means left < right",
+                documentation: "Compare left to right. For example Less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_u32, type_u32],
                 result: type_order,
             },
             CoreFnInfo {
                 name: "i32-to-u32",
-                documentation: "Convert to an u32. If negative, returns 'no .",
+                documentation: "Convert to an u32. If negative, returns No",
                 type_parameters: vec![],
                 parameters: vec![type_i32],
                 result: type_opt(type_u32),
@@ -12308,7 +12308,7 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
             },
             CoreFnInfo {
                 name: "i32-order",
-                documentation: "Compare left to right. For example 'less means left < right",
+                documentation: "Compare left to right. For example Less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_i32, type_i32],
                 result: type_order,
@@ -12337,7 +12337,7 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
             CoreFnInfo {
                 name: "f32-ln",
                 documentation: "Its natural logarithm.
-If the result is too negative or the input is not positive, returns 'no .
+If the result is too negative or the input is not positive, returns No.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
                 type_parameters: vec![],
@@ -12413,14 +12413,14 @@ Try not to divide by 0.0, as 0.0 will be returned which is not mathematically co
             },
             CoreFnInfo {
                 name: "f32-square-root",
-                documentation: "n ^ 0.5, returning 'no . when n < 0.0",
+                documentation: "n ^ 0.5, returning No when n < 0.0",
                 type_parameters: vec![],
                 parameters:  vec![type_i32],
                 result: type_opt(type_f32),
             },
             CoreFnInfo {
                 name: "f32-pow-i32",
-                documentation: "a ^ b, returning 'no . when the result is too large, too negative or undefined.
+                documentation: "a ^ b, returning No when the result is too large, too negative or undefined.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.",
                 type_parameters: vec![],
@@ -12429,7 +12429,7 @@ Warning: Precision is unspecified and as such this function should never be used
             },
             CoreFnInfo {
                 name: "f32-pow",
-                documentation: "a ^ b, returning 'no . when the result is too large, too negative or undefined.
+                documentation: "a ^ b, returning No when the result is too large, too negative or undefined.
 
 Warning: Precision is unspecified and as such this function should never be used when determinism is desired.
 As such, prefer F32-square-root if you can",
@@ -12549,7 +12549,7 @@ fn age() f32
             },
             CoreFnInfo {
                 name: "f32-order",
-                documentation: "Compare left to right. For example 'less means left < right",
+                documentation: "Compare left to right. For example Less means left < right",
                 type_parameters: vec![],
                 parameters: vec![type_f32, type_f32],
                 result: type_order,
@@ -12783,7 +12783,7 @@ A less powerful version that preserves the span is `opt-span-step`",
             CoreFnInfo {
                 name: "span-step-while",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line
-by returning `'going` or exiting early with `'done` (like calling `break` in other languages).
+by returning Going or exiting early with Done (like calling `break` in other languages).
 An example can be found in `opt-span-step-while`",
                 type_parameters: vec![],
                 parameters: vec![
@@ -12812,7 +12812,7 @@ An example can be found in `opt-span-step-while`",
             CoreFnInfo {
                 name: "opt-span-step-while",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line
-by returning `'going` or exiting early with `'done` (like calling `break` in other languages).
+by returning Going or exiting early with Done (like calling `break` in other languages).
 ```slug
 fn next-non-space(span opt(span(Origin)))
     {
@@ -12822,14 +12822,20 @@ fn next-non-space(span opt(span(Origin)))
     if
         opt-span-step-while(
             span
+
+            # walk from lowest to highest slot
             Up<[Down]>
+
+            # keep no state (empty tuple)
             *
-            fn(slot slot(Origin) *)
-            = char item(chars slot)
-            if u32-order(char-to-u32(char) char-to-u32(\" \"char)) {
-            Equal Going<[Done char]>(*)
-            Less Done<[Going(*)]>(char)
-            Greater Done<[Going(*)]>(char)
+
+            # decide for each slot whether to exit or keep going
+            fn(* slot slot(Origin))
+                = char item(slot)
+                if u32-order(char-to-u32(char) char-to-u32(\" \"char)) {
+                Equal Going<[Done(char)]>(*)
+                Less Done<[Going(*)]>(char)
+                Greater Done<[Going(*)]>(char)
             }
         )
     {
@@ -13038,7 +13044,7 @@ To just switch out an item, use `replace`",
             CoreFnInfo {
                 name: "span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
-Items whose comparison returns `'equal .` are ordered according to their original position in the span ("stable sort").
+Items whose comparison returns `Equal` are ordered according to their original position in the span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
 as for example the new altered items may violate the expected ordering at that point.
 Do no rely on a specific order of when items are compared."#,
@@ -13055,7 +13061,7 @@ Do no rely on a specific order of when items are compared."#,
             CoreFnInfo {
                 name: "opt-span-sort",
                 documentation: r#"Order the referenced items, less before greater according to a given function.
-Items whose comparison returns `'equal .` are ordered according to their original position in the span ("stable sort").
+Items whose comparison returns `Equal` are ordered according to their original position in the span ("stable sort").
 While this function allows the compared items to be altered, I strongly recommend against doing so
 as for example the new altered items may violate the expected ordering at that point.
 Do no rely on a specific order of when items are compared."#,
