@@ -784,15 +784,14 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%allocator": std.mem.Allocator,
             @"%new_item": @"%Item",
         ) Error!Slot(@"%Origin", @"%Item") {
-            const @"%new_index" = @"%buf".lenIncludingUnset();
             var @"%counts" = @"%buf".countsArrayList();
             const @"%new_count_ptr" = try @"%counts".addOne(@"%allocator");
+            @"%buf".counts = @"%counts".items.ptr;
             const @"%new_item_ptr" = try @"%buf".items.addOne(@"%allocator");
             if (std.math.cast(u32, @"%buf".items.items.len) == null) return error.OutOfMemory;
-            @"%buf".counts = @"%counts".items.ptr;
             @"%new_item_ptr".* = @"%new_item";
             @"%new_count_ptr".* = SlotCount.one;
-            return Slot(@"%Origin", @"%Item"){ .index = @"%new_index" };
+            return Slot(@"%Origin", @"%Item"){ .index = @"%buf".lenIncludingUnset() - 1 };
         }
         pub fn insert(
             @"%buf": *@This(),
@@ -904,7 +903,6 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf": *@This(),
             @"%span": Span(@"%Origin", @"%Item"),
         ) []@"%Item" {
-            // TODO
             const @"%slice" = @"%buf".spanSlice(@"%span");
             @"%buf".unsetSpanRid(.{ .start = @"%span".start, .length = @"%span".length });
             return @"%slice";
@@ -915,7 +913,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
         ) []@"%Item" {
             switch (@"%opt_span") {
-                .no => return []@"%Item",
+                .no => return &.{},
                 .yes => |@"%span"| {
                     return @"%buf".takeSpan(@"%span");
                 },
@@ -962,14 +960,10 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             if (@"%span".start + @"%span".length.positive == @"%buf".lenIncludingUnset()) {
                 return @"%span";
             }
-            // span is not at the end already
-            @"%buf".unsetSpanRid(.{
-                .start = @"%span".start,
-                .length = @"%span".length,
-            });
             try @"%buf".preAllocateAtLeast(@"%allocator", @"%span".length.positive);
             @"%buf".items.appendSliceAssumeCapacity(@"%buf".spanSlice(@"%span"));
             if (std.math.cast(u32, @"%buf".items.items.len) == null) return error.OutOfMemory;
+            @"%buf".unsetSpanRid(@"%span");
             return .{
                 .start = @"%buf".lenIncludingUnset() - @"%span".length.positive,
                 .length = @"%span".length,
@@ -1069,6 +1063,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         ) Error!Opt(Span(@"%Origin", @"%Item")) {
             const @"%length_before_add" = @"%buf".lenIncludingUnset();
             var @"%new_items_iterator" = @"%new_items";
+            // can be optimized
             while (@"%next_item"(&@"%new_items_iterator")) |@"%new_item"| {
                 _ = try @"%buf".add(@"%allocator", @"%new_item");
             }
@@ -1240,7 +1235,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%slot": Slot(@"%Origin", @"%Item"),
             @"drop Item": fn (
                 anytype, // @TypeOf(ctx)
-                anytype, // @"%Item"
+                anytype, // @"%Item".Ty
             ) void,
         ) void {
             const @"%slot_count" = @"%buf".countsSlice()[@"%slot".index];
@@ -1256,11 +1251,30 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             @"%buf": *@This(),
             ctx: anytype, // Ctx(&.{@"%Item".Bufs})
             @"%span": Span(@"%Origin", @"%Item"),
-            @"drop Item": fn (@TypeOf(ctx), @"%Item") void,
+            @"drop Item": fn (
+                anytype, // @TypeOf(ctx)
+                anytype, // @"%Item".Ty
+            ) void,
         ) void {
             // TODO optimize
             for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index"| {
-                @"%buf".dropSlot(ctx, .{ .index = @"%index" }, @"drop Item");
+                @"%buf".dropSlot(ctx, .{ .index = @intCast(@"%index") }, @"drop Item");
+            }
+        }
+        pub fn dropOptSpan(
+            @"%buf": *@This(),
+            ctx: anytype, // Ctx(&.{@"%Item".Bufs})
+            @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
+            @"drop Item": fn (
+                anytype, // @TypeOf(ctx)
+                anytype, // @"%Item".Ty
+            ) void,
+        ) void {
+            switch (@"%opt_span") {
+                .no => {},
+                .yes => |@"%span"| {
+                    @"%buf".dropSpan(ctx, @"%span", @"drop Item");
+                },
             }
         }
         pub fn clone(@"%buf": *@This()) void {
