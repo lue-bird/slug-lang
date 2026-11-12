@@ -1010,35 +1010,33 @@ fn respond_to_prepare_rename(
     ) else {
         return None;
     };
-    let Some(symbol_range) = (match symbol {
+    let symbol_range = match symbol {
         slug::SyntaxSymbol::ProjectTypeOrUnknown {
             name,
             construct_info: _,
-        } => Some(slug::name_range(name)),
+        } => slug::name_range(name),
         slug::SyntaxSymbol::TypeVariable {
             name,
-            use_start: use_underscore_start,
+            use_start,
             scope: _,
-        } => Some(lsp_types::Range {
-            start: use_underscore_start,
-            end: lsp_position_add_characters(use_underscore_start, (name.len() + 1) as u32),
+        } => slug::name_range(slug::WithStartPosition {
+            start: use_start,
+            value: name,
         }),
-        slug::SyntaxSymbol::VariantOrUnknown(name) => Some(slug::name_range(name)),
+        slug::SyntaxSymbol::VariantOrUnknown(name) => slug::name_range(name),
         slug::SyntaxSymbol::ProjectFnOrVariableUnknown {
             name,
             construct_info: _,
             local_variables: _,
-        } => Some(slug::name_range(name)),
+        } => slug::name_range(name),
         slug::SyntaxSymbol::LocalVariable {
             name,
             use_start,
             origin: _,
-        } => Some(slug::name_range(slug::WithStartPosition {
+        } => slug::name_range(slug::WithStartPosition {
             value: name,
             start: use_start,
-        })),
-    }) else {
-        return None;
+        }),
     };
     Some(lsp_types::PrepareRenameResult::Range(symbol_range))
 }
@@ -1165,16 +1163,6 @@ fn respond_to_semantic_tokens_full(
         result_id: None,
         data: highlight_state.tokens,
     })
-}
-
-fn lsp_position_add_characters(
-    position: lsp_types::Position,
-    additional_characters: u32,
-) -> lsp_types::Position {
-    lsp_types::Position {
-        line: position.line,
-        character: position.character + additional_characters,
-    }
 }
 
 fn respond_to_completion(
