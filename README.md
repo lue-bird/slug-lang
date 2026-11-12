@@ -2,8 +2,8 @@ programming language which uses indexes bound to specific arrays instead of refe
 An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet<Char>(name str) span(Char char)
-    add-str-chars<Char>("Hello, "str)
+fn greet<Chars>(name str) span(Chars char)
+    add-str-chars<Chars>("Hello, "str)
     .span-add-str-chars(name)
     .span-add("!"char)
 ```
@@ -19,26 +19,32 @@ cargo install --git https://codeberg.org/lue-bird/slug-lang slug
 (TODO rewrite to be more approachable)
 
 ```slug
-ty type(Type Name Char)
+ty type-alias(Types Names Source)
+    {
+    parameters opt(span(Names span(Source char)))
+    type type(Types Names Source)
+    }
+
+ty type(Types Names Source)
     [
-    Variable(span(Char char))
-    Tuple(opt(span(Type (type Type))))
+    Variable(span(Source char))
+    Tuple(opt(span(Types (type Types))))
     Fn(
         {
-        parameters opt(span(Type (type Type)))
-        result slot(Type (type Type))
+        parameters opt(span(Types (type Types)))
+        result slot(Types (type Types))
         }
     )
     Alias(
         {
-        name span(Char char)
-        arguments opt(span(Type (type Type)))
+        name span(Source char)
+        arguments opt(span(Types (type Types)))
         }
     )
     Record(
         {
-        names opt(span(Name (span Char char)))
-        values opt(span(Type (type(Type Name Char))))
+        names opt(span(Names (span Source char)))
+        values opt(span(Types (type(Types Names Source))))
         }
     )
     ]
@@ -49,10 +55,16 @@ Use nested bufs instead of one big one to operate on one chunk in a clear way, e
 ```slug
 ty project-state
     {
-    types buf([Type] type([Type]))
+    type-aliases opt(span([TypeAliases] type-alias([Types] [Names] [Source])))
+    
+    source buf([Source] char)
+    names buf([Names] span([Source] char))
+    types buf([Types] type([Types] [Names] [Source]))
+    type-aliases-buf buf([TypeAliases] type-alias([Types] [Names] [Source]))
     }
 
 ty state
+# multiple open workspaces which have independent state
     {
     projects opt(span([Project]))
     projects-buf buf([Project] project-state)
