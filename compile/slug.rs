@@ -13890,9 +13890,11 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                         space_or_linebreak_indented_into(&mut formatted, header_line_span, 0);
                     }
                 }
-                linebreak_indented_into(&mut formatted, next_indent(0));
                 if let Some(documentation) = documentation {
+                    linebreak_indented_into(&mut formatted, 0);
                     syntax_comments_format(&mut formatted, 0, documentation);
+                    indented_into(&mut formatted, next_indent(0));
+                } else {
                     linebreak_indented_into(&mut formatted, next_indent(0));
                 }
                 if let Some(result) = result {
