@@ -10,18 +10,18 @@
 fn print-random-quote(
     {
     io io Io
-    http-get http-get fn(Io str) opt(span([Chars] char))
+    http-get http-get fn(Io str) opt(span(* char))
     stdout-write-char-slice
-        stdout-write-char-slice fn(Io opt(span([Chars] char))) *
+        stdout-write-char-slice fn(Io opt(span(* char))) *
     stdout-flush stdout-flush fn(Io) *
     }
 )
     *
-    = _ buf-empty<[Chars] char>()
+    = _ buf-empty<* char>()
     = quote-response
         http-get(io "https://dummyjson.com/quotes/random"str)
     = to-write
-        add-str-chars<[Chars]>("Corporate quote of the day: \""str)
+        add-str-chars<*>("Corporate quote of the day: \""str)
         .span-add-own-opt-span(
             # this isn't how one would actually parse json of course
             quote-response
@@ -84,7 +84,8 @@ fn opt-span-strip-start-str-chars(
                     No Done<[Going(str)]>(Prefixed<[Not-prefixed]>)
                     Yes(str-after) Going<[Done([Prefixed Not-prefixed])]>(str-after)
                     }
-                _ Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
+                _
+                    Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
                 }
         )
     if step-result {
@@ -114,7 +115,8 @@ fn opt-span-strip-end-str-chars(
                     No Done<[Going(str)]>(Prefixed<[Not-prefixed]>)
                     Yes(str-before) Going<[Done([Prefixed Not-prefixed])]>(str-before)
                     }
-                _ Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
+                _
+                    Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
                 }
         )
     if step-result {

@@ -24,11 +24,11 @@ fn stdout_flush(_: slug.Ctx(&.{}), io: IoState) slug.Error!void {
     io.writer.*.flush() catch {};
 }
 fn stdout_write_char_slice(
-    ctx: slug.Ctx(&.{slug.CtxBuf(.{ .Ty = slug.@"[Chars]"(void), .name = "[Chars]" }, slug.SlugType.char)}),
+    ctx: slug.Ctx(&.{slug.CtxBuf(slug.SlugType.empty, slug.SlugType.char)}),
     io: IoState,
-    span: slug.Opt(slug.Span(slug.@"[Chars]"(void), slug.Char)),
+    span: slug.Opt(slug.Span(void, slug.Char)),
 ) slug.Error!void {
-    var chars = @field(ctx, slug.ctxBufName("[Chars]", "char")).*;
+    var chars = slug.ctxBuf(ctx, slug.SlugType.empty, slug.SlugType.char);
     var writer = io.writer;
     for (chars.optSpanSlice(span)) |char| {
         writer.interface.print("{u}", .{char}) catch {};
@@ -37,11 +37,11 @@ fn stdout_write_char_slice(
     chars.dropOptSpan(ctx, span, slug.SlugType.char.drop);
 }
 fn http_get(
-    ctx: slug.Ctx(&.{slug.CtxBuf(.{ .Ty = slug.@"[Chars]"(void), .name = "[Chars]" }, slug.SlugType.char)}),
+    ctx: slug.Ctx(&.{slug.CtxBuf(slug.SlugType.empty, slug.SlugType.char)}),
     io: IoState,
     url: slug.Str,
-) slug.Error!slug.Opt(slug.Span(slug.@"[Chars]"(void), slug.Char)) {
-    var chars = @field(ctx, slug.ctxBufName("[Chars]", "char"));
+) slug.Error!slug.Opt(slug.Span(void, slug.Char)) {
+    var chars = slug.ctxBuf(ctx, slug.SlugType.empty, slug.SlugType.char);
     if (http_get_request(io.io, ctx.allocator, url.utf8.bytes)) |http_response_body| {
         const span = try chars.addIterator(
             ctx.allocator,
