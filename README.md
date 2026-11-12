@@ -2,13 +2,12 @@ programming language which uses indexes bound to specific arrays instead of refe
 An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
 
 ```slug
-fn greet<Chars>(name str) span(Chars char)
-    add-str-chars<Chars>("Hello, "str)
+fn greet<Char>(name str) span(Char char)
+    add-str-chars<Char>("Hello, "str)
     .span-add-str-chars(name)
     .span-add("!"char)
 ```
 
-Important: The compiler and tooling is not implemented, yet! Once available,
 install with (requires having [rust installed](https://rust-lang.org/tools/install/))
 ```bash
 cargo install --git https://codeberg.org/lue-bird/slug-lang slug
@@ -20,40 +19,49 @@ cargo install --git https://codeberg.org/lue-bird/slug-lang slug
 (TODO rewrite to be more approachable)
 
 ```slug
-ty expression(Expressions Patterns Types)
+ty type(Type Name Char)
     [
-    Let(
+    Variable(span(Char char))
+    Tuple(opt(span(Type (type Type))))
+    Fn(
         {
-        pattern pattern(Patterns Types)
-        value slot(Expressions expression(Expressions Patterns Types))
-        result slot(Expressions expression(Expressions Patterns Types))
+        parameters opt(span(Type (type Type)))
+        result slot(Type (type Type))
         }
     )
-    ...
+    Alias(
+        {
+        name span(Char char)
+        arguments opt(span(Type (type Type)))
+        }
+    )
+    Record(
+        {
+        names opt(span(Name (span Char char)))
+        values opt(span(Type (type(Type Name Char))))
+        }
+    )
     ]
 ```
-The rule to make it all safe: a buf must not be able to be defined with an origin that is already directly reachable (in existing slots, spans or bufs)
+The rule to make it all safe: you can never have multiple collections that have the same item and origin type in reach.
 
 Use nested bufs instead of one big one to operate on one chunk in a clear way, e.g. pre-allocating, altering, reusing memory, stepping, quick bulk deletion / bulk access / bulk modification without needing to reach into _all_ items of the same kind.
 ```slug
 ty project-state
     {
-    base-expression expression([Expressions] [Patterns] [Types])
-    expressions buf([Expressions] expression([Expressions] [Patterns] [Types]))
-    patterns buf([Patterns] pattern([Patterns] [Types]))
-    types buf([Types] type([Types]))
+    types buf([Type] type([Type]))
     }
 
 ty state
     {
-    projects opt(span([Projects]))
-    projects-buf buf([Projects] project-state)
+    projects opt(span([Project]))
+    projects-buf buf([Project] project-state)
     }
 
 fn initial-state() state
     {
-    projects No<opt(span([Projects] project-state))>
-    projects-buf buf-empty<[Projects] project-state>()
+    projects No<opt(span([Project] project-state))>
+    projects-buf buf-empty<[Project] project-state>()
     }
 ```
 
@@ -227,6 +235,7 @@ cargo install --offline --debug --path . slug
 - consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
+- core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
 
 ## implementation details
 - introduce operation that can set an index after new unset items. Something like `add-unset-then`
@@ -256,16 +265,19 @@ cargo install --offline --debug --path . slug
   Question: How to represent in zig?
 
 ## known design weaknesses
+- The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes traversals quadratic.
+  My hope is that compile optimizations can eliminate many of those. If this assumptions turns out to be false, I may need to look into e.g. "automatic input-only parameters = don't drop" and or lobster/...-adjacent stuff. There may also be a more efficient representation for slot counts, like an enum(u2){0,1,2,look-in-side-list} for every item that looks in a side-list for higher counts.
+- building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
+- while implicit passing of bufs is one "killer convenience feature" of slug, it comes with a bunch of drawbacks.
+  For example, if bufs were explicitly passed,
+    - `slot` and `span` would not need a second type parameter (huge) and type aliases would never be recursive
+    - it's way more obvious
+    - `buf` could also be specialized to e.g. `arena` or `index-map`, which themselves could also have a specialized API that may for example allow iterating all items or not
 - it's not uncommon to keep one span around which covers all elements as a "central access point" and to keep a range of items alive even if there are no referents.
   This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
   
   The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
-- building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
-- in retrospect I'm not actually 100% sure that passing bufs implicitly is that great of an idea.
-  For example, if they were explicitly passed
-    - `slot` and `span` would not need a second type parameter (huge)
-    - it's more obvious
-    - `buf` could also be specialized to e.g. `arena`
+- the syntax is ugly. It feels dense. It feels disorganized. It feels unintuitive (somehow). Any help appreciated!
 
 ## potential improvements in the future
 - zig codegen: implement leak-free error handling via "errdefer { for all reachable bufs: clearAndFree(allocator) }"

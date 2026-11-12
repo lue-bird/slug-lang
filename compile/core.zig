@@ -207,6 +207,7 @@ pub const SlugType = struct {
     name: []const u8,
 
     // a few commonly-used SlugTypes
+    pub const empty: @This() = .{ .Ty = void, .name = "*" };
     pub const p32: @This() = .{ .Ty = P32, .name = "p32" };
     pub const @"u32": @This() = .{ .Ty = U32, .name = "u32" };
     pub const @"i32": @This() = .{ .Ty = I32, .name = "i32" };

@@ -68,7 +68,7 @@ pub enum SyntaxType {
         closed_paren_start: Option<lsp_types::Position>,
         result: Option<Box<SyntaxType>>,
     },
-    ConstructWithArguments {
+    Construct {
         name: WithStartPosition<Name>,
         arguments: Option<SyntaxTypeConstructParenthesizedArguments>,
     },
@@ -350,7 +350,7 @@ pub fn type_start(type_: &SyntaxType) -> lsp_types::Position {
         SyntaxType::Fn {
             fn_keyword_start, ..
         } => *fn_keyword_start,
-        SyntaxType::ConstructWithArguments { name, .. } => name.start,
+        SyntaxType::Construct { name, .. } => name.start,
         SyntaxType::Tuple { star_start, .. } => *star_start,
         SyntaxType::Record {
             open_curly_start, ..
@@ -378,7 +378,7 @@ pub fn type_end(type_: &SyntaxType) -> lsp_types::Position {
                 closed_paren_start.map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
             })
             .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
-        SyntaxType::ConstructWithArguments { name, arguments } => match arguments {
+        SyntaxType::Construct { name, arguments } => match arguments {
             None => name_end(with_start_position_as_ref(name)),
             Some(SyntaxTypeConstructParenthesizedArguments {
                 open_paren_start,
@@ -1512,7 +1512,7 @@ fn parse_type_construct(state: &mut ParseState) -> Option<SyntaxType> {
             })
         }
     };
-    Some(SyntaxType::ConstructWithArguments { name, arguments })
+    Some(SyntaxType::Construct { name, arguments })
 }
 fn parse_type_fn(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(fn_keyword_start) = parse_slug_keyword_as_start(state, "fn") else {
@@ -2453,7 +2453,7 @@ fn syntax_type_connect_type_names_in_graph_from(
                 );
             }
         }
-        SyntaxType::ConstructWithArguments { name, arguments } => {
+        SyntaxType::Construct { name, arguments } => {
             if let Some(referenced_type_graph_node) =
                 type_graph_node_by_name.get(name.value.as_str()).copied()
             {
@@ -3098,7 +3098,7 @@ pub fn syntax_type_to_type(type_: &SyntaxType) -> Type {
                     .unwrap_or_else(|| type_empty),
             ),
         },
-        SyntaxType::ConstructWithArguments { name, arguments } => {
+        SyntaxType::Construct { name, arguments } => {
             let argument_types = arguments
                 .iter()
                 .flat_map(|arguments| &arguments.arguments)
@@ -3245,7 +3245,7 @@ pub fn syntax_type_check(
                 result: Box::new(result),
             })
         }
-        SyntaxType::ConstructWithArguments { name, arguments } => {
+        SyntaxType::Construct { name, arguments } => {
             let using_recursive_type_alias_in_arguments_allowed = using_recursive_type_alias_allowed
                 || match name.value.as_str() {
                     type_span_name | type_slot_name | type_buf_name => true,
@@ -10920,7 +10920,7 @@ pub fn syntax_type_variables_into<'a>(
                 syntax_type_variables_into(type_variables, result);
             }
         }
-        SyntaxType::ConstructWithArguments { name: _, arguments } => {
+        SyntaxType::Construct { name: _, arguments } => {
             if let Some(SyntaxTypeConstructParenthesizedArguments {
                 open_paren_start: _,
                 arguments,
@@ -13578,7 +13578,34 @@ Has constant time access, modify, remove and add.
 Note that like all other slug values a buf can be used multiple times at the same time
 and modifying one instance will modify all other instances as well
 (like with slots where modifying one item modifies the item pointed to by all other same slots).
-This can get a little confusing, so it is recommended to only keep one instance of s specific buf around."
+This can get a little confusing, so it is recommended to only keep one instance of a specific buf around.
+
+The first parameter, the \"origin\" can be used to disambiguate multiple bufs that store the same item type.
+For example, when pretty printing a json value you may have the original source chars in one buf
+and the resulting formatted json chars in another buf.
+```slug
+fn json-format<Formatted>(
+    json opt(span(Original-source char))
+)
+    opt(span(char))
+    ...
+```
+which you can call like for example
+```slug
+fn example() *
+    = _ buf-empty<[Original-source] char>()
+    = original-source
+        some-function-to-get-json<[Orignal-source]>()
+    = _ buf-empty<[Formatted] char>()
+    = formatted
+        json-format<[Formatted]>(original-source)
+    # now formatted contains
+    = _ formatted
+    *
+```
+(`[Formatted]` for example is just a choice type with a single variant with no values, just like for example a bool is just `[Yes No]`).
+
+If you don't need to disambiguate bufs with the same type, just set the origin to `*`."
                 )),
                 parameters: vec![Name::from_static("Origin"), Name::from_static("Item")],
                 type_: None,
@@ -14629,7 +14656,7 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                 syntax_type_format(formatted, indent, result);
             }
         }
-        SyntaxType::ConstructWithArguments { name, arguments } => {
+        SyntaxType::Construct { name, arguments } => {
             formatted.push_str(&name.value);
             if let Some(SyntaxTypeConstructParenthesizedArguments {
                 open_paren_start: _,
@@ -15616,7 +15643,7 @@ fn type_symbol_at_position<'a>(
                     .as_ref()
                     .and_then(|result| type_symbol_at_position(result, position, scope))
             }),
-        SyntaxType::ConstructWithArguments { name, arguments } => {
+        SyntaxType::Construct { name, arguments } => {
             if range_includes_position(name_range(with_start_position_as_ref(name)), position) {
                 return Some(SyntaxSymbol::ProjectTypeOrUnknown {
                     name: with_start_position_as_ref(name),
@@ -15982,7 +16009,7 @@ fn syntax_type_symbol_uses_into(
                 }
             }
         }
-        SyntaxType::ConstructWithArguments { name, arguments } => {
+        SyntaxType::Construct { name, arguments } => {
             if let SyntaxSymbol::ProjectTypeOrUnknown {
                 name: symbol_name,
                 construct_info: _,
@@ -16659,7 +16686,7 @@ pub fn syntax_type_highlight(state: &mut HighlightState, type_: &SyntaxType) {
                 syntax_type_highlight(state, result);
             }
         }
-        SyntaxType::ConstructWithArguments { name, arguments } => {
+        SyntaxType::Construct { name, arguments } => {
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Function);
             if let Some(SyntaxTypeConstructParenthesizedArguments {
                 open_paren_start: _,
