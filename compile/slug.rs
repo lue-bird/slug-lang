@@ -2133,21 +2133,6 @@ If you were trying to start a type variable, no type was expected here. Maybe yo
                     });
                     continue 'building_graph_across_items;
                 };
-                // allocating a string here just to check hurts a little
-                if type_graph_node_by_name.contains_key(
-                    name_toggle_case_of_first_ascii(name_node.value.to_string()).as_str(),
-                ) {
-                    errors.push(ErrorNode {
-                        range: name_range(with_start_position_as_ref(name_node)),
-                        message: Box::from(
-                            "a type with the same name (with a different case of the first letter) already exists.
-This can be confusing and will lead to conflicts if the number of type parameters changes on either of those types.
-(It will also generate uglier, harder to find names in the compiled output).
-Choose a different ty name.",
-                        ),
-                    });
-                    continue 'building_graph_across_items;
-                }
                 _ = type_graph_node_by_name
                     .entry(&name_node.value)
                     .and_modify(|_| {
@@ -2197,7 +2182,7 @@ Choose a different ty name.",
                     errors.push(ErrorNode {
                         range: name_range(with_start_position_as_ref(name)),
                         message: Box::from(
-                            "a function with this name is already part of core (which for example includes U32-add-clamp, Buf-empty etc.). Choose a different fn name"
+                            "a function with this name is already part of core (which for example includes u32-add-clamp, buf-empty etc.). Choose a different fn name"
                         )
                     });
                     continue 'building_graph_across_items;
@@ -2255,7 +2240,7 @@ Choose a different ty name.",
     {
         if let Some(aliased_type) = &type_declaration_info.type_ {
             let mut project_type_referenced_vertexes = std::collections::BTreeSet::new();
-            syntax_type_connect_type_names_in_graph_from(
+            syntax_type_connect_directly_referenced_type_names_in_graph_from(
                 &type_graph_node_by_name,
                 aliased_type,
                 &mut project_type_referenced_vertexes,
@@ -2284,26 +2269,20 @@ Choose a different ty name.",
         }
     }
 
-    // maybe instead start from 0 instead of cloning every time?
-    let mut checked_type_aliases =
-        std::collections::HashMap::<Name, CheckedTypeAlias>::with_capacity(
-            project_type_by_graph_node.len(),
-        );
-    for project_type_strongly_connected_component in
-        strongly_connected_components::find(&type_graph)
-    {
-        // possible optimization: skip this computation when project_type_strongly_connected_component is single, non-self-referencing node
-        let project_type_strongly_connected_component_parameters =
-            project_type_strongly_connected_component
-                .iter()
-                .filter_map(|variable_declaration_graph_node| {
-                    project_type_by_graph_node.get(variable_declaration_graph_node)
-                })
-                .copied()
-                .map(|project_type| {
-                    (
-                        &project_type.name.value,
-                        project_type
+    let mut checked_type_aliases = {
+        // initialize with just the headers so that we can walk the project types
+        // in any order
+        project_type_by_graph_node
+            .values()
+            .map(|project_type| {
+                (
+                    project_type.name.value.clone(),
+                    CheckedTypeAlias {
+                        name_range: Some(name_range(with_start_position_as_ref(
+                            &project_type.name,
+                        ))),
+                        documentation: None,
+                        parameters: project_type
                             .parameters
                             .iter()
                             .flat_map(|parameters| {
@@ -2313,9 +2292,27 @@ Choose a different ty name.",
                                     .map(|parameter| parameter.value.clone())
                             })
                             .collect(),
-                    )
+                        type_: None,
+                    },
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>()
+    };
+    for project_type_strongly_connected_component in
+        strongly_connected_components::find(&type_graph)
+    {
+        // possible optimization: skip this computation
+        // and instead pass a closure to syntax_type_check
+        // which determines whether a type is in project_type_strongly_connected_component
+        let project_type_strongly_connected_component_type_names =
+            project_type_strongly_connected_component
+                .iter()
+                .filter_map(|variable_declaration_graph_node| {
+                    project_type_by_graph_node.get(variable_declaration_graph_node)
                 })
-                .collect::<std::collections::HashMap<_, _>>();
+                .copied()
+                .map(|project_type| &project_type.name.value)
+                .collect::<std::collections::HashSet<&Name>>();
         for project_type in project_type_strongly_connected_component
             .iter()
             .filter_map(|variable_declaration_graph_node| {
@@ -2328,7 +2325,7 @@ Choose a different ty name.",
                 project_type_alias_check(
                     project_type,
                     errors,
-                    &project_type_strongly_connected_component_parameters,
+                    &project_type_strongly_connected_component_type_names,
                     &checked_type_aliases,
                     &mut records_used,
                     &mut choices_used,
@@ -2421,7 +2418,7 @@ pub struct CheckedSyntaxProject<'a> {
     pub checked_local_fns: std::collections::HashMap<lsp_types::Position, CheckedLocalFn>,
     pub checked_queries: std::collections::HashMap<lsp_types::Position, CheckedQuery>,
 }
-fn syntax_type_connect_type_names_in_graph_from(
+fn syntax_type_connect_directly_referenced_type_names_in_graph_from(
     type_graph_node_by_name: &std::collections::HashMap<
         &str,
         strongly_connected_components::Vertex,
@@ -2439,14 +2436,14 @@ fn syntax_type_connect_type_names_in_graph_from(
             result,
         } => {
             for parameter in parameters {
-                syntax_type_connect_type_names_in_graph_from(
+                syntax_type_connect_directly_referenced_type_names_in_graph_from(
                     type_graph_node_by_name,
                     parameter,
                     type_graph,
                 );
             }
             if let Some(result) = result {
-                syntax_type_connect_type_names_in_graph_from(
+                syntax_type_connect_directly_referenced_type_names_in_graph_from(
                     type_graph_node_by_name,
                     result,
                     type_graph,
@@ -2454,23 +2451,31 @@ fn syntax_type_connect_type_names_in_graph_from(
             }
         }
         SyntaxType::Construct { name, arguments } => {
-            if let Some(referenced_type_graph_node) =
-                type_graph_node_by_name.get(name.value.as_str()).copied()
+            if name.value == type_span_name
+                || name.value == type_slot_name
+                || name.value == type_buf_name
             {
-                type_graph.insert(referenced_type_graph_node);
-            }
-            if let Some(SyntaxTypeConstructParenthesizedArguments {
-                open_paren_start: _,
-                arguments,
-                closed_paren_start: _,
-            }) = arguments
-            {
-                for argument in arguments {
-                    syntax_type_connect_type_names_in_graph_from(
-                        type_graph_node_by_name,
-                        argument,
-                        type_graph,
-                    );
+                // we skip over the origin and item type since (mutual) recursion is allowed there
+                // and checking non-indirect recursion is the only thing we check for by building this graph
+            } else {
+                if let Some(referenced_type_graph_node) =
+                    type_graph_node_by_name.get(name.value.as_str()).copied()
+                {
+                    type_graph.insert(referenced_type_graph_node);
+                }
+                if let Some(SyntaxTypeConstructParenthesizedArguments {
+                    open_paren_start: _,
+                    arguments,
+                    closed_paren_start: _,
+                }) = arguments
+                {
+                    for argument in arguments {
+                        syntax_type_connect_directly_referenced_type_names_in_graph_from(
+                            type_graph_node_by_name,
+                            argument,
+                            type_graph,
+                        );
+                    }
                 }
             }
         }
@@ -2481,7 +2486,7 @@ fn syntax_type_connect_type_names_in_graph_from(
             closed_paren_start: _,
         } => {
             for part in parts {
-                syntax_type_connect_type_names_in_graph_from(
+                syntax_type_connect_directly_referenced_type_names_in_graph_from(
                     type_graph_node_by_name,
                     part,
                     type_graph,
@@ -2495,7 +2500,7 @@ fn syntax_type_connect_type_names_in_graph_from(
         } => {
             for field in fields {
                 if let Some(value) = &field.value {
-                    syntax_type_connect_type_names_in_graph_from(
+                    syntax_type_connect_directly_referenced_type_names_in_graph_from(
                         type_graph_node_by_name,
                         value,
                         type_graph,
@@ -2516,7 +2521,7 @@ fn syntax_type_connect_type_names_in_graph_from(
                 }) = &variant.values
                 {
                     for value in values {
-                        syntax_type_connect_type_names_in_graph_from(
+                        syntax_type_connect_directly_referenced_type_names_in_graph_from(
                             type_graph_node_by_name,
                             value,
                             type_graph,
@@ -2756,7 +2761,7 @@ pub struct SyntaxProjectTypeInfo<'a> {
 fn project_type_alias_check(
     project_type: SyntaxProjectTypeInfo,
     errors: &mut Vec<ErrorNode>,
-    recursive_type_alias_parameters: &std::collections::HashMap<&Name, Vec<Name>>,
+    recursive_type_aliases: &std::collections::HashSet<&Name>,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
     choices_used: &mut std::collections::HashSet<Vec<Name>>,
@@ -2795,7 +2800,7 @@ fn project_type_alias_check(
             match syntax_type_check(
                 aliased_syntax_type,
                 errors,
-                recursive_type_alias_parameters,
+                recursive_type_aliases,
                 false,
                 type_aliases,
                 records_used,
@@ -3169,7 +3174,7 @@ pub fn syntax_type_check_not_in_type_alias(
     syntax_type_check(
         type_,
         errors,
-        &std::collections::HashMap::new(),
+        &std::collections::HashSet::new(),
         false,
         type_aliases,
         records_used,
@@ -3179,7 +3184,7 @@ pub fn syntax_type_check_not_in_type_alias(
 pub fn syntax_type_check(
     type_: &SyntaxType,
     errors: &mut Vec<ErrorNode>,
-    recursive_type_alias_parameters: &std::collections::HashMap<&Name, Vec<Name>>,
+    recursive_type_aliases: &std::collections::HashSet<&Name>,
     using_recursive_type_alias_allowed: bool,
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
     records_used: &mut std::collections::HashSet<Vec<Name>>,
@@ -3200,7 +3205,7 @@ pub fn syntax_type_check(
                     syntax_type_check(
                         parameter,
                         errors,
-                        recursive_type_alias_parameters,
+                        recursive_type_aliases,
                         using_recursive_type_alias_allowed,
                         type_aliases,
                         records_used,
@@ -3232,7 +3237,7 @@ pub fn syntax_type_check(
             let Some(result) = syntax_type_check(
                 result,
                 errors,
-                recursive_type_alias_parameters,
+                recursive_type_aliases,
                 using_recursive_type_alias_allowed,
                 type_aliases,
                 records_used,
@@ -3258,7 +3263,7 @@ pub fn syntax_type_check(
                     syntax_type_check(
                         argument_type,
                         errors,
-                        recursive_type_alias_parameters,
+                        recursive_type_aliases,
                         using_recursive_type_alias_in_arguments_allowed,
                         type_aliases,
                         records_used,
@@ -3286,33 +3291,33 @@ pub fn syntax_type_check(
                         },
                     },
                 )
-            } else if let Some(recursive_origin_type_alias_parameters) =
-                recursive_type_alias_parameters.get(&name.value)
-            {
-                if using_recursive_type_alias_allowed {
+            } else if let Some(origin_type_alias) = type_aliases.get(&name.value) {
+                if recursive_type_aliases.contains(&name.value) {
+                    if using_recursive_type_alias_allowed {
+                        (
+                            &origin_type_alias.parameters,
+                            Type::Alias {
+                                name: name.value.clone(),
+                                arguments: argument_types,
+                            },
+                        )
+                    } else {
+                        errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: Box::from("recursive type alias. A value of such a directly recursive type has no known maximum size on the stack.
+Move nested parts of this data into the heap (using slot/span) to represent such nested data."),
+                    });
+                        return None;
+                    }
+                } else {
                     (
-                        recursive_origin_type_alias_parameters,
+                        &origin_type_alias.parameters,
                         Type::Alias {
                             name: name.value.clone(),
                             arguments: argument_types,
                         },
                     )
-                } else {
-                    errors.push(ErrorNode {
-                        range: name_range(with_start_position_as_ref(name)),
-                        message: Box::from("recursive type alias. A value of such a directly recursive type has no known maximum size on the stack.
-Move nested parts of this data into the heap (using slot/span) to represent such nested data."),
-                    });
-                    return None;
                 }
-            } else if let Some(origin_type_alias) = type_aliases.get(&name.value) {
-                (
-                    &origin_type_alias.parameters,
-                    Type::Alias {
-                        name: name.value.clone(),
-                        arguments: argument_types,
-                    },
-                )
             } else {
                 errors.push(ErrorNode {
                     range: name_range(with_start_position_as_ref(name)),
@@ -3363,7 +3368,7 @@ Move nested parts of this data into the heap (using slot/span) to represent such
                 syntax_type_check(
                     part,
                     errors,
-                    recursive_type_alias_parameters,
+                    recursive_type_aliases,
                     using_recursive_type_alias_allowed,
                     type_aliases,
                     records_used,
@@ -3404,7 +3409,7 @@ Move nested parts of this data into the heap (using slot/span) to represent such
                 match syntax_type_check(
                     field_value,
                     errors,
-                    recursive_type_alias_parameters,
+                    recursive_type_aliases,
                     using_recursive_type_alias_allowed,
                     type_aliases,
                     records_used,
@@ -3457,7 +3462,7 @@ Move nested parts of this data into the heap (using slot/span) to represent such
                         syntax_type_check(
                             syntax_variant_value,
                             errors,
-                            recursive_type_alias_parameters,
+                            recursive_type_aliases,
                             using_recursive_type_alias_allowed,
                             type_aliases,
                             records_used,
@@ -12104,19 +12109,6 @@ fn place_pattern_type_diff_errors(
             }
         },
     }
-}
-
-fn name_toggle_case_of_first_ascii(mut name: String) -> String {
-    if let Some(first) = name.chars().next()
-        && let Some(first_mut) = name.get_mut(0..=0)
-    {
-        if first.is_ascii_uppercase() {
-            first_mut.make_ascii_lowercase();
-        } else {
-            first_mut.make_ascii_uppercase();
-        }
-    }
-    name
 }
 
 const local_unnamed_function_name: &str = "local_unnamed_function";
