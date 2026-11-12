@@ -1077,7 +1077,7 @@ fn parse_project_fn(
     parse_slug_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
     parse_slug_whitespace(state);
-    let mut parameters = Vec::with_capacity(2);
+    let mut parameters = Vec::new();
     while let Some(parameter) = parse_parameter_pattern(state) {
         parameters.push(parameter);
         parse_slug_whitespace(state);
@@ -1121,7 +1121,7 @@ pub fn parse_project_fn_signature(state: &mut ParseState) -> Option<ProjectFnSig
     parse_slug_whitespace(state);
     let _ = parse_symbol(state, ":");
     parse_slug_whitespace(state);
-    let mut type_parameters = Vec::with_capacity(1);
+    let mut type_parameters = Vec::new();
     while let Some(type_parameter_name) = parse_slug_uppercase_name_with_start(state) {
         type_parameters.push(type_parameter_name);
         parse_slug_whitespace(state);
@@ -1129,7 +1129,7 @@ pub fn parse_project_fn_signature(state: &mut ParseState) -> Option<ProjectFnSig
     parse_slug_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
     parse_slug_whitespace(state);
-    let mut parameter_types = Vec::with_capacity(2);
+    let mut parameter_types = Vec::new();
     while let Some(parameter_type) = parse_type(state) {
         parameter_types.push(parameter_type);
         parse_slug_whitespace(state);
@@ -1907,7 +1907,7 @@ fn parse_expression_fn(
     parse_slug_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
     parse_slug_whitespace(state);
-    let mut parameters = Vec::with_capacity(2);
+    let mut parameters = Vec::new();
     while let Some(parameter) = parse_parameter_pattern(state) {
         parameters.push(parameter);
         parse_slug_whitespace(state);
@@ -2055,7 +2055,7 @@ pub fn syntax_project_check<'a>(
     > = std::collections::HashMap::with_capacity(syntax_project.items.len());
 
     let mut records_used: std::collections::HashSet<Vec<Name>> =
-        std::collections::HashSet::with_capacity(16);
+        std::collections::HashSet::with_capacity(8);
     let mut choices_used: std::collections::HashSet<Vec<Name>> =
         std::collections::HashSet::with_capacity(4);
 
@@ -2266,7 +2266,7 @@ Choose a different ty name.",
     for (&project_fn_graph_node, project_fn_info) in project_fn_by_graph_node.iter() {
         let project_fn_graph: &mut strongly_connected_components::Neighbors = &mut project_fn_graph;
         if let Some(result_node) = project_fn_info.result {
-            let mut parameter_variables = Vec::with_capacity(2);
+            let mut parameter_variables = Vec::new();
             for parameter in project_fn_info.parameters {
                 syntax_parameter_pattern_variables_for_each(parameter, &mut |name, _type| {
                     parameter_variables.push(name.value);
@@ -2602,7 +2602,7 @@ fn syntax_expression_connect_fns_in_graph_from<'a>(
             result,
         } => {
             if let Some(result) = result {
-                let mut parameter_introduced_variables = Vec::with_capacity(2);
+                let mut parameter_introduced_variables = Vec::new();
                 for parameter in parameters {
                     syntax_parameter_pattern_variables_for_each(parameter, &mut |name, _type| {
                         parameter_introduced_variables.push(name.value);
@@ -2981,7 +2981,7 @@ fn syntax_project_fn_check<'a>(
             result_expression_is_invalid: true,
         };
     };
-    let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
+    let mut parameter_introduced_variables = std::collections::HashMap::new();
     for syntax_parameter in project_fn.parameters {
         syntax_parameter_pattern_variables_for_each(syntax_parameter, &mut |name, type_| {
             parameter_introduced_variables.insert(
@@ -3044,6 +3044,7 @@ fn syntax_project_fn_check<'a>(
         Some(&checked_result_expression_type),
         type_aliases,
     );
+    let mut local_variables = std::collections::HashMap::new();
     for parameter in project_fn.parameters {
         parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
             errors,
@@ -3051,10 +3052,14 @@ fn syntax_project_fn_check<'a>(
             &mut reachable_bufs,
             type_aliases,
         );
+        syntax_parameter_pattern_variables_for_each(parameter, &mut |name, type_| {
+            local_variables.insert(name.value, LocalVariable::Parameter(type_));
+        });
     }
-    syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+    syntax_expression_check_against_reachable_bufs(
         errors,
         syntax_result,
+        &local_variables,
         &mut reachable_bufs,
         checked_calls,
         checked_queries,
@@ -4997,8 +5002,8 @@ fn syntax_project_fn_to_zig(
     output.push_str(") Error!");
     type_to_zig(output, result_type, type_aliases);
     output.push_str(" {\n");
-    let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
-    let mut parameter_introduced_variables_last_uses = std::collections::HashMap::with_capacity(2);
+    let mut parameter_introduced_variables = std::collections::HashMap::new();
+    let mut parameter_introduced_variables_last_uses = std::collections::HashMap::new();
     let mut parameter_introduced_reachable_bufs = std::collections::HashMap::new();
     for (parameter_index, (syntax_parameter, _)) in syntax_parameters
         .iter()
@@ -5035,7 +5040,7 @@ fn syntax_project_fn_to_zig(
         syntax_expression_local_variables_last_uses(
             syntax_result,
             expressions,
-            &mut std::collections::HashSet::with_capacity(2),
+            &mut std::collections::HashSet::new(),
             &mut parameter_introduced_variables_last_uses,
         );
         syntax_expression_to_zig(
@@ -5883,9 +5888,8 @@ fn syntax_expression_to_zig<'a>(
             zig_ignore(output, |output| {
                 zig_context_variable(output, local_function_scope_start)
             });
-            let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
-            let mut parameter_introduced_variables_last_uses =
-                std::collections::HashMap::with_capacity(2);
+            let mut parameter_introduced_variables = std::collections::HashMap::new();
+            let mut parameter_introduced_variables_last_uses = std::collections::HashMap::new();
             let mut parameter_introduced_reachable_bufs = std::collections::HashMap::new();
             for syntax_parameter in parameters {
                 let mut parameter_name = String::new();
@@ -7407,8 +7411,8 @@ fn syntax_project_fn_to_js(
     if implicit_bufs.is_empty() {
         output.push_str("const $ = {};\n");
     }
-    let mut parameter_introduced_variables = std::collections::HashMap::with_capacity(2);
-    let mut parameter_introduced_variables_last_uses = std::collections::HashMap::with_capacity(2);
+    let mut parameter_introduced_variables = std::collections::HashMap::new();
+    let mut parameter_introduced_variables_last_uses = std::collections::HashMap::new();
     for (syntax_parameter_index, (syntax_parameter, _)) in syntax_parameters
         .iter()
         .zip(parameter_types)
@@ -7437,7 +7441,7 @@ fn syntax_project_fn_to_js(
         syntax_expression_local_variables_last_uses(
             syntax_result,
             expressions,
-            &mut std::collections::HashSet::with_capacity(2),
+            &mut std::collections::HashSet::new(),
             &mut parameter_introduced_variables_last_uses,
         );
         syntax_expression_to_js(
@@ -8034,10 +8038,8 @@ fn syntax_expression_to_js<'a>(
             }
             output.push_str("$) => {\n");
             'in_function: {
-                let mut parameter_introduced_variables =
-                    std::collections::HashMap::with_capacity(2);
-                let mut parameter_introduced_variables_last_uses =
-                    std::collections::HashMap::with_capacity(2);
+                let mut parameter_introduced_variables = std::collections::HashMap::new();
+                let mut parameter_introduced_variables_last_uses = std::collections::HashMap::new();
                 for (parameter_index, syntax_parameter) in parameters.iter().enumerate() {
                     syntax_pattern_to_js_destructuring(
                         output,
@@ -8064,7 +8066,7 @@ fn syntax_expression_to_js<'a>(
                 syntax_expression_local_variables_last_uses(
                     result,
                     expressions,
-                    &mut std::collections::HashSet::with_capacity(2),
+                    &mut std::collections::HashSet::new(),
                     &mut parameter_introduced_variables_last_uses,
                 );
                 syntax_expression_to_js(
@@ -9417,7 +9419,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     .cloned()
                     .zip(type_arguments)
                     .collect();
-                expression_call_check_for_mismathching_arguments(
+                expression_call_check_for_mismatching_arguments(
                     errors,
                     with_start_position_as_ref(name),
                     maybe_first_argument.map(|_| 1).unwrap_or(0) + rest_syntax_arguments.len(),
@@ -9470,6 +9472,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     }
                 }
                 type_replace_variables(&type_variable_replacements, &mut result_type);
+                // TODO check for missing type bufs
                 checked_calls.insert(
                     name.start,
                     CheckedCall {
@@ -9534,12 +9537,13 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         return None;
                     }
                 }
-                expression_call_check_for_mismathching_arguments(
+                expression_call_check_for_mismatching_arguments(
                     errors,
                     with_start_position_as_ref(name),
                     maybe_first_argument.map(|_| 1).unwrap_or(0) + rest_syntax_arguments.len(),
                     &expected_argument_types,
                 );
+                // TODO report missing bufs
                 Some(*result_type)
             } else {
                 errors.push(ErrorNode {
@@ -10229,7 +10233,7 @@ If not, add patterns for the cases above"
         }
     }
 }
-fn expression_call_check_for_mismathching_arguments(
+fn expression_call_check_for_mismatching_arguments(
     errors: &mut Vec<ErrorNode>,
     function_name: WithStartPosition<&Name>,
     argument_count: usize,
@@ -10321,9 +10325,15 @@ fn error_introduced_pattern_variable_is_unused(
         ),
     }
 }
-fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+#[derive(Debug, Clone)]
+enum LocalVariable<'a> {
+    Parameter(Option<&'a SyntaxType>),
+    Query(Option<Type>),
+}
+fn syntax_expression_check_against_reachable_bufs<'a>(
     errors: &mut Vec<ErrorNode>,
-    expression: &SyntaxExpression,
+    expression: &'a SyntaxExpression,
+    local_variables: &std::collections::HashMap<&'a Name, LocalVariable<'a>>,
     reachable_bufs: &mut std::collections::HashSet<TypeBuf>,
     checked_calls: &std::collections::HashMap<lsp_types::Position, CheckedCall>,
     checked_queries: &std::collections::HashMap<lsp_types::Position, CheckedQuery>,
@@ -10357,15 +10367,63 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                     reachable_bufs,
                     type_aliases,
                 );
+            } else if let Some(variable) = local_variables.get(&name.value)
+                && let Some(variable_type) = match variable {
+                    LocalVariable::Parameter(syntax_type) => syntax_type.map(|syntax_type| {
+                        std::borrow::Cow::Owned(syntax_type_to_type(syntax_type))
+                    }),
+                    LocalVariable::Query(query_type) => {
+                        query_type.as_ref().map(std::borrow::Cow::Borrowed)
+                    }
+                }
+                && let variable_type = type_alias_resolve_to_non_alias(&variable_type, type_aliases)
+                && let Type::Fn { parameters, result } = variable_type.as_ref()
+            {
+                let mut variable_implicit_bufs = function_signature_implicit_bufs(
+                    parameters.iter(),
+                    Some(result.as_ref()),
+                    type_aliases,
+                );
+                variable_implicit_bufs.retain(|variable_implicit_buf| {
+                    !reachable_bufs.contains(variable_implicit_buf)
+                });
+                if !variable_implicit_bufs.is_empty() {
+                    let mut error_message = format!(
+                        "This function requires the following {} to be reachable but I can't find any {} here:\n",
+                        match variable_implicit_bufs.len() {
+                            1 => "buf",
+                            _ => "bufs",
+                        },
+                        match variable_implicit_bufs.len() {
+                            1 => "it",
+                            _ => "those",
+                        }
+                    );
+                    for variable_implicit_buf in variable_implicit_bufs {
+                        error_message.push_str("  - buf(");
+                        type_format_single_line(&mut error_message, &variable_implicit_buf.origin);
+                        error_message.push(' ');
+                        type_format_single_line(&mut error_message, &variable_implicit_buf.item);
+                        error_message.push_str(")\n")
+                    }
+                    error_message.push_str(
+                        "Please create them at the appropriate point by prepending `= _ buf-empty<... ...>()`.",
+                    );
+                    errors.push(ErrorNode {
+                        range: name_range(with_start_position_as_ref(name)),
+                        message: error_message.into_boxed_str(),
+                    });
+                }
             }
             for argument in first_argument_dot
                 .iter()
                 .map(|first| expressions.item(&first.argument))
                 .chain(arguments_rest)
             {
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     argument,
+                    local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10382,9 +10440,10 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             values,
         } => {
             for value in values.iter().flat_map(|values| &values.values) {
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     value,
+                    local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10410,6 +10469,7 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                     Some(&checked_fn.result_type),
                     type_aliases,
                 );
+                let mut fn_local_variables = std::collections::HashMap::new();
                 for parameter in parameters {
                     parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
                         errors,
@@ -10417,10 +10477,14 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                         &mut fn_reachable_bufs,
                         type_aliases,
                     );
+                    syntax_parameter_pattern_variables_for_each(parameter, &mut |name, type_| {
+                        fn_local_variables.insert(name.value, LocalVariable::Parameter(type_));
+                    });
                 }
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     expressions.item(result),
+                    &mut fn_local_variables,
                     &mut fn_reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10438,9 +10502,10 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             closed_paren_start: _,
         } => {
             for part in parts {
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     part,
+                    local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10457,9 +10522,10 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             closed_curly_start: _,
         } => {
             for field_value in fields.iter().filter_map(|field| field.value.as_ref()) {
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     field_value,
+                    local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10475,9 +10541,10 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             expression,
         } => {
             if let Some(expression) = expression {
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     expressions.item(expression),
+                    local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10495,9 +10562,10 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             result,
         } => {
             if let Some(queried) = queried {
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     expressions.item(queried),
+                    local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10508,6 +10576,7 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                 );
             }
             if let Some(result) = result {
+                let mut local_variables = std::borrow::Cow::Borrowed(local_variables);
                 if let Some(pattern) = pattern
                     && let Some(checked_query) = checked_queries.get(equals_start)
                 {
@@ -10518,10 +10587,21 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                         reachable_bufs,
                         type_aliases,
                     );
+                    syntax_query_pattern_variables_for_each(
+                        pattern,
+                        Some(&checked_query.queried_type),
+                        &mut |name, type_| {
+                            local_variables
+                                .to_mut()
+                                .insert(name.value, LocalVariable::Query(type_));
+                        },
+                        type_aliases,
+                    );
                 }
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     expressions.item(result),
+                    &local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10540,9 +10620,10 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             closed_curly_start: _,
         } => {
             if let Some(queried) = queried {
-                syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                syntax_expression_check_against_reachable_bufs(
                     errors,
                     expressions.item(queried),
+                    local_variables,
                     reachable_bufs,
                     checked_calls,
                     checked_queries,
@@ -10555,6 +10636,7 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
             let checked_query = checked_queries.get(if_keyword_start);
             for case in cases {
                 if let Some(case_result) = &case.result {
+                    let mut local_variables = std::borrow::Cow::Borrowed(local_variables);
                     if let Some(checked_query) = checked_query {
                         query_pattern_add_introduced_bufs_and_check_do_not_overlap(
                             errors,
@@ -10563,10 +10645,21 @@ fn syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
                             reachable_bufs,
                             type_aliases,
                         );
+                        syntax_query_pattern_variables_for_each(
+                            &case.pattern,
+                            Some(&checked_query.queried_type),
+                            &mut |name, type_| {
+                                local_variables
+                                    .to_mut()
+                                    .insert(name.value, LocalVariable::Query(type_));
+                            },
+                            type_aliases,
+                        );
                     }
-                    syntax_expression_check_introduced_bufs_do_not_overlap_with_reachable_bufs(
+                    syntax_expression_check_against_reachable_bufs(
                         errors,
                         case_result,
+                        &local_variables,
                         reachable_bufs,
                         checked_calls,
                         checked_queries,
@@ -13402,12 +13495,12 @@ fn answer() f32 =
 Keep in mind that a human-readable visual symbol can be composed of multiple such unicode scalars (forming a grapheme cluster), For example:
 ```slug
 str-start("🇳🇿"str)
-# = {
-# start "\(1F1FA)"char
-#        Indicator N
-# after Yes "\(1F1F8)"str
-#        Indicator Z
-# }
+# = *(
+# "\(1F1FA)"char
+# Indicator N
+# Yes("\(1F1F8)"str)
+# Indicator Z
+# )
 ```
 Read if interested: [swift's grapheme cluster docs](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/stringsandcharacters/#Extended-Grapheme-Clusters)"#,
                 )),
@@ -15799,7 +15892,7 @@ pub fn syntax_project_symbol_uses(
                         }
                         if let Some(result) = result {
                             let mut parameter_introduced_variables =
-                                std::collections::HashSet::with_capacity(2);
+                                std::collections::HashSet::new();
                             for parameter in parameters {
                                 syntax_parameter_pattern_variables_for_each(
                                     parameter,

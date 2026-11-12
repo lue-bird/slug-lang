@@ -222,8 +222,6 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins (like Box<> or gc or shared_ptr)
 
 ## TODO
-- correct formatting of project fn result type (should linebreak if header is multiline)
-- correctly report missing reachable bufs in local function calls
 - add more examples
 - show implicitly passed bufs when hovering a project fn
 - consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
