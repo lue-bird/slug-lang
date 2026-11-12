@@ -223,7 +223,6 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - js output: when moving spans, clone all items that have counts > 1
-- core.mjs add clone/drop$Order and clone/drop$Opt
 - correct formatting of project fn documentation (should not be indented)
 - correct formatting of project fn result type (should linebreak if header is multiline)
 - correctly report missing reachable bufs in local function calls

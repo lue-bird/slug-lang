@@ -56,6 +56,22 @@ export function f32$to_string(n) {
 export function buf$counts_view(buf$Origin$Item) {
   return new Uint16Array(buf$Origin$Item.counts);
 }
+/** @param {Order} _ @returns {void} */
+export function order$drop(_) {}
+/** @param {Order} _ @returns {void} */
+export function order$clone(_) {}
+/** @template $Yes @param {Opt<$Yes>} opt @param {{ drop$Yes: (_: $Yes) => void }} $ opt @returns {void} */
+export function opt$drop(opt, $) {
+  if ("yes" in opt) {
+    $.drop$Yes(opt.yes);
+  }
+}
+/** @template $Yes @param {Opt<$Yes>} opt @param {{ clone$Yes: (_: $Yes) => void }} $ opt @returns {void} */
+export function opt$clone(opt, $) {
+  if ("yes" in opt) {
+    $.clone$Yes(opt.yes);
+  }
+}
 
 /** @param {P32} p @returns {U32} */
 export function p32_to_u32(p) {

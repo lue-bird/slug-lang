@@ -904,6 +904,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
                 _ = @"%buf".take(ctx, .{ .index = @intCast(@"%index") }, @"clone Item");
             }
         }
+        /// assumes counts[index] == .one
         fn unsetIndex(@"%buf": *@This(), @"%index": u32) void {
             var @"%count" = &@"%buf".countsSlice()[@"%index"];
             @"%count".* = @"%count".decrement();
