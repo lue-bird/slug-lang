@@ -15,7 +15,8 @@ fn print-random-quote(
         stdout-write-char-slice fn(Io opt(span([Chars] char))) *
     stdout-flush stdout-flush fn(Io) *
     }
-) *
+)
+    *
     = _ buf-empty<[Chars] char>()
     = quote-response
         http-get(io "https://dummyjson.com/quotes/random"str)
@@ -36,7 +37,8 @@ fn print-random-quote(
 fn opt-span-strip-start-to-after-str-chars(
     opt-span opt(span(Chars char))
     excluded-end str
-) opt(span(Chars char))
+)
+    opt(span(Chars char))
     if opt-span-strip-start-str-chars(opt-span excluded-end) {
     Prefixed(after-end) after-end
     Not-prefixed
@@ -51,7 +53,8 @@ fn opt-span-strip-start-to-after-str-chars(
 fn opt-span-strip-end-to-before-str-chars(
     opt-span opt(span(Chars char))
     excluded-end str
-) opt(span(Chars char))
+)
+    opt(span(Chars char))
     if opt-span-strip-end-str-chars(opt-span excluded-end) {
     Prefixed(after-end) after-end
     Not-prefixed
@@ -66,7 +69,8 @@ fn opt-span-strip-end-to-before-str-chars(
 fn opt-span-strip-start-str-chars(
     span opt(span(Chars char))
     prefix str
-) [Not-prefixed Prefixed(opt(span(Chars char)))]
+)
+    [Not-prefixed Prefixed(opt(span(Chars char)))]
     = step-result
         opt-span-step-while(
             span
@@ -95,7 +99,8 @@ fn opt-span-strip-start-str-chars(
 fn opt-span-strip-end-str-chars(
     span opt(span(Chars char))
     suffix str
-) [Not-prefixed Prefixed(opt(span(Chars char)))]
+)
+    [Not-prefixed Prefixed(opt(span(Chars char)))]
     = step-result
         opt-span-step-while(
             span

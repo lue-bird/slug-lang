@@ -13878,10 +13878,9 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                 formatted.push(')');
                 match result_type {
                     Some(result_type) => {
-                        let result_type_lne_span = range_line_span(type_range(result_type));
                         space_or_linebreak_indented_into(
                             &mut formatted,
-                            result_type_lne_span,
+                            header_line_span,
                             next_indent(0),
                         );
                         syntax_type_format(&mut formatted, next_indent(0), result_type);
