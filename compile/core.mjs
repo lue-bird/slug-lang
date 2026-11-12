@@ -683,14 +683,12 @@ export function set_or_insert(index, new_item, $) {
   return insert(new_item, $);
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span
  * @param {$Item} new_item
  * @returns {Span<$Origin, $Item>} */
 export function span_add(span, new_item, $) {
-  if (span.start + span.length < $.buf$Origin$Item.items.length) {
-    span_move_to_end(span, $);
-  }
+  span_move_to_end(span, $);
   add(new_item, $);
   return {
     start: $.buf$Origin$Item.items.length - 1 - span.length,
@@ -698,7 +696,7 @@ export function span_add(span, new_item, $) {
   };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span
  * @param {$Item} new_item
  * @returns {Span<$Origin, $Item>} */
@@ -771,15 +769,14 @@ export function swap(slot_a, slot_b, $) {
   $.buf$Origin$Item.items[slot_b] = a_item;
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span
  * @returns {Span<$Origin, $Item>} */
 export function span_move_to_end(span, $) {
   if (span.start + span.length === $.buf$Origin$Item.items.length) return span;
 
-  // move span to end
   for (let i = span.start; i < span.start + span.length; i++) {
-    $.buf$Origin$Item.items.push($.buf$Origin$Item.items[i]);
+    $.buf$Origin$Item.items.push(item(i, $));
     $.buf$Origin$Item.counts.resize($.buf$Origin$Item.items.length);
     buf$counts_view($.buf$Origin$Item)[$.buf$Origin$Item.items.length - 1] = 1;
   }
@@ -790,7 +787,7 @@ export function span_move_to_end(span, $) {
   return { start: $.buf$Origin$Item.items.length - span.length, length: span.length };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_move_to_end(span, $) {
@@ -798,11 +795,12 @@ export function opt_span_move_to_end(span, $) {
   return { yes: span_move_to_end(span.yes, $) };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span
  * @returns {Span<$Origin, $Item>} */
 export function span_move_to_unset(span, $) {
   if (span.start + span.length < $.buf$Origin$Item.items.length) return span;
+
   let unset_length = 0;
   for (let i = 0; i < $.buf$Origin$Item.items.length; i++) {
     if (buf$counts_view($.buf$Origin$Item)[i] === 0) {
@@ -810,8 +808,7 @@ export function span_move_to_unset(span, $) {
       if (unset_length === span.length) {
         const unset_start = i - span.length + 1;
         for (let unset_i = 0; unset_i < span.length; unset_i++) {
-          $.buf$Origin$Item.items[unset_start + unset_i] =
-            $.buf$Origin$Item.items[span.start + unset_i];
+          $.buf$Origin$Item.items[unset_start + unset_i] = item(span.start + unset_i, $);
         }
         $.buf$Origin$Item.items.length -= span.length;
         $.buf$Origin$Item.counts.resize($.buf$Origin$Item.items.length); // optional
@@ -829,7 +826,7 @@ export function span_move_to_unset(span, $) {
   return span;
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_move_to_unset(span, $) {
@@ -891,7 +888,7 @@ export function opt_span_sort(span, item_order, $) {
   return span;
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param{Span<$Origin, $Item>} start
  * @param{Span<$Origin, $Item>} end
  * @returns {Span<$Origin, $Item>} */
@@ -908,7 +905,7 @@ export function span_add_own_span(start, end, $) {
   };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param{Span<$Origin, $Item>} start
  * @param{Opt<Span<$Origin, $Item>>} end
  * @returns {Span<$Origin, $Item>} */
@@ -919,7 +916,7 @@ export function span_add_own_opt_span(start, end, $) {
   return span_add_own_span(start, end.yes, $);
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param{Opt<Span<$Origin, $Item>>} start
  * @param{Span<$Origin, $Item>} end
  * @returns {Span<$Origin, $Item>} */
@@ -930,7 +927,7 @@ export function opt_span_add_own_span(start, end, $) {
   return span_add_own_span(start.yes, end, $);
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item> }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
  * @param{Opt<Span<$Origin, $Item>>} start
  * @param{Opt<Span<$Origin, $Item>>} end
  * @returns {Opt<Span<$Origin, $Item>>} */
@@ -968,9 +965,10 @@ export function add_str_chars(new_str, $) {
  * @param {Str} new_str
  * @returns {Span<$Origin, Char>} */
 export function span_add_str_chars(span, new_str, $) {
-  if (span.start + span.length < $.buf$Origin$tychar$end.items.length) {
-    span_move_to_end(span, { buf$Origin$Item: $.buf$Origin$tychar$end });
-  }
+  span_move_to_end(span, {
+    buf$Origin$Item: $.buf$Origin$tychar$end,
+    clone$Item: (_) => {},
+  });
   const new_start = $.buf$Origin$tychar$end.items.length;
   for (const new_char of new_str) {
     $.buf$Origin$tychar$end.items.push(new_char);

@@ -222,7 +222,6 @@ cargo install --offline --debug --path . slug
 - enabling nested origins or even type-identity origins (like Box<> or gc or shared_ptr)
 
 ## TODO
-- js output: when moving spans, clone all items that have counts > 1
 - correct formatting of project fn documentation (should not be indented)
 - correct formatting of project fn result type (should linebreak if header is multiline)
 - correctly report missing reachable bufs in local function calls
