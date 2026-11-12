@@ -695,6 +695,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             leaked = std.math.maxInt(u16),
             _,
 
+            pub const zero: @This() = @fromBackingInt(0);
             pub const one: @This() = @fromBackingInt(1);
 
             pub fn increment(@"%count": @This()) @This() {
@@ -851,8 +852,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             const @"%item" = @"%buf".item(@"%slot");
             const @"%slot_count" = @"%buf".countsSlice()[@"%slot".index];
             if (@"%slot_count" == SlotCount.one) {
-                // can be optimized
-                @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
+                @"%buf".unsetIndex(@"%slot".index);
             } else {
                 @"clone Item"(ctx, @"%item");
                 @"%buf".countsSlice()[@"%slot".index] = @"%slot_count".decrement();
@@ -877,47 +877,43 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         ) void {
             std.mem.swap(@"%Item", @"%buf".item_ptr(@"%slot_a"), @"%buf".item_ptr(@"%slot_b"));
         }
-        // The given span is invalid while the returned slice is live
+        /// If you've called spanSlice with the intention of moving the slice items
+        /// out of the Buf, call takeOutSpan once all the items have been processed
         pub fn spanSlice(@"%buf": @This(), @"%span": Span(@"%Origin", @"%Item")) []@"%Item" {
             return @"%buf".items.items[@"%span".start..][0..@"%span".length.positive];
         }
-        // The given span is invalid while the returned slice is live
+        /// If you've called spanSlice with the intention of moving the slice items
+        /// out of the Buf, call takeOutSpan once all the items have been processed
         pub fn optSpanSlice(@"%buf": @This(), @"%opt_span": Opt(Span(@"%Origin", @"%Item"))) []@"%Item" {
             return switch (@"%opt_span") {
                 .no => &.{},
                 .yes => |@"%span"| @"%buf".spanSlice(@"%span"),
             };
         }
-        /// The returned slice is only valid while buf.items.items is live
-        pub fn takeSpan(
+        /// If you've called spanSlice with the intention of moving the slice items
+        /// out of the Buf, call takeOutSpan once all the items have been processed
+        /// and the slice can be invalidated
+        pub fn takeOutSpan(
             @"%buf": *@This(),
+            ctx: anytype,
             @"%span": Span(@"%Origin", @"%Item"),
-        ) []@"%Item" {
-            const @"%slice" = @"%buf".spanSlice(@"%span");
-            @"%buf".unsetSpanRid(.{ .start = @"%span".start, .length = @"%span".length });
-            return @"%slice";
-        }
-        /// The returned slice is only valid while buf.items.items is live
-        pub fn takeOptSpan(
-            @"%buf": *@This(),
-            @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
-        ) []@"%Item" {
-            switch (@"%opt_span") {
-                .no => return &.{},
-                .yes => |@"%span"| {
-                    return @"%buf".takeSpan(@"%span");
-                },
+            @"clone Item": fn (anytype, anytype) void,
+        ) void {
+            // can be optimized by not trying to trim end at each take
+            for (@"%span".start..(@"%span".start + @"%span".length.positive)) |@"%index"| {
+                _ = @"%buf".take(ctx, .{ .index = @intCast(@"%index") }, @"clone Item");
             }
         }
-        fn unsetSpanRid(@"%buf": *@This(), @"%span": SpanCore) void {
-            const @"%counts_in_span" = @"%buf".countsSlice()[@"%span".start..(@"%span".start + @"%span".length.positive)];
-            for (@"%counts_in_span") |*@"%count"| {
-                @"%count".* = @"%count".decrement();
-            }
-            if (@"%span".start + @"%span".length.positive < @"%buf".lenIncludingUnset()) {
-                @"%buf".first_unset_index = @fromBackingInt(@min(@backingInt(@"%buf".first_unset_index), @"%span".start));
+        fn unsetIndex(@"%buf": *@This(), @"%index": u32) void {
+            var @"%count" = &@"%buf".countsSlice()[@"%index"];
+            @"%count".* = @"%count".decrement();
+            if (@"%index" + 1 < @"%buf".lenIncludingUnset()) {
+                @"%buf".first_unset_index = @fromBackingInt(@min(@backingInt(@"%buf".first_unset_index), @"%index"));
             } else {
                 // span is at the end
+                var @"%counts" = @"%buf".countsArrayList();
+                _ = @"%counts".pop();
+                _ = @"%buf".items.pop();
                 @"%buf".trimUnsetEnd();
             }
         }
@@ -933,7 +929,6 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
                 }
                 var @"%counts" = @"%buf".countsArrayList();
                 @"%counts".shrinkRetainingCapacity(@"%counts_without_trailing_0s".len);
-                @"%buf".counts = @"%counts".items.ptr;
                 @"%buf".items.shrinkRetainingCapacity(@"%counts_without_trailing_0s".len);
             }
         }
@@ -944,22 +939,28 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         }
         pub fn spanMoveToEnd(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%span": Span(@"%Origin", @"%Item"),
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Span(@"%Origin", @"%Item") {
             if (@"%span".start + @"%span".length.positive == @"%buf".lenIncludingUnset()) {
                 return @"%span";
             }
-            try @"%buf".preAllocateAtLeast(@"%allocator", @"%span".length.positive);
-            @"%buf".items.appendSliceAssumeCapacity(@"%buf".spanSlice(@"%span"));
+            try @"%buf".preAllocateAtLeast(ctx.allocator, @"%span".length.positive);
             if (std.math.cast(u32, @"%buf".items.items.len) == null) return error.OutOfMemory;
-            @"%buf".unsetSpanRid(@"%span");
+            @"%buf".items.appendSliceAssumeCapacity(@"%buf".spanSlice(@"%span"));
+            @"%buf".takeOutSpan(ctx, @"%span", @"clone Item");
             return .{
                 .start = @"%buf".lenIncludingUnset() - @"%span".length.positive,
                 .length = @"%span".length,
             };
         }
-        pub fn spanMoveToUnset(@"%buf": *@This(), @"%span": Span(@"%Origin", @"%Item")) Span(@"%Origin", @"%Item") {
+        pub fn spanMoveToUnset(
+            @"%buf": *@This(),
+            ctx: anytype,
+            @"%span": Span(@"%Origin", @"%Item"),
+            @"clone Item": fn (anytype, anytype) void,
+        ) Span(@"%Origin", @"%Item") {
             if (@"%span".start + @"%span".length.positive < @"%buf".lenIncludingUnset()) {
                 return @"%span";
             }
@@ -970,27 +971,29 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
                     @"%span".length.positive,
                     @"%buf".spanSlice(@"%span"),
                 );
-                @"%buf".unsetSpanRid(.{ .start = @"%span".start, .length = @"%span".length });
+                @"%buf".takeOutSpan(ctx, @"%span", @"clone Item");
                 return Span(@"%Origin", @"%Item"){
                     .start = @"%earlier_start_to_set_from",
                     .length = @"%span".length,
                 };
             } else {
+                // not enough consecutive unset space available
                 return @"%span";
             }
         }
         pub fn spanAddOwnSpan(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%start": Span(@"%Origin", @"%Item"),
             @"%end": Span(@"%Origin", @"%Item"),
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Span(@"%Origin", @"%Item") {
             const @"%combined_length" = @"%start".length.addAssumeNoOverflow(@"%end".length.positive);
             if (@"%start".start + @"%start".length.positive == @"%end".start) {
                 return Span(@"%Origin", @"%Item"){ .start = @"%start".start, .length = @"%combined_length" };
             } else {
-                const @"%moved_start" = try @"%buf".spanMoveToEnd(@"%allocator", @"%start");
-                _ = try @"%buf".spanMoveToEnd(@"%allocator", @"%end");
+                const @"%moved_start" = try @"%buf".spanMoveToEnd(ctx, @"%start", @"clone Item");
+                _ = try @"%buf".spanMoveToEnd(ctx, @"%end", @"clone Item");
                 return Span(@"%Origin", @"%Item"){
                     .start = @"%moved_start".start,
                     .length = @"%combined_length",
@@ -1066,23 +1069,25 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         }
         pub fn optSpanAdd(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
             @"%new_item": @"%Item",
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Span(@"%Origin", @"%Item") {
             return switch (@"%opt_span") {
-                .no => (try @"%buf".add(@"%allocator", @"%new_item")).toSpan(),
-                .yes => |@"%span"| @"%buf".spanAdd(@"%allocator", @"%span", @"%new_item"),
+                .no => (try @"%buf".add(ctx.allocator, @"%new_item")).toSpan(),
+                .yes => |@"%span"| @"%buf".spanAdd(ctx, @"%span", @"%new_item", @"clone Item"),
             };
         }
         pub fn spanAdd(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%span": Span(@"%Origin", @"%Item"),
             @"%new_item": @"%Item",
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Span(@"%Origin", @"%Item") {
-            const @"%moved_span" = try @"%buf".spanMoveToEnd(@"%allocator", @"%span");
-            _ = try @"%buf".add(@"%allocator", @"%new_item");
+            const @"%moved_span" = try @"%buf".spanMoveToEnd(ctx, @"%span", @"clone Item");
+            _ = try @"%buf".add(ctx.allocator, @"%new_item");
             return Span(@"%Origin", @"%Item"){
                 .start = @"%moved_span".start,
                 .length = @"%moved_span".length.addAssumeNoOverflow(1),
@@ -1090,23 +1095,27 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         }
         pub fn optSpanAddSlice(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
             @"%new_items": []const @"%Item",
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Opt(Span(@"%Origin", @"%Item")) {
             return switch (@"%opt_span") {
-                .no => @"%buf".addSlice(@"%allocator", @"%new_items"),
-                .yes => |@"%span"| .{ .yes = try @"%buf".spanAddSlice(@"%allocator", @"%span", @"%new_items") },
+                .no => @"%buf".addSlice(ctx.allocator, @"%new_items"),
+                .yes => |@"%span"| .{
+                    .yes = try @"%buf".spanAddSlice(ctx, @"%span", @"%new_items", @"clone Item"),
+                },
             };
         }
         pub fn spanAddSlice(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%span": Span(@"%Origin", @"%Item"),
             @"%new_items": []const @"%Item",
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Span(@"%Origin", @"%Item") {
-            const @"%moved_span" = try @"%buf".spanMoveToEnd(@"%allocator", @"%span");
-            _ = try @"%buf".addSlice(@"%allocator", @"%new_items");
+            const @"%moved_span" = try @"%buf".spanMoveToEnd(ctx, @"%span", @"clone Item");
+            _ = try @"%buf".addSlice(ctx.allocator, @"%new_items");
             return Span(@"%Origin", @"%Item"){
                 .start = @"%moved_span".start,
                 .length = @"%moved_span".length.addAssumeNoOverflow(
@@ -1116,30 +1125,36 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
         }
         pub fn optSpanAddIterator(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%opt_span": Opt(Span(@"%Origin", @"%Item")),
             @"%new_items": anytype,
             @"%next_item": fn (*@TypeOf(@"%new_items")) ?@"%Item",
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Opt(Span(@"%Origin", @"%Item")) {
             return switch (@"%opt_span") {
-                .no => @"%buf".addIterator(@"%allocator", @"%new_items", @"%next_item"),
-                .yes => |@"%span"| .{
-                    .yes = try @"%buf".spanAddIterator(@"%allocator", @"%span", @"%new_items", @"%next_item"),
-                },
+                .no => @"%buf".addIterator(ctx.allocator, @"%new_items", @"%next_item"),
+                .yes => |@"%span"| .{ .yes = try @"%buf".spanAddIterator(
+                    ctx,
+                    @"%span",
+                    @"%new_items",
+                    @"%next_item",
+                    @"clone Item",
+                ) },
             };
         }
         pub fn spanAddIterator(
             @"%buf": *@This(),
-            @"%allocator": std.mem.Allocator,
+            ctx: anytype,
             @"%span": Span(@"%Origin", @"%Item"),
             @"%new_items": anytype,
             @"%next_item": fn (*@TypeOf(@"%new_items")) ?@"%Item",
+            @"clone Item": fn (anytype, anytype) void,
         ) Error!Span(@"%Origin", @"%Item") {
-            const @"%moved_span" = try @"%buf".spanMoveToEnd(@"%allocator", @"%span");
+            const @"%moved_span" = try @"%buf".spanMoveToEnd(ctx, @"%span", @"clone Item");
             const @"%length_before_add" = @"%buf".lenIncludingUnset();
             var @"%new_items_iterator" = @"%new_items";
             while (@"%next_item"(&@"%new_items_iterator")) |@"%new_item"| {
-                _ = try @"%buf".add(@"%allocator", @"%new_item");
+                _ = try @"%buf".add(ctx.allocator, @"%new_item");
             }
             const @"%iterated_length" = @"%buf".lenIncludingUnset() - @"%length_before_add";
             return Span(@"%Origin", @"%Item"){
@@ -1232,7 +1247,7 @@ pub fn BufCore(@"%Origin": type, @"%Item": type) type {
             if (@"%slot_count" == SlotCount.one) {
                 @"drop Item"(ctx, @"%buf".item(@"%slot"));
                 // can be optimized
-                @"%buf".unsetSpanRid(.{ .start = @"%slot".index, .length = P32.one });
+                @"%buf".unsetIndex(@"%slot".index);
             } else {
                 @"%buf".countsSlice()[@"%slot".index] = @"%slot_count".decrement();
             }
@@ -1883,7 +1898,7 @@ pub fn span_add(
     @"%new": @"%Item".Ty,
 ) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
     var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
-    return @"%buf".spanAdd(ctx.allocator, @"%span", @"%new");
+    return @"%buf".spanAdd(ctx, @"%span", @"%new", @"%Item".clone);
 }
 pub fn span_add_str_chars(
     comptime @"%Origin": SlugType,
@@ -1893,10 +1908,11 @@ pub fn span_add_str_chars(
 ) Error!Span(@"%Origin".Ty, Char) {
     var @"%buf" = ctxBuf(ctx, @"%Origin", SlugType.char);
     return @"%buf".spanAddIterator(
-        ctx.allocator,
+        ctx,
         @"%span",
         @"%new".utf8.iterator(),
         std.unicode.Utf8Iterator.nextCodepoint,
+        SlugType.char.clone,
     );
 }
 pub fn opt_span_add_str_chars(
@@ -2034,9 +2050,11 @@ pub fn span_add_span(
     @"%source": Span(@"%Source_origin".Ty),
 ) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
     var @"%source_buf" = ctxBuf(ctx, @"%Source_origin", @"%Item");
-    const @"%source_slice" = try @"%source_buf".takeSpan(ctx, @"%source");
+    const @"%source_slice" = @"%source_buf".spanSlice(@"%source");
     var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
-    return @"%buf".spanAddSlice(ctx, @"%span", @"%source_slice");
+    const @"%combined_span" = @"%buf".spanAddSlice(ctx, @"%span", @"%source_slice", @"%Item".clone);
+    @"%source_buf".takeOutSpan(ctx, @"%source", @"%Item".clone);
+    return @"%combined_span";
 }
 pub fn span_add_opt_span(
     comptime @"%Item": SlugType,
@@ -2051,7 +2069,14 @@ pub fn span_add_opt_span(
             return .{ .no = {} };
         },
         .yes => |@"%source"| {
-            return span_add_span(@"%Item", @"%Origin", @"%Source_origin", ctx, @"%span", @"%source");
+            return span_add_span(
+                @"%Item",
+                @"%Origin",
+                @"%Source_origin",
+                ctx,
+                @"%span",
+                @"%source",
+            );
         },
     }
 }
@@ -2066,17 +2091,21 @@ pub fn opt_span_add_span(
     switch (@"%opt_span") {
         .no => {
             var @"%source_buf" = ctxBuf(ctx, @"%Source_origin", @"%Item");
-            const @"%source_slice" = try @"%source_buf".takeSpan(ctx, @"%source");
+            const @"%source_slice" = @"%source_buf".spanSlice(@"%source");
             var @"%buf" = ctxBuf(ctx, @"%Origin", @"%Item");
             const @"%combined_span" = try @"%buf".addSlice(ctx, @"%source_slice");
-            return .{
-                .source = @"%source",
-                .span = @"%combined_span".yes,
-                .buf = ctxBuf(ctx, @"%Origin", @"%Item"),
-            };
+            @"%source_buf".takeOutSpan(ctx, @"%source", @"%Item".clone);
+            return @"%combined_span".yes;
         },
         .yes => |@"%span"| {
-            return span_add_span(@"%Item", @"%Origin", @"%Source_origin", ctx, @"%span", @"%source");
+            return span_add_span(
+                @"%Item",
+                @"%Origin",
+                @"%Source_origin",
+                ctx,
+                @"%span",
+                @"%source",
+            );
         },
     }
 }
@@ -2093,7 +2122,14 @@ pub fn opt_span_add_opt_span(
             return .{ .no = {} };
         },
         .yes => |@"%source"| {
-            return opt_span_add_span(@"%Item", @"%Origin", @"%Source_origin", ctx, @"%opt_span", @"%source");
+            return opt_span_add_span(
+                @"%Item",
+                @"%Origin",
+                @"%Source_origin",
+                ctx,
+                @"%opt_span",
+                @"%source",
+            );
         },
     }
 }
@@ -2104,7 +2140,7 @@ pub fn span_add_own_span(
     @"%start": Span(@"%Origin".Ty, @"%Item".Ty),
     @"%end": Span(@"%Origin".Ty, @"%Item".Ty),
 ) Error!Span(@"%Origin".Ty, @"%Item".Ty) {
-    return ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx.allocator, @"%start", @"%end");
+    return ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end", @"%Item".clone);
 }
 pub fn opt_span_add_own_span(
     comptime @"%Item": SlugType,
@@ -2116,7 +2152,7 @@ pub fn opt_span_add_own_span(
     switch (@"%opt_start") {
         .no => return @"%end",
         .yes => |@"%start"| {
-            return ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx.allocator, @"%start", @"%end");
+            return ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end", @"%Item".clone);
         },
     }
 }
@@ -2130,7 +2166,7 @@ pub fn span_add_own_opt_span(
     switch (@"%opt_end") {
         .no => return @"%start",
         .yes => |@"%end"| {
-            return ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx.allocator, @"%start", @"%end");
+            return ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end", @"%Item".clone);
         },
     }
 }
@@ -2147,7 +2183,7 @@ pub fn opt_span_add_own_opt_span(
             switch (@"%opt_end") {
                 .no => return .{ .yes = @"%start" },
                 .yes => |@"%end"| {
-                    const @"%combined_span" = try ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx.allocator, @"%start", @"%end");
+                    const @"%combined_span" = try ctxBuf(ctx, @"%Origin", @"%Item").spanAddOwnSpan(ctx, @"%start", @"%end", @"%Item".clone);
                     return .{ .yes = @"%combined_span" };
                 },
             }
@@ -2182,7 +2218,7 @@ pub fn span_move_to_end(
     ctx: anytype,
     @"%span": Span(@"%Origin".Ty, @"%Item".Ty),
 ) Span(@"%Origin".Ty, @"%Item".Ty) {
-    const @"%moved_span" = ctxBuf(ctx, @"%Origin", @"%Item").spanMoveToEnd(ctx.allocator, @"%span");
+    const @"%moved_span" = ctxBuf(ctx, @"%Origin", @"%Item").spanMoveToEnd(ctx, @"%span", @"%Item".clone);
     return @"%moved_span";
 }
 pub fn opt_span_move_to_end(
@@ -2194,7 +2230,7 @@ pub fn opt_span_move_to_end(
     switch (@"%opt_span") {
         .no => return .{ .no = {} },
         .yes => |@"%span"| {
-            const @"%moved_span" = ctxBuf(ctx, @"%Origin", @"%Item").spanMoveToEnd(ctx.allocator, @"%span");
+            const @"%moved_span" = ctxBuf(ctx, @"%Origin", @"%Item").spanMoveToEnd(ctx, @"%span", @"%Item".clone);
             return .{ .yes = @"%moved_span" };
         },
     }
