@@ -34,9 +34,7 @@ pub enum SyntaxProjectItem {
         fn_keyword_start: lsp_types::Position,
         name: Option<WithStartPosition<Name>>,
         type_parameters: Vec<WithStartPosition<Name>>,
-        open_paren_start: Option<lsp_types::Position>,
-        parameters: Vec<SyntaxPattern>,
-        closed_paren_start: Option<lsp_types::Position>,
+        parameters: Option<SyntaxFnParameters<SyntaxPattern>>,
         result_type: Option<SyntaxType>,
         documentation: Option<SyntaxComments>,
         result: Option<SyntaxExpression>,
@@ -63,9 +61,7 @@ pub enum SyntaxType {
     Variable(WithStartPosition<Name>),
     Fn {
         fn_keyword_start: lsp_types::Position,
-        open_paren_start: Option<lsp_types::Position>,
-        parameters: Vec<SyntaxType>,
-        closed_paren_start: Option<lsp_types::Position>,
+        parameters: Option<SyntaxFnParameters<SyntaxType>>,
         result: Option<Box<SyntaxType>>,
     },
     Construct {
@@ -173,9 +169,7 @@ pub enum SyntaxExpression {
     },
     Fn {
         fn_keyword_start: lsp_types::Position,
-        open_paren_start: Option<lsp_types::Position>,
-        parameters: Vec<SyntaxPattern>,
-        closed_paren_start: Option<lsp_types::Position>,
+        parameters: Option<SyntaxFnParameters<SyntaxPattern>>,
         result: Option<Slot<Expressions>>,
     },
     Tuple {
@@ -206,6 +200,12 @@ pub enum SyntaxExpression {
         cases: Vec<SyntaxExpressionIfCase>,
         closed_curly_start: Option<lsp_types::Position>,
     },
+}
+#[derive(Debug)]
+pub struct SyntaxFnParameters<Parameter> {
+    pub open_paren_start: lsp_types::Position,
+    pub parameters: Vec<Parameter>,
+    pub closed_paren_start: Option<lsp_types::Position>,
 }
 #[derive(Debug)]
 pub struct SyntaxExpressionArgumentDot<Argument> {
@@ -294,9 +294,7 @@ pub fn project_item_end(
             fn_keyword_start,
             name,
             type_parameters,
-            open_paren_start,
             parameters,
-            closed_paren_start,
             result_type,
             documentation,
             result,
@@ -309,9 +307,11 @@ pub fn project_item_end(
                     .as_ref()
                     .map(|result_type| type_end(result_type))
             })
-            .or(*closed_paren_start)
-            .or_else(|| parameters.last().map(|parameter| pattern_end(parameter)))
-            .or(*open_paren_start)
+            .or_else(|| {
+                parameters
+                    .as_ref()
+                    .map(|parameters| fn_parameters_end(parameters, pattern_end))
+            })
             .or_else(|| {
                 type_parameters
                     .last()
@@ -325,6 +325,28 @@ pub fn project_item_end(
         SyntaxProjectItem::Comments(syntax_comments) => comments_end(syntax_comments),
         SyntaxProjectItem::Unrecognized { range, source: _ } => range.end,
     }
+}
+pub fn fn_parameters_range<Parameter>(
+    fn_parameters: &SyntaxFnParameters<Parameter>,
+    parameter_end: impl Fn(&Parameter) -> lsp_types::Position,
+) -> lsp_types::Range {
+    lsp_types::Range {
+        start: fn_parameters.open_paren_start,
+        end: fn_parameters_end(fn_parameters, parameter_end),
+    }
+}
+pub fn fn_parameters_end<Parameter>(
+    SyntaxFnParameters {
+        open_paren_start,
+        parameters,
+        closed_paren_start,
+    }: &SyntaxFnParameters<Parameter>,
+    parameter_end: impl Fn(&Parameter) -> lsp_types::Position,
+) -> lsp_types::Position {
+    closed_paren_start
+        .map(|closed_bracket_start| symbol_end(closed_bracket_start, ")"))
+        .or_else(|| parameters.last().map(|parameter| parameter_end(parameter)))
+        .unwrap_or_else(|| symbol_end(*open_paren_start, "("))
 }
 pub fn ty_parameters_end(ty_parameters: &SyntaxTyParameters) -> lsp_types::Position {
     ty_parameters
@@ -365,17 +387,15 @@ pub fn type_end(type_: &SyntaxType) -> lsp_types::Position {
         SyntaxType::Variable(name) => name_end(with_start_position_as_ref(name)),
         SyntaxType::Fn {
             fn_keyword_start,
-            open_paren_start,
             parameters,
-            closed_paren_start,
             result,
         } => result
             .as_ref()
             .map(|result| type_end(result))
-            .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
-            .or_else(|| parameters.last().map(|parameter| type_end(parameter)))
             .or_else(|| {
-                closed_paren_start.map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
+                parameters
+                    .as_ref()
+                    .map(|parameters| fn_parameters_end(parameters, type_end))
             })
             .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
         SyntaxType::Construct { name, arguments } => match arguments {
@@ -637,18 +657,16 @@ pub fn expression_end(
             .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
         SyntaxExpression::Fn {
             fn_keyword_start,
-            open_paren_start,
             parameters,
-            closed_paren_start,
             result,
         } => result
             .as_ref()
             .map(|result| expression_end(expressions.item(result), expressions))
             .or_else(|| {
-                closed_paren_start.map(|closed_bracket_start| symbol_end(closed_bracket_start, ")"))
+                parameters
+                    .as_ref()
+                    .map(|parameters| fn_parameters_end(parameters, pattern_end))
             })
-            .or_else(|| parameters.last().map(|parameter| pattern_end(parameter)))
-            .or_else(|| open_paren_start.map(|open_paren_start| symbol_end(open_paren_start, "(")))
             .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
         SyntaxExpression::Tuple {
             star_start,
@@ -1072,16 +1090,7 @@ fn parse_project_fn(
     }
     let _ = parse_symbol(state, ">");
     parse_slug_whitespace(state);
-    let open_paren_start = parse_symbol_as_start(state, "(");
-    parse_slug_whitespace(state);
-    let mut parameters = Vec::new();
-    while let Some(parameter) = parse_parameter_pattern(state) {
-        parameters.push(parameter);
-        parse_slug_whitespace(state);
-    }
-    parse_slug_whitespace(state);
-    parse_slug_whitespace(state);
-    let closed_paren_start = parse_symbol_as_start(state, ")");
+    let parameters = parse_fn_parameters(state, parse_parameter_pattern);
     parse_slug_whitespace(state);
     _ = parse_symbol(state, ":");
     _ = parse_symbol(state, "-");
@@ -1096,12 +1105,31 @@ fn parse_project_fn(
         fn_keyword_start,
         name,
         type_parameters,
-        open_paren_start,
         parameters,
-        closed_paren_start,
         result_type,
         documentation,
         result,
+    })
+}
+fn parse_fn_parameters<Parameter>(
+    state: &mut ParseState,
+    parse_parameter: impl Fn(&mut ParseState) -> Option<Parameter>,
+) -> Option<SyntaxFnParameters<Parameter>> {
+    let Some(open_paren_start) = parse_symbol_as_start(state, "(") else {
+        return None;
+    };
+    parse_slug_whitespace(state);
+    let mut parameters = Vec::new();
+    while let Some(parameter) = parse_parameter(state) {
+        parameters.push(parameter);
+        parse_slug_whitespace(state);
+    }
+    parse_slug_whitespace(state);
+    let closed_paren_start = parse_symbol_as_start(state, ")");
+    Some(SyntaxFnParameters {
+        open_paren_start,
+        parameters,
+        closed_paren_start,
     })
 }
 pub struct ProjectFnSignature {
@@ -1487,21 +1515,12 @@ fn parse_type_fn(state: &mut ParseState) -> Option<SyntaxType> {
         return None;
     };
     parse_slug_whitespace(state);
-    let open_paren_start = parse_symbol_as_start(state, "(");
-    parse_slug_whitespace(state);
-    let mut parameters = Vec::new();
-    while let Some(parameter) = parse_type(state) {
-        parameters.push(parameter);
-        parse_slug_whitespace(state);
-    }
-    let closed_paren_start = parse_symbol_as_start(state, ")");
+    let parameters = parse_fn_parameters(state, parse_type);
     parse_slug_whitespace(state);
     let result = parse_type(state);
     Some(SyntaxType::Fn {
         fn_keyword_start,
-        open_paren_start,
         parameters,
-        closed_paren_start,
         result: result.map(Box::new),
     })
 }
@@ -1875,21 +1894,12 @@ fn parse_expression_fn(
         return None;
     };
     parse_slug_whitespace(state);
-    let open_paren_start = parse_symbol_as_start(state, "(");
-    parse_slug_whitespace(state);
-    let mut parameters = Vec::new();
-    while let Some(parameter) = parse_parameter_pattern(state) {
-        parameters.push(parameter);
-        parse_slug_whitespace(state);
-    }
-    let closed_paren_start = parse_symbol_as_start(state, ")");
+    let parameters = parse_fn_parameters(state, parse_parameter_pattern);
     parse_slug_whitespace(state);
     let result = parse_expression(state, expressions);
     Some(SyntaxExpression::Fn {
         fn_keyword_start,
-        open_paren_start,
         parameters,
-        closed_paren_start,
         result: result.map(|result| expressions.insert(result)),
     })
 }
@@ -2132,9 +2142,7 @@ If you were trying to start a type variable, no type was expected here. Maybe yo
                 fn_keyword_start,
                 name: maybe_name,
                 type_parameters,
-                open_paren_start: _,
                 parameters,
-                closed_paren_start: _,
                 result_type,
                 documentation,
                 result: maybe_result,
@@ -2187,15 +2195,15 @@ If you were trying to start a type variable, no type was expected here. Maybe yo
                                                 .map(|result_type| type_end(result_type))
                                         })
                                         .or_else(|| {
-                                            parameters.last().map(|parameter| {
-                                                pattern_end(parameter)
+                                            parameters.as_ref().map(|parameters| {
+                                                fn_parameters_end(parameters, pattern_end)
                                             })
                                         })
                                         .unwrap_or_else(|| name_end(with_start_position_as_ref(name))),
                                 },
                                 name: name,
                                 type_parameters: type_parameters,
-                                parameters,
+                                parameters: parameters.as_ref().map(|parameters| parameters.parameters.as_slice()).unwrap_or(&[]),
                                 result_type: result_type,
                                 documentation: documentation,
                                 result: maybe_result,
@@ -2400,12 +2408,10 @@ fn syntax_type_connect_directly_referenced_type_names_in_graph_from(
         SyntaxType::Variable(_) => {}
         SyntaxType::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
-            for parameter in parameters {
+            for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                 syntax_type_connect_directly_referenced_type_names_in_graph_from(
                     type_graph_node_by_name,
                     parameter,
@@ -2571,14 +2577,12 @@ fn syntax_expression_connect_fns_in_graph_from<'a>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             if let Some(result) = result {
                 let mut parameter_introduced_variables = Vec::new();
-                for parameter in parameters {
+                for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                     syntax_parameter_pattern_variables_for_each(parameter, &mut |name, _type| {
                         parameter_introduced_variables.push(name.value);
                     });
@@ -2713,8 +2717,8 @@ fn syntax_expression_connect_fns_in_graph_from<'a>(
 pub struct SyntaxProjectFnInfo<'a> {
     pub range: lsp_types::Range,
     pub name: &'a WithStartPosition<Name>,
-    pub type_parameters: &'a Vec<WithStartPosition<Name>>,
-    pub parameters: &'a Vec<SyntaxPattern>,
+    pub type_parameters: &'a [WithStartPosition<Name>],
+    pub parameters: &'a [SyntaxPattern],
     pub result_type: &'a Option<SyntaxType>,
     pub documentation: &'a Option<SyntaxComments>,
     pub result: &'a Option<SyntaxExpression>,
@@ -3057,13 +3061,12 @@ pub fn syntax_type_to_type(type_: &SyntaxType) -> Type {
         SyntaxType::Variable(name) => Type::Variable(name.value.clone()),
         SyntaxType::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => Type::Fn {
             parameters: parameters
                 .iter()
+                .flat_map(|p| &p.parameters)
                 .map(|parameter| syntax_type_to_type(parameter))
                 .collect(),
             result: Box::new(
@@ -3164,13 +3167,12 @@ pub fn syntax_type_check(
         SyntaxType::Variable(name) => Some(Type::Variable(name.value.clone())),
         SyntaxType::Fn {
             fn_keyword_start,
-            open_paren_start,
             parameters: syntax_parameters,
-            closed_paren_start,
             result,
         } => {
             let Some(parameters) = syntax_parameters
                 .iter()
+                .flat_map(|p| &p.parameters)
                 .map(|parameter| {
                     syntax_type_check(
                         parameter,
@@ -3189,17 +3191,9 @@ pub fn syntax_type_check(
             let Some(result) = result else {
                 errors.push(ErrorNode {
                     message: Box::from("missing result type after this fn(..parameters..) here"),
-                    range: closed_paren_start
-                        .map(|closed_paren_start| symbol_range(closed_paren_start, ")"))
-                        .or_else(|| {
-                            syntax_parameters
-                                .last()
-                                .map(|parameter| type_range(parameter))
-                        })
-                        .or_else(|| {
-                            open_paren_start
-                                .map(|open_paren_start| symbol_range(open_paren_start, "("))
-                        })
+                    range: syntax_parameters
+                        .as_ref()
+                        .map(|parameters| fn_parameters_range(parameters, type_end))
                         .unwrap_or_else(|| symbol_range(*fn_keyword_start, "fn")),
                 });
                 return None;
@@ -5816,9 +5810,7 @@ fn syntax_expression_to_zig<'a>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             let Some(checked_local_fn) = checked_local_fns.get(fn_keyword_start) else {
@@ -5854,8 +5846,10 @@ fn syntax_expression_to_zig<'a>(
                 type_aliases,
             );
             output.push_str(", ");
-            for (parameter, parameter_type) in
-                parameters.iter().zip(&checked_local_fn.parameter_types)
+            for (parameter, parameter_type) in parameters
+                .iter()
+                .flat_map(|p| &p.parameters)
+                .zip(&checked_local_fn.parameter_types)
             {
                 function_parameter_name(output, pattern_start(parameter));
                 output.push_str(": ");
@@ -5871,7 +5865,7 @@ fn syntax_expression_to_zig<'a>(
             let mut parameter_introduced_variables = std::collections::HashMap::new();
             let mut parameter_introduced_variables_last_uses = std::collections::HashMap::new();
             let mut parameter_introduced_reachable_bufs = std::collections::HashMap::new();
-            for syntax_parameter in parameters {
+            for syntax_parameter in parameters.iter().flat_map(|p| &p.parameters) {
                 let mut parameter_name = String::new();
                 function_parameter_name(&mut parameter_name, pattern_start(syntax_parameter));
                 syntax_pattern_to_zig_destructuring(
@@ -8003,9 +7997,7 @@ fn syntax_expression_to_js<'a>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             js_scope_result_variable(output, scope_start);
@@ -8020,7 +8012,9 @@ fn syntax_expression_to_js<'a>(
             'in_function: {
                 let mut parameter_introduced_variables = std::collections::HashMap::new();
                 let mut parameter_introduced_variables_last_uses = std::collections::HashMap::new();
-                for (parameter_index, syntax_parameter) in parameters.iter().enumerate() {
+                for (parameter_index, syntax_parameter) in
+                    parameters.iter().flat_map(|p| &p.parameters).enumerate()
+                {
                     syntax_pattern_to_js_destructuring(
                         output,
                         syntax_parameter,
@@ -9390,7 +9384,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     }
                 }
                 type_replace_variables(&type_variable_replacements, &mut result_type);
-                // TODO check for missing type bufs
                 checked_calls.insert(
                     name.start,
                     CheckedCall {
@@ -9461,7 +9454,6 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     maybe_first_argument.map(|_| 1).unwrap_or(0) + rest_syntax_arguments.len(),
                     &expected_argument_types,
                 );
-                // TODO report missing bufs
                 Some(*result_type)
             } else {
                 errors.push(ErrorNode {
@@ -9575,9 +9567,7 @@ If there should only ever by one variant, using a record with a single field is 
         }
         SyntaxExpression::Fn {
             fn_keyword_start,
-            open_paren_start,
             parameters,
-            closed_paren_start,
             result,
         } => {
             let mut parameter_introduced_variables: std::collections::HashMap<
@@ -9586,6 +9576,7 @@ If there should only ever by one variant, using a record with a single field is 
             > = std::collections::HashMap::new();
             let Some(parameter_types) = parameters
                 .iter()
+                .flat_map(|p| &p.parameters)
                 .map(|parameter| {
                     syntax_parameter_pattern_check(
                         parameter,
@@ -9603,12 +9594,9 @@ If there should only ever by one variant, using a record with a single field is 
             };
             let Some(result) = result else {
                 errors.push(ErrorNode {
-                    range: closed_paren_start
-                        .map(|closed_bracket_start| symbol_range(closed_bracket_start, ")"))
-                        .or_else(|| {
-                            open_paren_start
-                                .map(|open_paren_start| symbol_range(open_paren_start, "("))
-                        })
+                    range: parameters
+                        .as_ref()
+                        .map(|parameters| fn_parameters_range(parameters, pattern_end))
                         .unwrap_or_else(|| symbol_range(*fn_keyword_start, "fn")),
                     message: Box::from("missing function result after fn(..patterns..) here"),
                 });
@@ -10344,9 +10332,7 @@ fn syntax_expression_check_against_reachable_bufs<'a>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             if let Some(result) = result
@@ -10358,7 +10344,7 @@ fn syntax_expression_check_against_reachable_bufs<'a>(
                     type_aliases,
                 );
                 let mut fn_local_variables = std::collections::HashMap::new();
-                for parameter in parameters {
+                for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                     parameter_pattern_add_introduced_bufs_and_check_do_not_overlap(
                         errors,
                         parameter,
@@ -10796,12 +10782,10 @@ pub fn syntax_type_variables_into<'a>(
         }
         SyntaxType::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
-            for parameter in parameters {
+            for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                 syntax_type_variables_into(type_variables, parameter);
             }
             if let Some(result) = result {
@@ -11720,16 +11704,17 @@ fn place_expression_type_diff_errors(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => match type_diff {
             TypeDiff::Fn {
                 parameters: type_diff_parameters,
                 result: type_diff_result,
             } => {
-                for (parameter, type_diff_parameter) in parameters.iter().zip(type_diff_parameters)
+                for (parameter, type_diff_parameter) in parameters
+                    .iter()
+                    .flat_map(|p| &p.parameters)
+                    .zip(type_diff_parameters)
                 {
                     if let Some(type_diff_parameter) = type_diff_parameter {
                         place_pattern_type_diff_errors(errors, parameter, type_diff_parameter);
@@ -13820,9 +13805,7 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                 fn_keyword_start,
                 name,
                 type_parameters,
-                open_paren_start,
                 parameters,
-                closed_paren_start,
                 result_type,
                 documentation,
                 result,
@@ -13838,13 +13821,9 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                         .as_ref()
                         .map(|result_type| type_end(result_type))
                         .or_else(|| {
-                            closed_paren_start
-                                .map(|closed_paren_start| symbol_end(closed_paren_start, ")"))
-                        })
-                        .or_else(|| parameters.last().map(|parameter| pattern_end(parameter)))
-                        .or_else(|| {
-                            open_paren_start
-                                .map(|open_paren_start| symbol_end(open_paren_start, "("))
+                            parameters
+                                .as_ref()
+                                .map(|parameters| fn_parameters_end(parameters, pattern_end))
                         })
                         .or_else(|| {
                             name.as_ref()
@@ -13853,7 +13832,9 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                         .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
                 });
                 formatted.push('(');
-                if let Some((parameter0, parameter1_up)) = parameters.split_first() {
+                if let Some(parameters) = parameters
+                    && let Some((parameter0, parameter1_up)) = parameters.parameters.split_first()
+                {
                     if header_line_span == LineSpan::Multiple {
                         linebreak_indented_into(&mut formatted, next_indent(0));
                     }
@@ -14139,18 +14120,16 @@ fn syntax_expression_format(
             }
         }
         SyntaxExpression::Fn {
-            fn_keyword_start,
-            open_paren_start,
+            fn_keyword_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             formatted.push_str("fn(");
-            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
-                let parameter_line_span = range_line_span(lsp_types::Range {
-                    start: open_paren_start.unwrap_or(*fn_keyword_start),
-                    end: pattern_end(parameter1_up.last().unwrap_or(parameter0)),
-                });
+            if let Some(parameters) = parameters
+                && let Some((parameter0, parameter1_up)) = parameters.parameters.split_first()
+            {
+                let parameter_line_span =
+                    range_line_span(fn_parameters_range(parameters, pattern_end));
                 if parameter_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
@@ -14475,21 +14454,16 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             formatted.push_str(&name.value);
         }
         SyntaxType::Fn {
-            fn_keyword_start,
-            open_paren_start: _,
+            fn_keyword_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             formatted.push_str("fn(");
-            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
-                let parameters_line_span = match parameters.last() {
-                    None => LineSpan::Single,
-                    Some(last_parameter) => range_line_span(gen_lsp_types::Range {
-                        start: *fn_keyword_start,
-                        end: type_end(last_parameter),
-                    }),
-                };
+            if let Some(parameters) = parameters
+                && let Some((parameter0, parameter1_up)) = parameters.parameters.split_first()
+            {
+                let parameters_line_span =
+                    range_line_span(fn_parameters_range(parameters, type_end));
                 if parameters_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
@@ -14769,9 +14743,7 @@ pub fn project_symbol_at_position<'a>(
             fn_keyword_start: _,
             name,
             type_parameters,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result_type,
             documentation: _,
             result,
@@ -14802,9 +14774,18 @@ pub fn project_symbol_at_position<'a>(
                     }
                 })
                 .or_else(|| {
-                    parameters.iter().find_map(|parameter| {
-                        pattern_symbol_at_position(parameter, None, position, item, result.as_ref())
-                    })
+                    parameters
+                        .iter()
+                        .flat_map(|p| &p.parameters)
+                        .find_map(|parameter| {
+                            pattern_symbol_at_position(
+                                parameter,
+                                None,
+                                position,
+                                item,
+                                result.as_ref(),
+                            )
+                        })
                 })
                 .or_else(|| {
                     result_type.as_ref().and_then(|result_type| {
@@ -14814,7 +14795,7 @@ pub fn project_symbol_at_position<'a>(
                 .or_else(|| {
                     result.as_ref().and_then(|result| {
                         let mut local_variables = std::collections::HashMap::new();
-                        for parameter in parameters {
+                        for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                             syntax_parameter_pattern_variables_for_each(
                                 parameter,
                                 &mut |parameter_variable_name, parameter_variable_type| {
@@ -14994,21 +14975,20 @@ fn expression_symbol_at_position<'a>(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             let result = result.as_ref().map(|result| expressions.item(result));
             local_variables.clear();
             parameters
                 .iter()
+                .flat_map(|p| &p.parameters)
                 .find_map(|parameter| {
                     pattern_symbol_at_position(parameter, None, position, scope, result)
                 })
                 .or_else(|| {
                     result.as_ref().and_then(|result| {
-                        for parameter in parameters {
+                        for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                             syntax_parameter_pattern_variables_for_each(
                                 parameter,
                                 &mut |name, type_| {
@@ -15488,12 +15468,11 @@ fn type_symbol_at_position<'a>(
         }
         SyntaxType::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => parameters
             .iter()
+            .flat_map(|p| &p.parameters)
             .find_map(|parameter| type_symbol_at_position(parameter, position, scope))
             .or_else(|| {
                 result
@@ -15597,9 +15576,7 @@ pub fn syntax_project_symbol_origin_range(
                 fn_keyword_start: _,
                 name: _,
                 type_parameters,
-                open_paren_start: _,
                 parameters: _,
-                closed_paren_start: _,
                 result_type: _,
                 documentation: _,
                 result: _,
@@ -15664,14 +15641,12 @@ pub fn syntax_project_symbol_uses(
                 fn_keyword_start: _,
                 name: _,
                 type_parameters: _,
-                open_paren_start: _,
                 parameters,
-                closed_paren_start: _,
                 result_type,
                 documentation: _,
                 result,
             } => {
-                for parameter in parameters {
+                for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                     syntax_pattern_symbol_uses_into(&mut uses, parameter, symbol);
                 }
                 if let Some(result_type) = result_type {
@@ -15714,14 +15689,12 @@ pub fn syntax_project_symbol_uses(
                         fn_keyword_start: _,
                         name: _,
                         type_parameters: _,
-                        open_paren_start: _,
                         parameters,
-                        closed_paren_start: _,
                         result_type,
                         documentation: _,
                         result,
                     } => {
-                        for parameter in parameters {
+                        for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                             syntax_pattern_symbol_uses_into(&mut uses, parameter, symbol);
                         }
                         if let Some(result_type) = result_type {
@@ -15761,14 +15734,12 @@ pub fn syntax_project_symbol_uses(
                         fn_keyword_start: _,
                         name: _,
                         type_parameters: _,
-                        open_paren_start: _,
                         parameters,
-                        closed_paren_start: _,
                         result_type,
                         documentation: _,
                         result,
                     } => {
-                        for parameter in parameters {
+                        for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                             syntax_pattern_symbol_uses_into(&mut uses, parameter, symbol);
                         }
                         if let Some(result_type) = result_type {
@@ -15777,7 +15748,7 @@ pub fn syntax_project_symbol_uses(
                         if let Some(result) = result {
                             let mut parameter_introduced_variables =
                                 std::collections::HashSet::new();
-                            for parameter in parameters {
+                            for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                                 syntax_parameter_pattern_variables_for_each(
                                     parameter,
                                     &mut |parameter_introduced_variable_name, _type_| {
@@ -15824,12 +15795,10 @@ fn syntax_type_symbol_uses_into(
         }
         SyntaxType::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
-            for parameter in parameters {
+            for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                 syntax_type_symbol_uses_into(uses, parameter, symbol);
             }
             if let Some(result) = result {
@@ -16080,9 +16049,7 @@ fn syntax_expression_symbol_uses_into(
         }
         SyntaxExpression::Fn {
             fn_keyword_start: _,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             match symbol {
@@ -16092,12 +16059,12 @@ fn syntax_expression_symbol_uses_into(
                 | SyntaxSymbol::VariantOrUnknown(_)
                 | SyntaxSymbol::ProjectFnOrVariableUnknown { .. } => {}
             }
-            for parameter in parameters {
+            for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                 syntax_pattern_symbol_uses_into(uses, parameter, symbol);
             }
             if let Some(result) = result {
                 let mut parameter_pattern_variables = std::collections::HashSet::new();
-                for parameter in parameters {
+                for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                     syntax_pattern_symbol_uses_into(uses, parameter, symbol);
                     syntax_parameter_pattern_variables_for_each(
                         parameter,
@@ -16365,9 +16332,7 @@ pub fn project_highlight(state: &mut HighlightState, project: &SyntaxProject) {
                 fn_keyword_start,
                 name,
                 type_parameters,
-                open_paren_start: _,
                 parameters,
-                closed_paren_start: _,
                 result_type,
                 documentation,
                 result,
@@ -16388,7 +16353,7 @@ pub fn project_highlight(state: &mut HighlightState, project: &SyntaxProject) {
                         lsp_types::SemanticTokenTypes::TypeParameter,
                     );
                 }
-                for parameter in parameters {
+                for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                     syntax_pattern_highlight(state, parameter);
                 }
                 if let Some(result_type) = result_type {
@@ -16530,13 +16495,11 @@ pub fn syntax_type_highlight(state: &mut HighlightState, type_: &SyntaxType) {
         }
         SyntaxType::Fn {
             fn_keyword_start,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             keyword_highlight(state, "fn", *fn_keyword_start);
-            for parameter in parameters {
+            for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                 syntax_type_highlight(state, parameter);
             }
             if let Some(result) = result {
@@ -16677,13 +16640,11 @@ fn syntax_expression_highlight(
         }
         SyntaxExpression::Fn {
             fn_keyword_start,
-            open_paren_start: _,
             parameters,
-            closed_paren_start: _,
             result,
         } => {
             keyword_highlight(state, "fn", *fn_keyword_start);
-            for parameter in parameters {
+            for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                 syntax_pattern_highlight(state, parameter);
             }
             if let Some(result) = result {

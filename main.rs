@@ -1304,9 +1304,7 @@ fn respond_to_completion(
                     fn_keyword_start: _,
                     name: _,
                     type_parameters,
-                    open_paren_start: _,
                     parameters,
-                    closed_paren_start: _,
                     result_type,
                     documentation: _,
                     result: _,
@@ -1317,7 +1315,7 @@ fn respond_to_completion(
                         }
                         available_existing_variables.insert(&type_parameter.value);
                     }
-                    for parameter in parameters {
+                    for parameter in parameters.iter().flat_map(|p| &p.parameters) {
                         slug::syntax_pattern_type_variables_into(
                             &mut available_existing_variables,
                             parameter,
@@ -1571,9 +1569,7 @@ fn respond_to_document_symbols(
                     fn_keyword_start,
                     name,
                     type_parameters: _,
-                    open_paren_start: _,
                     parameters: _,
-                    closed_paren_start: _,
                     result_type: _,
                     documentation: _,
                     result: maybe_result,
