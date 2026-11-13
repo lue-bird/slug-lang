@@ -7355,11 +7355,11 @@ fn syntax_project_fn_to_js(
         for type_parameter in type_parameters {
             output.push_str("drop$");
             output.push_str(&name_to_uppercase_js_segment(type_parameter));
-            output.push_str(": (_: ");
+            output.push_str("?: (_: ");
             name_to_uppercase_local_js(output, type_parameter);
             output.push_str(") => void, clone$");
             output.push_str(&name_to_uppercase_js_segment(type_parameter));
-            output.push_str(": (_: ");
+            output.push_str("?: (_: ");
             name_to_uppercase_local_js(output, type_parameter);
             output.push_str(") => void, ");
         }
@@ -8434,7 +8434,7 @@ fn js_variable_drop(
         Type::Variable(type_variable) => {
             output.push_str("$.drop");
             name_to_uppercase_local_js(output, type_variable);
-            output.push('(');
+            output.push_str("?.(");
             output.push_str(variable_name);
             output.push_str(");\n");
         }
@@ -8493,9 +8493,9 @@ fn js_variable_drop(
                 output.push_str("slot$drop($.");
                 type_buf_js_variable_name(output, &origin_dealiased, &item_dealiased);
                 output.push_str(", ");
-                js_drop_function(output, item, type_aliases);
-                output.push_str(", ");
                 output.push_str(variable_name);
+                output.push_str(", ");
+                js_drop_function(output, item, type_aliases);
                 output.push_str(");\n");
             } else if name == type_span_name
                 && let [origin, item] = arguments.as_slice()
@@ -8507,9 +8507,9 @@ fn js_variable_drop(
                 output.push_str("span$drop($.");
                 type_buf_js_variable_name(output, &origin_dealiased, &item_dealiased);
                 output.push_str(", ");
-                js_drop_function(output, item, type_aliases);
-                output.push_str(", ");
                 output.push_str(variable_name);
+                output.push_str(", ");
+                js_drop_function(output, item, type_aliases);
                 output.push_str(");\n");
             } else {
                 // gc
@@ -8575,7 +8575,7 @@ fn js_variable_clone(
         Type::Variable(_) => {
             output.push_str("$.clone");
             type_js_variable_name_segment(output, type_);
-            output.push('(');
+            output.push_str("?.(");
             output.push_str(variable_name);
             output.push_str(");\n");
         }

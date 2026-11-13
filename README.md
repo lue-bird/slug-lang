@@ -243,10 +243,9 @@ cargo install --offline --debug --path . slug
 - more conventional syntax
 
 ## TODO
-- in js, make drop$TypeVar and clone$TypeVar optional (by appending ? to the field name) and when calling them check for undefined
+- in js, use string field names like `"buf(Chars char)"` for implicit bufs instead of e.g. buf$Chars$tychar$end to make FFI and core.mjs more approachable
 - add more examples
 - show implicitly passed bufs when hovering a project fn
-- consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
 - core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
@@ -294,7 +293,8 @@ cargo install --offline --debug --path . slug
 - the syntax is ugly. It feels dense. It feels disorganized. It feels unintuitive (somehow). Any help appreciated!
 
 ## potential improvements in the future
-- zig codegen: implement leak-free error handling via "errdefer { for all reachable bufs: clearAndFree(allocator) }"
+- add a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
+- zig codegen: implement leak-free error handling via "errdefer { for all reachable bufs: drop(allocator) }"
 - consider requiring `:` for parameter pattern variables between the name and type. This is probably more obvious and is a little more robust. Downside: more typing and still not super clear. Format: name: type
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
 - should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.

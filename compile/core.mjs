@@ -355,10 +355,10 @@ export function choice_empty_to(never) {
 }
 
 /** @template $Origin, $Item
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item?: (_: $Item) => void }} $
  * @param {Slot<$Origin, $Item>} slot @returns {U32} */
 export function slot_index(slot, $) {
-  slot$drop($.buf$Origin$Item, $.drop$Item, slot);
+  slot$drop($.buf$Origin$Item, slot, $.drop$Item);
   return slot;
 }
 /** @template $Origin, $Item @param {Slot<$Origin, $Item>} slot @returns {Span<$Origin, $Item>} */
@@ -366,21 +366,21 @@ export function slot_to_span(slot) {
   return { start: slot, length: 1 };
 }
 /** @template $Origin, $Item
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item?: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span @returns {U32} */
 export function span_start_index(span, $) {
-  span$drop($.buf$Origin$Item, $.drop$Item, span);
+  span$drop($.buf$Origin$Item, span, $.drop$Item);
   return span.start;
 }
 /** @template $Origin, $Item
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item?: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span @returns {P32} */
 export function span_length(span, $) {
-  span$drop($.buf$Origin$Item, $.drop$Item, span);
+  span$drop($.buf$Origin$Item, span, $.drop$Item);
   return span.length;
 }
 /** @template $Origin, $Item
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, drop$Item?: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span @returns {U32} */
 export function opt_span_length(span, $) {
   return "no" in span ? 0 : span_length(span.yes, $);
@@ -541,10 +541,10 @@ export function span$clone(buf$Origin$Item, span) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf$Origin$Item
- * @param {(item: $Item) => void} drop$Item
  * @param {Slot<$Origin, $Item>} slot
+ * @param {((item: $Item) => void) | undefined} drop$Item
  * @returns {void} */
-export function slot$drop(buf$Origin$Item, drop$Item, slot) {
+export function slot$drop(buf$Origin$Item, slot, drop$Item) {
   if (buf$counts_view(buf$Origin$Item)[slot] === 1) {
     if (slot + 1 < buf$Origin$Item.items.length) {
       const item = /** @type $Item */ (buf$Origin$Item.items.pop());
@@ -552,9 +552,9 @@ export function slot$drop(buf$Origin$Item, drop$Item, slot) {
         buf$Origin$Item.items.length -= 1;
       }
       buf$Origin$Item.counts.resize(buf$Origin$Item.items.length); // optional
-      drop$Item(item);
+      drop$Item?.(item);
     } else {
-      drop$Item(buf$Origin$Item.items[slot]);
+      drop$Item?.(buf$Origin$Item.items[slot]);
     }
   } else {
     buf$counts_view(buf$Origin$Item)[slot] =
@@ -565,13 +565,13 @@ export function slot$drop(buf$Origin$Item, drop$Item, slot) {
 }
 /** @template $Item, $Origin
  * @param {Buf<$Origin, $Item>} buf$Origin$Item
- * @param {(item: $Item) => void} drop$Item
  * @param{Span<$Origin, $Item>} span
+ * @param {((item: $Item) => void) | undefined} drop$Item
  * @returns {void} */
-export function span$drop(buf$Origin$Item, drop$Item, span) {
+export function span$drop(buf$Origin$Item, span, drop$Item) {
   for (let i = span.start; i < span.start + span.length; i++) {
     if (buf$counts_view(buf$Origin$Item)[i] === 1) {
-      drop$Item(buf$Origin$Item.items[i]);
+      drop$Item?.(buf$Origin$Item.items[i]);
       buf$counts_view(buf$Origin$Item)[i] = 0;
     } else {
       buf$counts_view(buf$Origin$Item)[i] =
@@ -604,7 +604,7 @@ export function buf_pre_allocation_rid(_) {}
 /** @template $Item, $Origin
  * @param {Span<$Origin, $Item>} span
  * @param {(item: $Item) => $Item} item_alter
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @returns {void} */
 export function span_alter(span, item_alter, $) {
   for (let i = span.start; i < span.start + span.length; i++) {
@@ -614,7 +614,7 @@ export function span_alter(span, item_alter, $) {
 /** @template $Item, $Origin
  * @param {Opt<Span<$Origin, $Item>>} span
  * @param {(item: $Item) => $Item} item_alter
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @returns {void} */
 export function opt_span_alter(span, item_alter, $) {
   if ("yes" in span) {
@@ -683,7 +683,7 @@ export function set_or_insert(index, new_item, $) {
   return insert(new_item, $);
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span
  * @param {$Item} new_item
  * @returns {Span<$Origin, $Item>} */
@@ -696,7 +696,7 @@ export function span_add(span, new_item, $) {
   };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span
  * @param {$Item} new_item
  * @returns {Span<$Origin, $Item>} */
@@ -708,7 +708,7 @@ export function opt_span_add(span, new_item, $) {
   return span_add(span.yes, new_item, $);
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param {Slot<$Origin, $Item>} slot
  * @returns {$Item} */
 export function item(slot, $) {
@@ -732,7 +732,7 @@ export function item(slot, $) {
         ? U16$MAX
         : buf$counts_view($.buf$Origin$Item)[slot] - 1;
     const item = $.buf$Origin$Item.items[slot];
-    $.clone$Item(item);
+    $.clone$Item?.(item);
     return item;
   }
 }
@@ -769,7 +769,7 @@ export function swap(slot_a, slot_b, $) {
   $.buf$Origin$Item.items[slot_b] = a_item;
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span
  * @returns {Span<$Origin, $Item>} */
 export function span_move_to_end(span, $) {
@@ -787,7 +787,7 @@ export function span_move_to_end(span, $) {
   return { start: $.buf$Origin$Item.items.length - span.length, length: span.length };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_move_to_end(span, $) {
@@ -795,7 +795,7 @@ export function opt_span_move_to_end(span, $) {
   return { yes: span_move_to_end(span.yes, $) };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param {Span<$Origin, $Item>} span
  * @returns {Span<$Origin, $Item>} */
 export function span_move_to_unset(span, $) {
@@ -826,7 +826,7 @@ export function span_move_to_unset(span, $) {
   return span;
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_move_to_unset(span, $) {
@@ -888,7 +888,7 @@ export function opt_span_sort(span, item_order, $) {
   return span;
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param{Span<$Origin, $Item>} start
  * @param{Span<$Origin, $Item>} end
  * @returns {Span<$Origin, $Item>} */
@@ -905,7 +905,7 @@ export function span_add_own_span(start, end, $) {
   };
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param{Span<$Origin, $Item>} start
  * @param{Opt<Span<$Origin, $Item>>} end
  * @returns {Span<$Origin, $Item>} */
@@ -916,7 +916,7 @@ export function span_add_own_opt_span(start, end, $) {
   return span_add_own_span(start, end.yes, $);
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param{Opt<Span<$Origin, $Item>>} start
  * @param{Span<$Origin, $Item>} end
  * @returns {Span<$Origin, $Item>} */
@@ -927,7 +927,7 @@ export function opt_span_add_own_span(start, end, $) {
   return span_add_own_span(start.yes, end, $);
 }
 /** @template $Item, $Origin
- * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item: (_: $Item) => void }} $
+ * @param {{ buf$Origin$Item: Buf<$Origin, $Item>, clone$Item?: (_: $Item) => void }} $
  * @param{Opt<Span<$Origin, $Item>>} start
  * @param{Opt<Span<$Origin, $Item>>} end
  * @returns {Opt<Span<$Origin, $Item>>} */

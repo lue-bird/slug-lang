@@ -1,11 +1,9 @@
 // @ts-check
 import * as slug from "./slug.mjs";
 
-/** @type slug.Buf<"Chars", slug.Char> */
-const chars = slug.buf_empty();
+/** @type slug.Buf<"Greeting", slug.Char> */
+const greetingChars = slug.buf_empty();
 slug.greet("world", {
-  buf$Chars$tychar$end: chars,
-  drop$Chars: (_) => {},
-  clone$Chars: (_) => {},
+  buf$Chars$tychar$end: greetingChars,
 });
-console.log(chars.items.join(""));
+console.log(greetingChars.items.join(""));
