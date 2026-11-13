@@ -244,35 +244,13 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - add more examples
-- show implicitly passed bufs when hovering a project fn
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
 - core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
 
-## implementation details
-- introduce operation that can set an index after new unset items. Something like `add-unset-then`
-- shadowing is disallowed (local functions are an entirely separate context so they allow it)
-- expressions like `buf-empty<^new-origin-name element-type>()` automagically introduce `^new-origin-name` into the scope.
-  The fact that the origin could be literally any type is no problem because uniqueness of the type is still checked and no other properties are relevant
-- once a `buf` has been "used" (e.g. explicitly passed in and out of a function) it invalidates all prior uses of the origin in the rest of the current scope. E.g. a buf of bufs + a buf of slots with the same origin means you could mix and match willy nilly
-- For functions with type variables, pass in a generic "bundle of bufs" along with drop and clone functions that take and modify that bundle
-- implicitly pass a generic "bundle of bufs" whenever a function does not itself take a buf
-- If the input and output types never mention an origin created inside, we could allocate the buf with this origin with an arena
-- type signatures and type aliases are _not_ checked for origin violations, only actual expression+pattern code is
-- passing bufs is allowed but marks it as "unusable" for implicit passing (which includes clone and drop), which is basically identical to invalidating slots and spans with the same origin
-- type variables are checked as if they contained any number of buf origins and slot/span origins.
-  To illustrate why this could otherwise lead to issues, look at
-  ```
-  fn (
-      first slot(Origin {x X y Y})
-      second slot(Origin {x X y Y})
-      xy-rid fn({x X y Y}) *
-  )
-      
-      = * xy-rid({x first-x y second-y})
-      xy-rid({x second-y y first-y})
-  ```  
-  So: (I think) this means no introducing a type variable-typed value into a scope where _any_ type-variable-typed value is already reachable. Or more concretely, it must never be used in variable functions calls or function results, but that may be harder to detect.
+- introduce operation that can set an index after new unset items. Something like `add-unset-then`.
+  A better option may be changing counts to `bitpack struct { is_unset: bool, count: u15 }` and introducing
+  unset slots and spans
 - allow `buf` to be configured to never free slots (acting like an arena). This means no counts are ever recorded (massive for temporary bufs) but also any `item-at-index` stuff outside of `span` is likely to hit dead items and is thus invalid.
   Question: How to represent in zig?
 
