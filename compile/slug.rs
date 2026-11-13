@@ -7630,13 +7630,13 @@ fn syntax_pattern_to_js_destructuring<'a>(
                     },
                 );
                 for (reachable_type_buf, reachable_type_buf_path) in reachable_bufs {
-                    output.push_str("$.");
+                    output.push_str("$[");
                     type_buf_js_variable_name(
                         output,
                         &reachable_type_buf.origin,
                         &reachable_type_buf.item,
                     );
-                    output.push_str(" = ");
+                    output.push_str("] = ");
                     output.push_str(to_destructure);
                     reachable_type_buf_path_js(output, &reachable_type_buf_path);
                     output.push_str(";\n");
@@ -7669,13 +7669,13 @@ fn syntax_pattern_to_js_destructuring<'a>(
                     },
                 );
                 for (reachable_type_buf, reachable_type_buf_path) in reachable_bufs {
-                    output.push_str("$.");
+                    output.push_str("$[");
                     type_buf_js_variable_name(
                         output,
                         &reachable_type_buf.origin,
                         &reachable_type_buf.item,
                     );
-                    output.push_str(" = ");
+                    output.push_str("] = ");
                     name_to_lowercase_local_js(output, &name.value);
                     reachable_type_buf_path_js(output, &reachable_type_buf_path);
                     output.push_str(";\n");
@@ -8381,7 +8381,7 @@ fn specialize_implicits_js(
         output.push('{');
         for implicit_buf in implicit_bufs {
             type_buf_js_variable_name(output, &implicit_buf.origin, &implicit_buf.item);
-            output.push_str(": $.");
+            output.push_str(": $[");
             let mut specialized_implicit_buf_origin = implicit_buf.origin.clone();
             type_replace_variables(
                 type_variables_to_substitute,
@@ -8407,7 +8407,7 @@ fn specialize_implicits_js(
                 &specialized_implicit_buf_origin,
                 &specialized_implicit_buf_item,
             );
-            output.push_str(", ");
+            output.push_str("], ");
         }
         for (type_variable, type_variable_replacement_type) in type_variables_to_substitute {
             output.push_str("drop$");
@@ -8490,9 +8490,9 @@ fn js_variable_drop(
                 type_fully_resolve_aliases(&mut origin_dealiased, &mut Vec::new(), type_aliases);
                 let mut item_dealiased = item.clone();
                 type_fully_resolve_aliases(&mut item_dealiased, &mut Vec::new(), type_aliases);
-                output.push_str("slot$drop($.");
+                output.push_str("slot$drop($[");
                 type_buf_js_variable_name(output, &origin_dealiased, &item_dealiased);
-                output.push_str(", ");
+                output.push_str("], ");
                 output.push_str(variable_name);
                 output.push_str(", ");
                 js_drop_function(output, item, type_aliases);
@@ -8504,9 +8504,9 @@ fn js_variable_drop(
                 type_fully_resolve_aliases(&mut origin_dealiased, &mut Vec::new(), type_aliases);
                 let mut item_dealiased = item.clone();
                 type_fully_resolve_aliases(&mut item_dealiased, &mut Vec::new(), type_aliases);
-                output.push_str("span$drop($.");
+                output.push_str("span$drop($[");
                 type_buf_js_variable_name(output, &origin_dealiased, &item_dealiased);
-                output.push_str(", ");
+                output.push_str("], ");
                 output.push_str(variable_name);
                 output.push_str(", ");
                 js_drop_function(output, item, type_aliases);
@@ -8572,9 +8572,9 @@ fn js_variable_clone(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     match type_ {
-        Type::Variable(_) => {
+        Type::Variable(type_variable) => {
             output.push_str("$.clone");
-            type_js_variable_name_segment(output, type_);
+            name_to_uppercase_local_js(output, type_variable);
             output.push_str("?.(");
             output.push_str(variable_name);
             output.push_str(");\n");
@@ -8631,9 +8631,9 @@ fn js_variable_clone(
                 type_fully_resolve_aliases(&mut origin, &mut Vec::new(), type_aliases);
                 let mut item = item.clone();
                 type_fully_resolve_aliases(&mut item, &mut Vec::new(), type_aliases);
-                output.push_str("slot$clone($.");
+                output.push_str("slot$clone($[");
                 type_buf_js_variable_name(output, &origin, &item);
-                output.push_str(", ");
+                output.push_str("], ");
                 output.push_str(variable_name);
                 output.push_str(");\n");
             } else if name == type_span_name
@@ -8643,9 +8643,9 @@ fn js_variable_clone(
                 type_fully_resolve_aliases(&mut origin, &mut Vec::new(), type_aliases);
                 let mut item = item.clone();
                 type_fully_resolve_aliases(&mut item, &mut Vec::new(), type_aliases);
-                output.push_str("span$clone($.");
+                output.push_str("span$clone($[");
                 type_buf_js_variable_name(output, &origin, &item);
-                output.push_str(", ");
+                output.push_str("], ");
                 output.push_str(variable_name);
                 output.push_str(");\n");
             } else {
@@ -8765,73 +8765,11 @@ fn js_scope_result_variable(output: &mut String, scope_start: lsp_types::Positio
 }
 
 fn type_buf_js_variable_name(output: &mut String, origin: &Type, item: &Type) {
-    output.push_str("buf");
-    type_js_variable_name_segment(output, origin);
-    type_js_variable_name_segment(output, item);
-}
-fn type_js_variable_name_segment(output: &mut String, type_: &Type) {
-    match type_ {
-        Type::Variable(variable) => {
-            output.push('$');
-            output.push_str(&name_to_uppercase_js_segment(variable));
-        }
-        Type::Tuple(parts) => {
-            output.push_str("$tuple");
-            for part in parts {
-                output.push_str("$_");
-                type_js_variable_name_segment(output, part);
-            }
-            output.push_str("$end");
-        }
-        Type::Record(fields) => {
-            output.push_str("$record");
-            for field in fields {
-                output.push_str("$_");
-                output.push_str(&name_to_lowercase_js_variable_segment(&field.name));
-                type_js_variable_name_segment(output, &field.value);
-            }
-            output.push_str("$end");
-        }
-        Type::Choice(variants) => {
-            output.push_str("$choice");
-            for variant in variants {
-                output.push_str("$or");
-                output.push_str(&name_to_lowercase_js_variable_segment(&variant.name));
-                for variant_value in &variant.values {
-                    output.push_str("$_");
-                    type_js_variable_name_segment(output, variant_value);
-                }
-            }
-            output.push_str("$end");
-        }
-        Type::CoreConstruct { name, arguments } => {
-            output.push_str("$ty");
-            output.push_str(&name_to_lowercase_js_variable_segment(name));
-            for argument in arguments {
-                output.push_str("$_");
-                type_js_variable_name_segment(output, argument);
-            }
-            output.push_str("$end");
-        }
-        Type::Alias { name, arguments } => {
-            // should only run for recursive type aliases at this point
-            output.push_str("$ty");
-            output.push_str(&name_to_lowercase_js_variable_segment(name));
-            for argument in arguments {
-                output.push_str("$_");
-                type_js_variable_name_segment(output, argument);
-            }
-            output.push_str("$end");
-        }
-        Type::Fn { parameters, result } => {
-            output.push_str("$fn");
-            for parameter in parameters {
-                output.push_str("$_");
-                type_js_variable_name_segment(output, parameter);
-            }
-            type_js_variable_name_segment(output, result);
-        }
-    }
+    output.push_str("\"buf(");
+    type_format_single_line(output, origin);
+    output.push(' ');
+    type_format_single_line(output, item);
+    output.push_str(")\"");
 }
 /// https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Lexical_grammar#keywords
 const js_lowercase_keywords: [&str; 70] = [
