@@ -9795,13 +9795,13 @@ If there should only ever by one variant, using a record with a single field is 
                 return None;
             };
             let mut pattern_introduced_variables = std::collections::HashMap::new();
-            let mut case_pattern_introduced_bufs = std::collections::HashSet::new();
+            let mut pattern_introduced_bufs = std::collections::HashSet::new();
             syntax_query_pattern_check(
                 pattern,
                 &checked_queried_type,
                 errors,
                 &mut pattern_introduced_variables,
-                &mut case_pattern_introduced_bufs,
+                &mut pattern_introduced_bufs,
                 local_variables,
                 type_aliases,
             );
@@ -9868,42 +9868,14 @@ If you want to handle cases in separate branches, use an if like  if option { Ye
                         ).into_boxed_str(),
                 });
             }
-            let mut destruct_result_required_additional_implicit_bufs =
-                std::collections::HashSet::new();
-            type_implicit_bufs(
+            expression_query_check_for_missing_result_bufs(
+                errors,
+                pattern_introduced_bufs,
+                result,
                 &checked_result_type,
-                &std::collections::HashSet::new(),
+                expressions,
                 type_aliases,
-                &mut destruct_result_required_additional_implicit_bufs,
             );
-            if case_pattern_introduced_bufs
-                .iter()
-                .any(|pattern_newly_reachable_buf| {
-                    destruct_result_required_additional_implicit_bufs
-                        .contains(pattern_newly_reachable_buf)
-                })
-            {
-                let mut error_message =
-                    "The result of this destruct needs to include these bufs:".to_string();
-                for TypeBuf { origin, item } in
-                    case_pattern_introduced_bufs
-                        .into_iter()
-                        .filter(|pattern_newly_reachable_buf| {
-                            destruct_result_required_additional_implicit_bufs
-                                .contains(pattern_newly_reachable_buf)
-                        })
-                {
-                    error_message.push_str("\n  - ");
-                    type_format(&mut error_message, 4, &type_buf(origin, item));
-                }
-                error_message.push_str("
-Without these additional bufs, the resulting slots/spans would have no way to be passed to functions, dropped or cloned."
-                );
-                errors.push(ErrorNode {
-                    range: expression_range(result, expressions),
-                    message: error_message.into_boxed_str(),
-                });
-            }
             checked_queries.insert(
                 *equals_start,
                 CheckedQuery {
@@ -10195,9 +10167,8 @@ fn expression_query_check_for_missing_result_bufs(
     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
 ) {
     let mut result_required_additional_implicit_bufs = std::collections::HashSet::new();
-    type_implicit_bufs(
+    type_insert_implicit_bufs_ignoring_reachable(
         result_type,
-        &std::collections::HashSet::new(),
         type_aliases,
         &mut result_required_additional_implicit_bufs,
     );
@@ -10207,8 +10178,7 @@ fn expression_query_check_for_missing_result_bufs(
             result_required_additional_implicit_bufs.contains(pattern_newly_reachable_buf)
         })
     {
-        let mut error_message =
-            "The result of this destruct needs to include these bufs:".to_string();
+        let mut error_message = "The result of this query needs to include these bufs:".to_string();
         for TypeBuf { origin, item } in
             pattern_introduced_bufs
                 .into_iter()

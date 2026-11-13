@@ -244,6 +244,7 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - when parsing expression fn, do not parse parameter patterns unless ( exists
+- show implied buf types when hovering a fn
 - add more examples
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
