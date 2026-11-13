@@ -243,7 +243,6 @@ cargo install --offline --debug --path . slug
 - more conventional syntax
 
 ## TODO
-- in js, omit the $ in the field names like $.drop$TypeVariable
 - add more examples
 - show implicitly passed bufs when hovering a project fn
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)

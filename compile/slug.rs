@@ -7353,11 +7353,11 @@ fn syntax_project_fn_to_js(
             output.push_str(">, ");
         }
         for type_parameter in type_parameters {
-            output.push_str("drop$");
+            output.push_str("drop");
             output.push_str(&name_to_uppercase_js_segment(type_parameter));
             output.push_str("?: (_: ");
             name_to_uppercase_local_js(output, type_parameter);
-            output.push_str(") => void, clone$");
+            output.push_str(") => void, clone");
             output.push_str(&name_to_uppercase_js_segment(type_parameter));
             output.push_str("?: (_: ");
             name_to_uppercase_local_js(output, type_parameter);
@@ -8410,13 +8410,13 @@ fn specialize_implicits_js(
             output.push_str("], ");
         }
         for (type_variable, type_variable_replacement_type) in type_variables_to_substitute {
-            output.push_str("drop$");
-            output.push_str(type_variable);
+            output.push_str("drop");
+            output.push_str(&name_to_uppercase_js_segment(type_variable));
             output.push_str(": ");
             js_drop_function(output, type_variable_replacement_type, type_aliases);
             output.push_str(", ");
-            output.push_str("clone$");
-            output.push_str(type_variable);
+            output.push_str("clone");
+            output.push_str(&name_to_uppercase_js_segment(type_variable));
             output.push_str(": ");
             js_clone_function(output, type_variable_replacement_type, type_aliases);
             output.push_str(", ");
@@ -8433,7 +8433,7 @@ fn js_variable_drop(
     match type_ {
         Type::Variable(type_variable) => {
             output.push_str("$.drop");
-            name_to_uppercase_local_js(output, type_variable);
+            output.push_str(&name_to_uppercase_js_segment(type_variable));
             output.push_str("?.(");
             output.push_str(variable_name);
             output.push_str(");\n");
@@ -8574,7 +8574,7 @@ fn js_variable_clone(
     match type_ {
         Type::Variable(type_variable) => {
             output.push_str("$.clone");
-            name_to_uppercase_local_js(output, type_variable);
+            output.push_str(&name_to_uppercase_js_segment(type_variable));
             output.push_str("?.(");
             output.push_str(variable_name);
             output.push_str(");\n");
