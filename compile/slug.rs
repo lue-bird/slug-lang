@@ -2750,7 +2750,7 @@ fn project_type_alias_check(
             errors.push(ErrorNode {
                 range: name_range(with_start_position_as_ref(project_type.name)),
                 message: Box::from(
-                    "missing type after ty ..type-name.. ..potential parameters.. here",
+                    "missing type after ty ..type-name..(..potential parameters..) here",
                 ),
             });
             CheckedTypeAlias {
@@ -3706,8 +3706,13 @@ fn parameters_check_if_different_to_actual_type_parameters<'a>(
         errors.push(ErrorNode {
             range: origin_name_range,
             message: format!(
-                "some type parameters are used but not declared, namely {}. Add {}.
+                "some type {} are used but not declared, namely {}. Add {}.
 {}",
+                if actually_used_type_variables.len() >= 2 {
+                    "parameters"
+                } else {
+                    "parameter"
+                },
                 actually_used_type_variables
                     .iter()
                     .copied()
@@ -14220,13 +14225,13 @@ fn syntax_expression_format(
                 if line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
                 }
-                syntax_expression_format(formatted, next_indent(indent), expressions, part0);
+                syntax_expression_format(formatted, indent, expressions, part0);
                 for part in part1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_expression_format(formatted, next_indent(indent), expressions, part);
+                    space_or_linebreak_indented_into(formatted, line_span, indent);
+                    syntax_expression_format(formatted, indent, expressions, part);
                 }
                 if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
+                    linebreak_indented_into(formatted, indent);
                 }
                 formatted.push(')');
             }
@@ -14242,23 +14247,13 @@ fn syntax_expression_format(
                 if line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
                 }
-                syntax_expression_record_field_format(
-                    formatted,
-                    next_indent(indent),
-                    expressions,
-                    field0,
-                );
+                syntax_expression_record_field_format(formatted, indent, expressions, field0);
                 for part in field1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_expression_record_field_format(
-                        formatted,
-                        next_indent(indent),
-                        expressions,
-                        part,
-                    );
+                    space_or_linebreak_indented_into(formatted, line_span, indent);
+                    syntax_expression_record_field_format(formatted, indent, expressions, part);
                 }
                 if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
+                    linebreak_indented_into(formatted, indent);
                 }
             }
             formatted.push('}');
@@ -14297,23 +14292,16 @@ fn syntax_expression_format(
                     syntax_pattern_format(formatted, next_indent(indent), pattern);
                 }
             }
-            match queried {
-                None => {}
-                Some(queried) => {
-                    let queried = expressions.item(queried);
-                    let queried_line_span = range_line_span(lsp_types::Range {
-                        start: *equals_start,
-                        end: expression_end(queried, expressions),
-                    });
-                    space_or_linebreak_indented_into(
-                        formatted,
-                        queried_line_span,
-                        next_indent(indent),
-                    );
-                    syntax_expression_format(formatted, next_indent(indent), expressions, queried);
-                    let line_span = range_line_span(expression_range(expression, expressions));
-                    space_or_linebreak_indented_into(formatted, line_span, indent);
-                }
+            if let Some(queried) = queried {
+                let queried = expressions.item(queried);
+                let queried_line_span = range_line_span(lsp_types::Range {
+                    start: *equals_start,
+                    end: expression_end(queried, expressions),
+                });
+                space_or_linebreak_indented_into(formatted, queried_line_span, next_indent(indent));
+                syntax_expression_format(formatted, next_indent(indent), expressions, queried);
+                let line_span = range_line_span(expression_range(expression, expressions));
+                space_or_linebreak_indented_into(formatted, line_span, indent);
             }
             if let Some(result) = result {
                 syntax_expression_format(formatted, indent, expressions, expressions.item(result));

@@ -243,6 +243,7 @@ cargo install --offline --debug --path . slug
 - more conventional syntax
 
 ## TODO
+- when parsing expression fn, do not parse parameter patterns unless ( exists
 - add more examples
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
@@ -250,7 +251,7 @@ cargo install --offline --debug --path . slug
 
 - introduce operation that can set an index after new unset items. Something like `add-unset-then`.
   A better option may be changing counts to `bitpack struct { is_unset: bool, count: u15 }` and introducing
-  unset slots and spans
+  unset slots and spans. This would also maybe solve the current "buf-pre-allocate needs to take in a buf which defeats the whole point of slug"
 - allow `buf` to be configured to never free slots (acting like an arena). This means no counts are ever recorded (massive for temporary bufs) but also any `item-at-index` stuff outside of `span` is likely to hit dead items and is thus invalid.
   Question: How to represent in zig?
 
