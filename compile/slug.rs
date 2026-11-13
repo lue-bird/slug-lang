@@ -919,10 +919,6 @@ fn parse_slug_lowercase_name(state: &mut ParseState) -> Option<Name> {
 }
 fn parse_slug_lowercase_name_with_start(state: &mut ParseState) -> Option<WithStartPosition<Name>> {
     let start_position: lsp_types::Position = state.position;
-    if start_position.character == 0 {
-        // disambiguate from project-level fn/ty keywords
-        return None;
-    }
     parse_slug_lowercase_name(state).map(|name| WithStartPosition {
         start: start_position,
         value: name,

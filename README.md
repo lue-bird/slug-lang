@@ -243,6 +243,7 @@ cargo install --offline --debug --path . slug
 - more conventional syntax
 
 ## TODO
+- ignore : after pattern variables and :/= after field names and : before fn result type and = before fn result
 - add more examples
 - when formatting single-line dot call, directly join instead of inbetween-ing a space
 - show implicitly passed bufs when hovering a project fn
