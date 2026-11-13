@@ -4437,9 +4437,9 @@ fn syntax_parameter_pattern_check<'a>(
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct TypeBuf {
-    origin: Type,
-    item: Type,
+pub struct TypeBuf {
+    pub origin: Type,
+    pub item: Type,
 }
 #[derive(Clone, PartialEq, Eq)]
 enum BufReachPathSegment {
@@ -4548,7 +4548,7 @@ fn type_reachable_bufs(
         }
     }
 }
-fn function_signature_implicit_bufs<'a>(
+pub fn function_signature_implicit_bufs<'a>(
     // not +Clone but + Copy in theory
     // but rust doesn't implement Copy "because footgun"
     parameters: impl Iterator<Item = &'a Type> + Clone,
@@ -11775,7 +11775,7 @@ fn place_expression_type_diff_errors(
                         ),
                         message: format!(
                             "missing fields:{}. Those fields are included in the record type expected for this expression. Add them",
-                            actual_missing_fields.iter().fold(String::new(), |s, f| s + " ." + f)
+                            actual_missing_fields.iter().fold(String::new(), |s, f| s + " " + f)
                         ).into_boxed_str(),
                     });
                 }
@@ -11947,7 +11947,7 @@ fn place_pattern_type_diff_errors(
                         ),
                         message: format!(
                             "missing fields:{}. Those fields are included in the record type expected for this expression. Add them",
-                            actual_missing_fields.iter().fold(String::new(), |s, f| s + " ." + f)
+                            actual_missing_fields.iter().fold(String::new(), |s, f| s + " " + f)
                         ).into_boxed_str(),
                     });
                 }
@@ -12056,7 +12056,7 @@ fn type_fn(in_: Vec<Type>, out: Type) -> Type {
     }
 }
 const type_buf_name: &str = "buf";
-fn type_buf(origin: Type, item: Type) -> Type {
+pub fn type_buf(origin: Type, item: Type) -> Type {
     Type::CoreConstruct {
         name: Name::from_static(type_buf_name),
         arguments: vec![origin, item],
@@ -16801,11 +16801,14 @@ pub fn checked_project_fn_format(
         formatted.push('>');
     }
     formatted.push('(');
-    for fn_parameter_type in project_fn.parameter_types.iter().flatten() {
-        formatted.push_str("\n    ");
-        type_format(formatted, 4, fn_parameter_type);
+    if project_fn.parameter_types.iter().flatten().next().is_some() {
+        for fn_parameter_type in project_fn.parameter_types.iter().flatten() {
+            formatted.push_str("\n    ");
+            type_format(formatted, 4, fn_parameter_type);
+        }
+        formatted.push('\n');
     }
-    formatted.push_str("\n)\n    ");
+    formatted.push_str(")\n    ");
     if let Some(fn_result_type) = &project_fn.result_type {
         type_format(formatted, 4, fn_result_type);
     }
@@ -16923,13 +16926,16 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
             if let Some((argument0, argument1_up)) = arguments.split_first() {
                 formatted.push('(');
                 let line_span: LineSpan = type_line_span(type_);
+                if line_span == LineSpan::Multiple {
+                    linebreak_indented_into(formatted, next_indent(indent));
+                }
                 type_format(formatted, next_indent(indent), argument0);
                 for argument in argument1_up {
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
                     type_format(formatted, next_indent(indent), argument);
                 }
                 if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
+                    linebreak_indented_into(formatted, indent);
                 }
                 formatted.push(')');
             }

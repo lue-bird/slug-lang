@@ -240,11 +240,10 @@ cargo install --offline --debug --path . slug
 - positional arguments and otherwise familiar syntax
 - `.` syntax for piping the first argument
 - enabling nested origins or even type-identity origins (like Box<> or gc or shared_ptr)
-- more conventional syntax
+- more familiar syntax
 
 ## TODO
-- when parsing expression fn, do not parse parameter patterns unless ( exists
-- show implied buf types when hovering a fn
+- format: do next-indent various things after all for readability and familiarity: tuple parts, fields, variants, if cases
 - add more examples
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl

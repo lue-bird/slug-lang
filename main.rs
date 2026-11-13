@@ -121,7 +121,11 @@ fn print_core_docs() {
     for (core_fn_name, core_fn) in slug::core_fns.iter() {
         println!(
             "{}",
-            present_project_fn_with_complete_type_markdown(core_fn_name, core_fn)
+            present_project_fn_with_complete_type_markdown(
+                core_fn_name,
+                core_fn,
+                &std::collections::HashMap::new()
+            )
         );
     }
 }
@@ -249,18 +253,31 @@ fn markdown_convert_indented_code_blocks_to_slug(builder: &mut String, markdown_
 fn present_project_fn_with_complete_type_markdown(
     fn_name: &slug::Name,
     fn_info: &slug::CheckedProjectFn,
+    type_aliases: &std::collections::HashMap<slug::Name, slug::CheckedTypeAlias>,
 ) -> String {
-    let mut formatted = String::new();
+    let mut formatted = "```slug\n".to_string();
     slug::checked_project_fn_format(&mut formatted, fn_name, fn_info);
-    format!(
-        "```slug
-{}
-```
-{}
-",
-        formatted,
-        documentation_comment_to_markdown(fn_info.documentation.as_deref().unwrap_or(""))
-    )
+    formatted.push_str("\n```");
+    if let Some(documentation) = &fn_info.documentation {
+        formatted.push('\n');
+        formatted.push_str(&documentation_comment_to_markdown(documentation));
+    }
+    if let implicit_bufs = slug::function_signature_implicit_bufs(
+        fn_info.parameter_types.iter().flatten(),
+        fn_info.result_type.as_ref(),
+        type_aliases,
+    ) && !implicit_bufs.is_empty()
+    {
+        formatted.push_str(
+            "\n------\nWhen called, this function expects bufs of the following types to be reachable:\n```slug",
+        );
+        for slug::TypeBuf { origin, item } in implicit_bufs {
+            formatted.push('\n');
+            slug::type_format(&mut formatted, 0, &slug::type_buf(origin, item));
+        }
+        formatted.push_str("\n```\n");
+    }
+    formatted
 }
 fn present_type_alias_markdown(name: &slug::Name, type_alias: &slug::CheckedTypeAlias) -> String {
     let mut formatted = String::new();
@@ -921,7 +938,11 @@ fn respond_to_hover(
             local_variables: _,
         } => project_state.fns.iter().find_map(|(fn_name, fn_info)| {
             if fn_name == symbol_name.value {
-                let formatted = present_project_fn_with_complete_type_markdown(fn_name, fn_info);
+                let formatted = present_project_fn_with_complete_type_markdown(
+                    fn_name,
+                    fn_info,
+                    &project_state.type_aliases,
+                );
                 Some(lsp_types::Hover {
                     contents: lsp_types::Contents::MarkupContent(lsp_types::MarkupContent {
                         kind: lsp_types::MarkupKind::Markdown,
@@ -1368,7 +1389,9 @@ fn respond_to_completion(
                                     kind: Some(lsp_types::CompletionItemKind::Function),
                                     documentation: Some(lsp_documentation_markdown(
                                         present_project_fn_with_complete_type_markdown(
-                                            fn_name, fn_info,
+                                            fn_name,
+                                            fn_info,
+                                            &project_state.type_aliases,
                                         ),
                                     )),
                                     ..lsp_types::CompletionItem::default()
@@ -1420,7 +1443,9 @@ fn respond_to_completion(
                                 kind: Some(lsp_types::CompletionItemKind::Function),
                                 documentation: Some(lsp_documentation_markdown(
                                     present_project_fn_with_complete_type_markdown(
-                                        fn_name, fn_info,
+                                        fn_name,
+                                        fn_info,
+                                        &project_state.type_aliases,
                                     ),
                                 )),
                                 insert_text_format: Some(lsp_types::InsertTextFormat::Snippet),
@@ -1452,7 +1477,11 @@ fn respond_to_completion(
                             label: fn_name.to_string(),
                             kind: Some(lsp_types::CompletionItemKind::Function),
                             documentation: Some(lsp_documentation_markdown(
-                                present_project_fn_with_complete_type_markdown(fn_name, fn_info),
+                                present_project_fn_with_complete_type_markdown(
+                                    fn_name,
+                                    fn_info,
+                                    &project_state.type_aliases,
+                                ),
                             )),
                             ..lsp_types::CompletionItem::default()
                         })
