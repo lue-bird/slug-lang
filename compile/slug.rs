@@ -1083,6 +1083,10 @@ fn parse_project_fn(
     parse_slug_whitespace(state);
     let closed_paren_start = parse_symbol_as_start(state, ")");
     parse_slug_whitespace(state);
+    _ = parse_symbol(state, ":");
+    _ = parse_symbol(state, "-");
+    _ = parse_symbol(state, ">");
+    parse_slug_whitespace(state);
     let result_type = parse_type(state);
     parse_slug_whitespace(state);
     let documentation = parse_slug_comments(state);
@@ -1163,6 +1167,8 @@ fn parse_parameter_pattern_variable(state: &mut ParseState) -> Option<SyntaxPatt
         return None;
     };
     parse_slug_whitespace(state);
+    _ = parse_symbol(state, ":");
+    parse_slug_whitespace(state);
     let type_ = parse_type(state);
     Some(SyntaxPattern::Variable {
         name: name,
@@ -1173,6 +1179,8 @@ fn parse_parameter_pattern_ignored(state: &mut ParseState) -> Option<SyntaxPatte
     let Some(underscore_start) = parse_symbol_as_start(state, "_") else {
         return None;
     };
+    parse_slug_whitespace(state);
+    _ = parse_symbol(state, ":");
     parse_slug_whitespace(state);
     let type_ = parse_type(state);
     Some(SyntaxPattern::Ignored {
@@ -1317,7 +1325,7 @@ fn parse_parameter_pattern_record(state: &mut ParseState) -> Option<SyntaxPatter
     };
     parse_slug_whitespace(state);
     let mut fields = Vec::new();
-    while let Some(field) = parse_parameter_pattern_record_field(state) {
+    while let Some(field) = parse_record_field(state, |state| parse_parameter_pattern(state)) {
         fields.push(field);
         parse_slug_whitespace(state);
     }
@@ -1326,19 +1334,6 @@ fn parse_parameter_pattern_record(state: &mut ParseState) -> Option<SyntaxPatter
         open_curly_start,
         fields,
         closed_curly_start,
-    })
-}
-fn parse_parameter_pattern_record_field(
-    state: &mut ParseState,
-) -> Option<SyntaxRecordField<SyntaxPattern>> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
-        return None;
-    };
-    parse_slug_whitespace(state);
-    let value = parse_parameter_pattern(state);
-    Some(SyntaxRecordField {
-        name: name,
-        value: value,
     })
 }
 fn parse_query_pattern_record(state: &mut ParseState) -> Option<SyntaxPattern> {
@@ -1347,7 +1342,7 @@ fn parse_query_pattern_record(state: &mut ParseState) -> Option<SyntaxPattern> {
     };
     parse_slug_whitespace(state);
     let mut fields = Vec::new();
-    while let Some(field) = parse_query_pattern_record_field(state) {
+    while let Some(field) = parse_record_field(state, |state| parse_query_pattern(state)) {
         fields.push(field);
         parse_slug_whitespace(state);
     }
@@ -1356,19 +1351,6 @@ fn parse_query_pattern_record(state: &mut ParseState) -> Option<SyntaxPattern> {
         open_curly_start,
         fields,
         closed_curly_start,
-    })
-}
-fn parse_query_pattern_record_field(
-    state: &mut ParseState,
-) -> Option<SyntaxRecordField<SyntaxPattern>> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
-        return None;
-    };
-    parse_slug_whitespace(state);
-    let value = parse_query_pattern(state);
-    Some(SyntaxRecordField {
-        name: name,
-        value: value,
     })
 }
 
@@ -1422,7 +1404,7 @@ fn parse_type_record(state: &mut ParseState) -> Option<SyntaxType> {
     };
     parse_slug_whitespace(state);
     let mut fields = Vec::new();
-    while let Some(field) = parse_type_field(state) {
+    while let Some(field) = parse_record_field(state, |state| parse_type(state)) {
         fields.push(field);
         parse_slug_whitespace(state);
     }
@@ -1431,17 +1413,6 @@ fn parse_type_record(state: &mut ParseState) -> Option<SyntaxType> {
         open_curly_start,
         fields,
         closed_curly_start,
-    })
-}
-fn parse_type_field(state: &mut ParseState) -> Option<SyntaxRecordField<SyntaxType>> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
-        return None;
-    };
-    parse_slug_whitespace(state);
-    let value = parse_type(state);
-    Some(SyntaxRecordField {
-        name: name,
-        value: value,
     })
 }
 fn parse_type_choice(state: &mut ParseState) -> Option<SyntaxType> {
@@ -1615,7 +1586,8 @@ fn parse_expression_record(
     };
     parse_slug_whitespace(state);
     let mut fields = Vec::new();
-    while let Some(field) = parse_expression_record_field(state, expressions) {
+    while let Some(field) = parse_record_field(state, |state| parse_expression(state, expressions))
+    {
         fields.push(field);
         parse_slug_whitespace(state);
     }
@@ -1626,15 +1598,16 @@ fn parse_expression_record(
         closed_curly_start,
     })
 }
-fn parse_expression_record_field(
+fn parse_record_field<Value>(
     state: &mut ParseState,
-    expressions: &mut Buf<Expressions, SyntaxExpression>,
-) -> Option<SyntaxRecordField<SyntaxExpression>> {
+    parse_value: impl FnOnce(&mut ParseState) -> Option<Value>,
+) -> Option<SyntaxRecordField<Value>> {
     let Some(name) = parse_slug_lowercase_name_with_start(state) else {
         return None;
     };
     parse_slug_whitespace(state);
-    let value = parse_expression(state, expressions);
+    _ = parse_symbol(state, ":");
+    let value = parse_value(state);
     Some(SyntaxRecordField {
         name: name,
         value: value,
