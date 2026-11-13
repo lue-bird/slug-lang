@@ -243,8 +243,8 @@ cargo install --offline --debug --path . slug
 - more conventional syntax
 
 ## TODO
+- in js, make drop$TypeVar and clone$TypeVar optional (by appending ? to the field name) and when calling them check for undefined
 - add more examples
-- when formatting single-line dot call, directly join instead of inbetween-ing a space
 - show implicitly passed bufs when hovering a project fn
 - consider adding a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)

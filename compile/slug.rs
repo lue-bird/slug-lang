@@ -14102,11 +14102,10 @@ fn syntax_expression_format(
                     expressions,
                     expressions.item(&first_argument_dot.argument),
                 );
-                space_or_linebreak_indented_into(
-                    formatted,
-                    range_line_span(expression_range(expression, expressions)),
-                    indent,
-                );
+                if range_line_span(expression_range(expression, expressions)) == LineSpan::Multiple
+                {
+                    linebreak_indented_into(formatted, indent);
+                }
                 formatted.push('.');
             }
             formatted.push_str(&name.value);
