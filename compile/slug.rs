@@ -1044,6 +1044,7 @@ fn parse_ty_parameters(state: &mut ParseState) -> Option<SyntaxTyParameters> {
     let Some(open_paren_start) = parse_symbol_as_start(state, "(") else {
         return None;
     };
+    parse_slug_whitespace(state);
     let mut parameters = Vec::new();
     while let Some(parameter) = parse_slug_uppercase_name_with_start(state) {
         parameters.push(parameter);
@@ -9591,7 +9592,7 @@ If there should only ever by one variant, using a record with a single field is 
                     "this variant type should be a choice (for example [A(u32) B(str)]  or  opt(u32)) but it's\n",
                 );
                 type_format(&mut error_message, 0, checked_type_dealiased.as_ref());
-                error_message.push_str("\nMaybe you forgot to wrap it in a type like opt()?");
+                error_message.push_str("\nMaybe you forgot to wrap it in a type like opt() or to wrap it in [] to form a choice type?");
                 errors.push(ErrorNode {
                     range: type_range(syntax_type),
                     message: error_message.into_boxed_str(),
@@ -13513,8 +13514,8 @@ like `"abc"str` or `"\"hello 👀 \\\r\n world \(2665)\""str`
 - `\n` represents line break
 - `\r` represents carriage return
 
-Internally, a string is compactly represented as UTF-8 bytes and can be accessed as such.
-When building new strings at runtime, use functions like `opt-span-add-str-chars`."#,
+When building new strings with unknown length at runtime,
+use functions like `opt-span-add-str-chars`."#,
                 )),
                 parameters: vec![],
                 type_: None,
@@ -14429,7 +14430,7 @@ fn syntax_expression_format(
                     let line_span = range_line_span(expression_range(queried, expressions));
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
                     syntax_expression_format(formatted, next_indent(indent), expressions, queried);
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+                    space_or_linebreak_indented_into(formatted, line_span, indent);
                 }
             }
             formatted.push('{');
