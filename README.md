@@ -278,7 +278,6 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - add more examples
-- don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
 - core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
 
@@ -289,7 +288,7 @@ cargo install --offline --debug --path . slug
   Question: How to represent in zig?
 
 ## known design weaknesses
-- The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes traversals quadratic.
+- The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes operations like recursive traversals quadratic.
   My hope is that compile optimizations can eliminate many of those. If this assumptions turns out to be false, I may need to look into e.g. "automatic input-only parameters = don't drop" and or lobster/...-adjacent stuff. There may also be a more efficient representation for slot counts, like an enum(u2){0,1,2,look-in-side-list} for every item that looks in a side-list for higher counts.
 - building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
 - while implicit passing of bufs is one "killer convenience feature" of slug, it comes with a bunch of drawbacks.

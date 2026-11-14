@@ -118,6 +118,8 @@ pub enum SyntaxPattern {
     },
     Tuple {
         star_start: lsp_types::Position,
+        // TODO introduce struct SyntaxTupleParts<Part> and take Option<SyntaxTupleParts<SyntaxPattern>> here
+        // and all other tuple syntax variants
         open_paren_start: Option<lsp_types::Position>,
         parts: Vec<SyntaxPattern>,
         closed_paren_start: Option<lsp_types::Position>,
@@ -4118,6 +4120,7 @@ fn syntax_query_pattern_check<'a>(
                 });
                 return;
             };
+
             for (value, expected_value_type) in values
                 .iter()
                 .flat_map(|values| &values.values)
@@ -4133,9 +4136,15 @@ fn syntax_query_pattern_check<'a>(
                     type_aliases,
                 );
             }
+            check_for_value_count_different_from_expected_type(
+                errors,
+                || name_range(with_start_position_as_ref(name)),
+                values.as_ref().map(|v| v.values.len()).unwrap_or(0),
+                &expected_value_types,
+            );
         }
         SyntaxPattern::Tuple {
-            star_start: _,
+            star_start,
             open_paren_start: _,
             parts,
             closed_paren_start: _,
@@ -4154,22 +4163,6 @@ fn syntax_query_pattern_check<'a>(
                 });
                 return;
             };
-            if parts.len() != expected_type_parts.len() {
-                let mut error_message: String = format!(
-                    "This pattern matches a tuple with {parts_len} but the expected type here needs {expected_type_parts_len}:\n",
-                    parts_len = parts.len(),
-                    expected_type_parts_len = expected_type_parts.len()
-                );
-                type_format(&mut error_message, 0, expected_type.as_ref());
-                error_message.push_str(
-                    "\nMaybe you intended this pattern to belong to a different if case?",
-                );
-                errors.push(ErrorNode {
-                    range: pattern_range(pattern),
-                    message: error_message.into_boxed_str(),
-                });
-                return;
-            }
             for (part, expected_type_part) in parts.iter().zip(expected_type_parts) {
                 syntax_query_pattern_check(
                     part,
@@ -4181,6 +4174,12 @@ fn syntax_query_pattern_check<'a>(
                     type_aliases,
                 );
             }
+            check_for_value_count_different_from_expected_type(
+                errors,
+                || symbol_range(*star_start, "*"),
+                parts.len(),
+                &expected_type_parts,
+            );
         }
         SyntaxPattern::Record {
             open_curly_start,
@@ -9317,9 +9316,9 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                     .cloned()
                     .zip(type_arguments)
                     .collect();
-                expression_call_check_for_mismatching_arguments(
+                check_for_value_count_different_from_expected_type(
                     errors,
-                    with_start_position_as_ref(name),
+                    || name_range(with_start_position_as_ref(name)),
                     maybe_first_argument.map(|_| 1).unwrap_or(0) + rest_syntax_arguments.len(),
                     &expected_argument_types,
                 );
@@ -9434,9 +9433,9 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                         return None;
                     }
                 }
-                expression_call_check_for_mismatching_arguments(
+                check_for_value_count_different_from_expected_type(
                     errors,
-                    with_start_position_as_ref(name),
+                    || name_range(with_start_position_as_ref(name)),
                     maybe_first_argument.map(|_| 1).unwrap_or(0) + rest_syntax_arguments.len(),
                     &expected_argument_types,
                 );
@@ -9974,6 +9973,7 @@ If you want to handle cases in separate branches, use an if like  if option { Ye
             {
                 let mut case_pattern_introduced_variables = std::collections::HashMap::new();
                 let mut case_pattern_introduced_bufs = std::collections::HashSet::new();
+                let error_count_before_checking_case_pattern = errors.len();
                 syntax_query_pattern_check(
                     &case.pattern,
                     &checked_queried_type,
@@ -9991,6 +9991,7 @@ If you want to handle cases in separate branches, use an if like  if option { Ye
                 );
                 if remaining_specific_pattern_catch_possibilities.len()
                     == remaining_specific_pattern_catch_possibilities_count_before_case
+                    && error_count_before_checking_case_pattern == errors.len()
                 {
                     errors.push(ErrorNode {
                         range: pattern_range(&case.pattern),
@@ -10097,36 +10098,49 @@ If not, add patterns for the cases above"
         }
     }
 }
-fn expression_call_check_for_mismatching_arguments(
+fn check_for_value_count_different_from_expected_type(
     errors: &mut Vec<ErrorNode>,
-    function_name: WithStartPosition<&Name>,
+    error_range: impl FnOnce() -> lsp_types::Range,
     argument_count: usize,
     parameter_types: &[Type],
 ) {
     match argument_count.cmp(&parameter_types.len()) {
         std::cmp::Ordering::Equal => {}
         std::cmp::Ordering::Greater => {
+            let too_many_count = argument_count - parameter_types.len();
             errors.push(ErrorNode {
-                range: name_range(function_name),
-                message: format!(
-                    "{} arguments too many (expected {}, found {argument_count}). Remove the extra ones",
-                    argument_count - parameter_types.len(),
-                    parameter_types.len()
-                ).into_boxed_str()
+                range: error_range(),
+                message: match too_many_count {
+                    1 => format!(
+                        "One value too many (expected {}, found {argument_count}). Remove the extra one",
+                        parameter_types.len()
+                    ),
+                    _ => format!(
+                        "{too_many_count} values too many (expected {}, found {argument_count}). Remove the extra ones",
+                        parameter_types.len()
+                    )
+                }
+                .into_boxed_str(),
             });
         }
         std::cmp::Ordering::Less => {
-            let mut error_message = format!(
-                "{} arguments missing (expected {}, found {argument_count}). Their expected parameter types are\n",
-                parameter_types.len() - argument_count,
-                parameter_types.len()
-            );
+            let missing_count = parameter_types.len() - argument_count;
+            let mut error_message = match missing_count {
+                1 => format!(
+                    "One value missing (expected {}, found {argument_count}). Its expected type is\n",
+                    parameter_types.len(),
+                ),
+                _ => format!(
+                    "{missing_count} values missing (expected {}, found {argument_count}). Their expected types are\n",
+                    parameter_types.len(),
+                ),
+            };
             for parameter_type in parameter_types.iter().skip(argument_count) {
                 error_message.push_str("\n  - ");
                 type_format(&mut error_message, 4, parameter_type);
             }
             errors.push(ErrorNode {
-                range: name_range(function_name),
+                range: error_range(),
                 message: error_message.into_boxed_str(),
             });
         }
