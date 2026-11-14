@@ -277,14 +277,15 @@ cargo install --offline --debug --path . slug
 - more familiar syntax
 
 ## TODO
+- core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
+- consider format: only linebreaking between leading and follow-up syntax (e.g. field name - field value, or type name(arguments on the same line - last argument) when they are currently not on the same line. This might feel more intuitive for e.g. record and choice type aliases and make things like opt(span(..multiline..)) more compact and also clear
 - add more examples
 - website with online repl
-- core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
 
-- introduce operation that can set an index after new unset items. Something like `add-unset-then`.
+- consider introducing operation that can set an index after new unset items. Something like `add-unset-then`.
   A better option may be changing counts to `bitpack struct { is_unset: bool, count: u15 }` and introducing
   unset slots and spans. This would also maybe solve the current "buf-pre-allocate needs to take in a buf which defeats the whole point of slug"
-- allow `buf` to be configured to never free slots (acting like an arena). This means no counts are ever recorded (massive for temporary bufs) but also any `item-at-index` stuff outside of `span` is likely to hit dead items and is thus invalid.
+- consider allowing `buf` to be configured to never free slots (acting like an arena). This means no counts are ever recorded (massive for temporary bufs) but also any `item-at-index` stuff outside of `span` is likely to hit dead items and is thus invalid.
   Question: How to represent in zig?
 
 ## known design weaknesses

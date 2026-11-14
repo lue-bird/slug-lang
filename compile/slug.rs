@@ -4672,14 +4672,8 @@ fn type_implicit_bufs(
                     item_type_bufs_to_ignore.to_mut().insert(newly_reachable);
                 });
                 type_implicit_bufs(item, &item_type_bufs_to_ignore, type_aliases, type_bufs);
-            } else if name == type_buf_name
-                && let [_, item] = arguments.as_slice()
-            {
-                let mut item_type_bufs_to_ignore = std::borrow::Cow::Borrowed(type_bufs_to_ignore);
-                type_reachable_bufs(item, vec![], type_aliases, &mut |newly_reachable, _| {
-                    item_type_bufs_to_ignore.to_mut().insert(newly_reachable);
-                });
-                type_implicit_bufs(item, &item_type_bufs_to_ignore, type_aliases, type_bufs);
+            } else if name == type_buf_name {
+                // items not directly accessible
             } else {
                 for argument in arguments {
                     let mut argument_type_bufs_to_ignore =
@@ -8992,6 +8986,7 @@ struct CheckedLocalVariable {
 pub struct CheckedCall {
     // includes <explicit type arguments>
     // includes even type variables that get translated to a type variable with the same name
+    // TODO including the substituted parameter and result types is probably faster than recovering them at every call visit
     type_variable_replacements: std::collections::BTreeMap<Name, Type>,
 }
 #[derive(Debug)]
@@ -10236,6 +10231,32 @@ fn syntax_expression_check_against_reachable_bufs<'a>(
             {
                 let mut result_type = result_type.clone();
                 type_replace_variables(&checked_call.type_variable_replacements, &mut result_type);
+                {
+                    let parameter_types = project_fn
+                        .parameter_types
+                        .iter()
+                        .flatten()
+                        .map(|parameter| {
+                            let mut parameter = parameter.clone();
+                            type_replace_variables(
+                                &checked_call.type_variable_replacements,
+                                &mut parameter,
+                            );
+                            parameter
+                        })
+                        .collect::<Vec<Type>>();
+                    let mut variable_implicit_bufs = function_signature_implicit_bufs(
+                        parameter_types.iter(),
+                        Some(&result_type),
+                        type_aliases,
+                    );
+                    variable_implicit_bufs.retain(|variable_implicit_buf| {
+                        !reachable_bufs.contains(variable_implicit_buf)
+                    });
+                    report_missing_bufs(errors, variable_implicit_bufs, || {
+                        name_range(with_start_position_as_ref(name))
+                    });
+                }
                 type_check_introduced_bufs_do_not_overlap(
                     errors,
                     || expression_range(expression, expressions),
@@ -10263,19 +10284,28 @@ fn syntax_expression_check_against_reachable_bufs<'a>(
                 variable_implicit_bufs.retain(|variable_implicit_buf| {
                     !reachable_bufs.contains(variable_implicit_buf)
                 });
-                if !variable_implicit_bufs.is_empty() {
+                report_missing_bufs(errors, variable_implicit_bufs, || {
+                    name_range(with_start_position_as_ref(name))
+                });
+            }
+            fn report_missing_bufs(
+                errors: &mut Vec<ErrorNode>,
+                missing_bufs: std::collections::HashSet<TypeBuf>,
+                error_range: impl FnOnce() -> lsp_types::Range,
+            ) {
+                if !missing_bufs.is_empty() {
                     let mut error_message = format!(
                         "This function requires the following {} to be reachable but I can't find any {} here:\n",
-                        match variable_implicit_bufs.len() {
+                        match missing_bufs.len() {
                             1 => "buf",
                             _ => "bufs",
                         },
-                        match variable_implicit_bufs.len() {
+                        match missing_bufs.len() {
                             1 => "it",
                             _ => "those",
                         }
                     );
-                    for variable_implicit_buf in variable_implicit_bufs {
+                    for variable_implicit_buf in missing_bufs {
                         error_message.push_str("  - buf(");
                         type_format_single_line(&mut error_message, &variable_implicit_buf.origin);
                         error_message.push(' ');
@@ -10286,7 +10316,7 @@ fn syntax_expression_check_against_reachable_bufs<'a>(
                         "Please create them at the appropriate point by prepending `= _ buf-empty<... ...>()`.",
                     );
                     errors.push(ErrorNode {
-                        range: name_range(with_start_position_as_ref(name)),
+                        range: error_range(),
                         message: error_message.into_boxed_str(),
                     });
                 }
