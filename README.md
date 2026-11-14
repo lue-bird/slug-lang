@@ -18,35 +18,68 @@ cargo install --git https://codeberg.org/lue-bird/slug-lang slug
 ## 🧩 each slot/span has one associated collection
 (TODO rewrite to be more approachable)
 
+TODO say why other memory approaches suck a bit:
+Individual allocation segments for recursive references and for contained slices (e.g. rust's `Box`/`String`/`Vec`/`Box<str>`/`Box<[]>`)
+  - memory is usually more , meaning it's harder to predict 
+  - usually no simple way to pre-allocate space for different purposes
+  - to drop, this usually means traversing the whole structure, wandering from pointer to pointer when all we would want to do is just delete all memory that was used for one purpose in one fell swoop
+  - pointers are usually 64 bit wide which can be wasteful
+
+Arenas and especially storing arenas does solve most of these,
+especially when combined with some kind of tagging system so that no arenas are accidentally confused.
+but
+  - 64 bit wide
+  - no way to free and reuse parts of it
+  - (less important) no way to traverse it
+  - ??? I swear there was more TODO
+
+Plain integers as index and range types come with some drawbacks:
+  - collections need to be passed to every function that needs access. Adding/removing just one collection means changing a bunch of signatures and callsites. I find this tiring
+  - every access comes with a bounds check and potential crash or error handling
+  - you can accidentally use them to access the wrong collection
+  - If the underlying collections are alive for a while, items that have become useless may need to be removed and replaced with new items (think e.g. game enemies that have been eliminated).
+    Keeping indexes in sync is a common source of bugs
+
+Here's how you could represent the syntax of slug's `ty` declarations:
 ```slug
-ty type-alias(Types Names Source)
+ty type-alias(Syntax Source)
     {
-    parameters opt(span(Names span(Source char)))
-    type type(Types Names Source)
+        parameters opt(span(Syntax span(Source char)))
+        type type(Syntax Source)
     }
 
-ty type(Types Names Source)
+ty type(Syntax Source)
     [
-    Variable(span(Source char))
-    Tuple(opt(span(Types (type Types))))
-    Fn(
-        {
-        parameters opt(span(Types (type Types)))
-        result slot(Types (type Types))
-        }
-    )
-    Alias(
-        {
-        name span(Source char)
-        arguments opt(span(Types (type Types)))
-        }
-    )
-    Record(
-        {
-        names opt(span(Names (span Source char)))
-        values opt(span(Types (type(Types Names Source))))
-        }
-    )
+        Variable(span(Source char))
+        Tuple(opt(span(Syntax type(Syntax Source))))
+        Fn(
+            {
+                parameters opt(span(Syntax type(Syntax Source)))
+                result slot(Syntax type(Syntax Source))
+            }
+        )
+        Alias(
+            span(Source char)
+            opt(span(Syntax type(Syntax Source)))
+        )
+        Record(
+            {
+                names opt(span(Syntax span(Source char)))
+                values opt(span(Syntax type(Syntax Source)))
+            }
+        )
+        Choice(
+            {
+                names opt(span(Syntax span(Source char)))
+                values
+                    opt(
+                        span(
+                            Syntax
+                            opt(span(Syntax type(Syntax Source)))
+                        )
+                    )
+            }
+        )
     ]
 ```
 The rule to make it all safe: you can never have multiple collections that have the same item and origin type in reach.
@@ -55,12 +88,13 @@ Use nested bufs instead of one big one to operate on one chunk in a clear way, e
 ```slug
 ty project-state
     {
-    type-aliases opt(span([TypeAliases] type-alias([Types] [Names] [Source])))
+    type-aliases opt(span([Syntax] type-alias([Syntax] [Source])))
     
     source buf([Source] char)
-    names buf([Names] span([Source] char))
-    types buf([Types] type([Types] [Names] [Source]))
-    type-aliases-buf buf([TypeAliases] type-alias([Types] [Names] [Source]))
+    names buf([Syntax] span([Source] char))
+    types buf([Syntax] type([Syntax] [Source]))
+    type-variant-values buf([Syntax] opt(span([Syntax] type([Syntax] [Source]))))
+    type-aliases-buf buf([Syntax] type-alias([Syntax] [Source]))
     }
 
 ty state
@@ -243,7 +277,6 @@ cargo install --offline --debug --path . slug
 - more familiar syntax
 
 ## TODO
-- format: do next-indent various things after all for readability and familiarity: tuple parts, fields, variants, if cases
 - add more examples
 - don't report "this if case pattern only covers possibilities that earlier case patterns will already catch." if errors were already reported inside (most importantly type mismatch)
 - website with online repl
@@ -271,20 +304,14 @@ cargo install --offline --debug --path . slug
 - the syntax is ugly. It feels dense. It feels disorganized. It feels unintuitive (somehow). Any help appreciated!
 
 ## potential improvements in the future
-- add a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 - zig codegen: implement leak-free error handling via "errdefer { for all reachable bufs: drop(allocator) }"
 - consider requiring `:` for parameter pattern variables between the name and type. This is probably more obvious and is a little more robust. Downside: more typing and still not super clear. Format: name: type
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
-- should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.
-  Exclusive slots would need to be deeply (I think) cloned while shared slots (`slot-counted`?) are shallow-copied + count increased.
-  They should live in separate bufs to save space and be faster.
-  
-  Also similarly, there could be a distinction for shared mutable and shared immutable slots. I wonder if there is a point?
 - automatically figure out optimizations for "consume-only" parameters not needing to be cloned
 - I would **LOVE** if there was a way to allow for "unspecialized function types". If e.g. rust gains support for this, we should add this (and maybe backport it to sloe)
 - could this approach be used to compile existing, high-level languages (e.g. elm/gren)?
 - should FFI be more ergonomic? Maybe by providing `extern-fn` signatures (and maybe `extern-ty`?) that must get populated by the platform
-- change `{}` to `*` in the formatter
+- add a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
 
 ## rejected
 (some points may be outdated)
@@ -303,6 +330,12 @@ cargo install --offline --debug --path . slug
 - should the underlying bufs be per-(size+align / bucket) instead of per-type? Per-type feels more reasonable but per-(size+align / bucket) could be more compact, avoid frequent smaller allocations and be leaner on the stack when passing the bufs.
   On the other hand it may (?) be worse for caches (semantically related objects are not necessarily grouped together), debugging, ffi, and memory usage (short-lived item bufs temporarily "pollute" a bigger buf and aren't freed as easily)
 - change tuple syntax from `*()` to `<>` (more consistent and easier to type)
+- should there be separate types for shared and exclusive access? Exclusive access would be easier to reason about and allow for connecting spans into one span.
+  Exclusive slots would need to be deeply (I think) cloned while shared slots (`slot-counted`?) are shallow-copied + count increased.
+  They should live in separate bufs to save space and be faster.
+  
+  Also similarly, there could be a distinction for shared mutable and shared immutable slots. I wonder if there is a point?
+- add go as an output target. Rejected because there's nice way to locally disable array bounds checks
 
 ### explicit share-able view types (outdated syntax)
 All structural types (e.g. char, str, records of structural types, choice types of structural types) are directly compatible with & and can be recombined into & types (for example `&str` is the same as `str`).

@@ -6764,85 +6764,71 @@ pub fn type_format_single_line_with_zig_variables(formatted: &mut String, type_:
             formatted.push_str(".name ++ \"");
         }
         Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
-            formatted.push_str(name);
-            if let Some((argument0, argument1_up)) = arguments.split_first() {
-                formatted.push('(');
-                type_format_single_line_with_zig_variables(formatted, argument0);
-                for argument in argument1_up {
-                    formatted.push(' ');
-                    type_format_single_line_with_zig_variables(formatted, argument);
-                }
-                formatted.push(')');
-            }
+            type_construct_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                name,
+                arguments,
+                |formatted, _, argument| {
+                    type_format_single_line_with_zig_variables(formatted, argument)
+                },
+            );
         }
         Type::Fn { parameters, result } => {
-            formatted.push_str("fn(");
-            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
-                type_format_single_line_with_zig_variables(formatted, parameter0);
-                for parameter in parameter1_up {
-                    formatted.push(' ');
-                    type_format_single_line_with_zig_variables(formatted, parameter);
-                }
-            }
-            formatted.push_str(") ");
-            type_format_single_line_with_zig_variables(formatted, result);
+            fn_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                parameters,
+                |_, _| LineSpan::Single,
+                |formatted, _, parameter| {
+                    type_format_single_line_with_zig_variables(formatted, parameter)
+                },
+                |formatted, _| type_format_single_line_with_zig_variables(formatted, result),
+            );
         }
         Type::Tuple(parts) => {
-            formatted.push('*');
-            if let Some((part0, part1_up)) = parts.split_first() {
-                formatted.push('(');
-                type_format_single_line_with_zig_variables(formatted, part0);
-                for part in part1_up {
-                    formatted.push(' ');
-                    type_format_single_line_with_zig_variables(formatted, part);
-                }
-                formatted.push(')');
-            }
+            tuple_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                parts,
+                |formatted, _, part| type_format_single_line_with_zig_variables(formatted, part),
+            );
         }
         Type::Record(fields) => {
-            fn type_field_format_single_line_with_zig_variables(
-                formatted: &mut String,
-                type_field: &TypeField,
-            ) {
-                formatted.push_str(&type_field.name);
-                formatted.push(' ');
-                type_format_single_line_with_zig_variables(formatted, &type_field.value);
-            }
-            formatted.push('{');
-            if let Some((field0, field1_up)) = fields.split_first() {
-                type_field_format_single_line_with_zig_variables(formatted, field0);
-                for field in field1_up {
+            record_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                fields,
+                |formatted, _, field| {
+                    formatted.push_str(&field.name);
                     formatted.push(' ');
-                    type_field_format_single_line_with_zig_variables(formatted, field);
-                }
-            }
-            formatted.push('}');
+                    type_format_single_line_with_zig_variables(formatted, &field.value);
+                },
+            );
         }
         Type::Choice(variants) => {
-            fn type_variant_format_single_line_with_zig_variables(
-                formatted: &mut String,
-                type_variant: &TypeVariant,
-            ) {
-                formatted.push_str(&type_variant.name);
-                if let Some((value0, value1_up)) = type_variant.values.split_first() {
-                    formatted.push('(');
-                    type_format_single_line_with_zig_variables(formatted, value0);
-                    for variant_value in value1_up {
-                        formatted.push(' ');
-                        type_format_single_line_with_zig_variables(formatted, variant_value);
+            type_choice_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                variants,
+                |formatted, _, variant| {
+                    formatted.push_str(&variant.name);
+                    if let Some((value0, value1_up)) = variant.values.split_first() {
+                        formatted.push('(');
+                        type_format_single_line_with_zig_variables(formatted, value0);
+                        for variant_value in value1_up {
+                            formatted.push(' ');
+                            type_format_single_line_with_zig_variables(formatted, variant_value);
+                        }
+                        formatted.push(')');
                     }
-                    formatted.push(')');
-                }
-            }
-            formatted.push('[');
-            if let Some((variant0, variant1_up)) = variants.split_first() {
-                type_variant_format_single_line_with_zig_variables(formatted, variant0);
-                for variant in variant1_up {
-                    formatted.push(' ');
-                    type_variant_format_single_line_with_zig_variables(formatted, variant);
-                }
-            }
-            formatted.push(']');
+                },
+            );
         }
     }
 }
@@ -11390,21 +11376,16 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
             type_format(formatted, next_indent(indent), actual);
         }
         TypeDiff::CoreConstructOrAlias { name, arguments } => {
-            formatted.push_str(name);
-            if let Some((argument0, argument1_up)) = arguments.split_first() {
-                formatted.push('(');
-                let line_span: LineSpan = type_diff_line_span(type_diff);
-                space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                option_type_diff_format(formatted, next_indent(indent), argument0.as_ref());
-                for argument in argument1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    option_type_diff_format(formatted, next_indent(indent), argument.as_ref());
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            type_construct_format(
+                formatted,
+                type_diff_line_span(type_diff),
+                indent,
+                name,
+                arguments,
+                |formatted, indent, argument| {
+                    option_type_diff_format(formatted, next_indent(indent), argument.as_ref())
+                },
+            );
         }
         TypeDiff::Fn { parameters, result } => {
             formatted.push_str("fn(");
@@ -12547,8 +12528,8 @@ the failure variant could never have been created, we can safely unwrap it!
 ```slug
 fn tried-unwrap(tried [Success(Ok) Failure([])]) Ok
     if tried {
-    Success(ok) ok
-    Failure(impossible) choice-empty-to<Ok>(impossible)
+        Success(ok) ok
+        Failure(impossible) choice-empty-to<Ok>(impossible)
     }
 ```
 Another nice use case: Creating a value whose only purpose is transporting type info:
@@ -12645,9 +12626,9 @@ If the length is greater than the given span's length, .start will be the existi
 ```slug
 fn span-slot-at(span span(Origin) index u32)
     {
-    before opt(span(Origin))
-    at slot(Origin)
-    after opt(span(Origin))
+        before opt(span(Origin))
+        at slot(Origin)
+        after opt(span(Origin))
     }
     = *(until after)
         span-start-of-length-positive(span 1p32.p32-add(index))
@@ -12754,8 +12735,8 @@ by returning Going or exiting early with Done (like calling `break` in other lan
 ```slug
 fn next-non-space(span opt(span(Origin)))
     {
-    non-space opt(char)
-    after opt(span(Origin))
+        non-space opt(char)
+        after opt(span(Origin))
     }
     if
         opt-span-step-while(
@@ -12777,10 +12758,10 @@ fn next-non-space(span opt(span(Origin)))
             }
         )
     {
-    Going(chars)
-        {non-space No<opt(char)> after No<opt(span(Origin))>}
-    Done(non-space span-after)
-        {non-space Yes<[No]>(non-space) after span-after}
+        Going(chars)
+            {non-space No<opt(char)> after No<opt(span(Origin))>}
+        Done(non-space span-after)
+            {non-space Yes<[No]>(non-space) after span-after}
     }
 ```
 Note that `span-after` does not include any slot given to the step function, even the slot that resulted in `[done]`.
@@ -13356,10 +13337,10 @@ Keep in mind that a human-readable visual symbol can be composed of multiple suc
 ```slug
 str-start("🇳🇿"str)
 # = *(
-# "\(1F1FA)"char
-# Indicator N
-# Yes("\(1F1F8)"str)
-# Indicator Z
+#     "\(1F1FA)"char
+#     Indicator N
+#     Yes("\(1F1F8)"str)
+#     Indicator Z
 # )
 ```
 Read if interested: [swift's grapheme cluster docs](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/stringsandcharacters/#Extended-Grapheme-Clusters)"#,
@@ -13400,9 +13381,9 @@ u32-order(12u32 20u32)
 
 fn u32-max(a u32 b u32) u32
     if u32-order(a b) {
-    Less b
-    Equal b
-    Greater a
+        Less b
+        Equal b
+        Greater a
     }
 ```",
                 )),
@@ -13941,6 +13922,129 @@ fn syntax_string_format(formatted: &mut String, content: &str) {
     }
     formatted.push('"');
 }
+fn tuple_format<Part>(
+    formatted: &mut String,
+    line_span: LineSpan,
+    indent: usize,
+    parts: &[Part],
+    part_format: impl Fn(&mut String, usize, &Part),
+) {
+    formatted.push('*');
+    if let Some((part0, part1_up)) = parts.split_first() {
+        formatted.push('(');
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, next_indent(indent));
+        }
+        part_format(formatted, next_indent(indent), part0);
+        for part in part1_up {
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            part_format(formatted, next_indent(indent), part);
+        }
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, indent);
+        }
+        formatted.push(')');
+    }
+}
+fn record_format<Field>(
+    formatted: &mut String,
+    line_span: LineSpan,
+    indent: usize,
+    fields: &[Field],
+    field_format: impl Fn(&mut String, usize, &Field),
+) {
+    formatted.push('{');
+    if let Some((field0, field1_up)) = fields.split_first() {
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, next_indent(indent));
+        }
+        field_format(formatted, next_indent(indent), field0);
+        for field in field1_up {
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            field_format(formatted, next_indent(indent), field);
+        }
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, indent);
+        }
+    }
+    formatted.push('}');
+}
+fn type_choice_format<Variant>(
+    formatted: &mut String,
+    line_span: LineSpan,
+    indent: usize,
+    variants: &[Variant],
+    variant_format: impl Fn(&mut String, usize, &Variant),
+) {
+    formatted.push('[');
+    if let Some((variant0, variant1_up)) = variants.split_first() {
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, next_indent(indent));
+        }
+        variant_format(formatted, next_indent(indent), variant0);
+        for variant in variant1_up {
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            variant_format(formatted, next_indent(indent), variant);
+        }
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, indent);
+        }
+    }
+    formatted.push(']');
+}
+fn type_construct_format<Argument>(
+    formatted: &mut String,
+    line_span: LineSpan,
+    indent: usize,
+    name: &Name,
+    arguments: &[Argument],
+    argument_format: impl Fn(&mut String, usize, &Argument),
+) {
+    formatted.push_str(name);
+    if let Some((argument0, argument1_up)) = arguments.split_first() {
+        formatted.push('(');
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, next_indent(indent));
+        }
+        argument_format(formatted, next_indent(indent), argument0);
+        for argument in argument1_up {
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+            argument_format(formatted, next_indent(indent), argument);
+        }
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, indent);
+        }
+        formatted.push(')');
+    }
+}
+fn fn_format<Parameter>(
+    formatted: &mut String,
+    line_span: LineSpan,
+    indent: usize,
+    parameters: &[Parameter],
+    parameters_line_span: impl FnOnce(&Parameter, &[Parameter]) -> LineSpan,
+    parameter_format: impl Fn(&mut String, usize, &Parameter),
+    result_format: impl Fn(&mut String, usize),
+) {
+    formatted.push_str("fn(");
+    if let Some((parameter0, parameter1_up)) = parameters.split_first() {
+        let parameters_line_span = parameters_line_span(parameter0, parameter1_up);
+        if parameters_line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, next_indent(indent));
+        }
+        parameter_format(formatted, next_indent(indent), parameter0);
+        for parameter in parameter1_up {
+            space_or_linebreak_indented_into(formatted, parameters_line_span, next_indent(indent));
+            parameter_format(formatted, next_indent(indent), parameter);
+        }
+        if parameters_line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, indent);
+        }
+    }
+    formatted.push(')');
+    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+    result_format(formatted, next_indent(indent));
+}
 fn syntax_expression_format(
     formatted: &mut String,
     indent: usize,
@@ -14124,42 +14228,29 @@ fn syntax_expression_format(
             parameters,
             result,
         } => {
-            formatted.push_str("fn(");
-            if let Some(parameters) = parameters
-                && let Some((parameter0, parameter1_up)) = parameters.parameters.split_first()
-            {
-                let parameter_line_span =
-                    range_line_span(fn_parameters_range(parameters, pattern_end));
-                if parameter_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_pattern_format(formatted, next_indent(indent), parameter0);
-                for parameter in parameter1_up {
-                    space_or_linebreak_indented_into(
-                        formatted,
-                        parameter_line_span,
-                        next_indent(indent),
-                    );
-                    syntax_pattern_format(formatted, next_indent(indent), parameter);
-                }
-                if parameter_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push(')');
-            if let Some(result) = result {
-                space_or_linebreak_indented_into(
-                    formatted,
-                    range_line_span(expression_range(expression, expressions)),
-                    next_indent(indent),
-                );
-                syntax_expression_format(
-                    formatted,
-                    next_indent(indent),
-                    expressions,
-                    expressions.item(result),
-                );
-            }
+            fn_format(
+                formatted,
+                range_line_span(expression_range(expression, expressions)),
+                indent,
+                parameters
+                    .as_ref()
+                    .map(|p| p.parameters.as_slice())
+                    .unwrap_or(&[]),
+                |parameter0, parameter1_up| {
+                    range_line_span(pattern_range(parameter1_up.last().unwrap_or(parameter0)))
+                },
+                syntax_pattern_format,
+                |formatted, indent| {
+                    if let Some(result) = result {
+                        syntax_expression_format(
+                            formatted,
+                            indent,
+                            expressions,
+                            expressions.item(result),
+                        );
+                    }
+                },
+            );
         }
         SyntaxExpression::Tuple {
             star_start: _,
@@ -14167,45 +14258,30 @@ fn syntax_expression_format(
             parts,
             closed_paren_start: _,
         } => {
-            formatted.push('*');
-            if let Some((part0, part1_up)) = parts.split_first() {
-                formatted.push('(');
-                let line_span = range_line_span(expression_range(expression, expressions));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                syntax_expression_format(formatted, indent, expressions, part0);
-                for part in part1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, indent);
-                    syntax_expression_format(formatted, indent, expressions, part);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            tuple_format(
+                formatted,
+                range_line_span(expression_range(expression, expressions)),
+                indent,
+                parts,
+                |formatted, indent, part| {
+                    syntax_expression_format(formatted, indent, expressions, part)
+                },
+            );
         }
         SyntaxExpression::Record {
             open_curly_start: _,
             fields,
             closed_curly_start: _,
         } => {
-            formatted.push('{');
-            if let Some((field0, field1_up)) = fields.split_first() {
-                let line_span = range_line_span(expression_range(expression, expressions));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                syntax_expression_record_field_format(formatted, indent, expressions, field0);
-                for part in field1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, indent);
-                    syntax_expression_record_field_format(formatted, indent, expressions, part);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push('}');
+            record_format(
+                formatted,
+                range_line_span(expression_range(expression, expressions)),
+                indent,
+                fields,
+                |formatted, indent, field| {
+                    syntax_expression_record_field_format(formatted, indent, expressions, field)
+                },
+            );
         }
         SyntaxExpression::Commented {
             comments,
@@ -14278,8 +14354,8 @@ fn syntax_expression_format(
             }
             formatted.push('{');
             for case in cases {
-                linebreak_indented_into(formatted, indent);
-                syntax_expression_if_case_format(formatted, indent, expressions, case);
+                linebreak_indented_into(formatted, next_indent(indent));
+                syntax_expression_if_case_format(formatted, next_indent(indent), expressions, case);
             }
             linebreak_indented_into(formatted, indent);
             formatted.push('}');
@@ -14315,7 +14391,7 @@ fn syntax_expression_if_case_format(
 
     case: &SyntaxExpressionIfCase,
 ) {
-    syntax_pattern_format(formatted, next_indent(indent), &case.pattern);
+    syntax_pattern_format(formatted, indent, &case.pattern);
     match &case.result {
         None => {
             formatted.push(' ');
@@ -14385,45 +14461,26 @@ fn syntax_pattern_format(formatted: &mut String, indent: usize, pattern: &Syntax
             parts,
             closed_paren_start: _,
         } => {
-            formatted.push('*');
-            if let Some((part0, part1_up)) = parts.split_first() {
-                formatted.push('(');
-                let line_span = range_line_span(pattern_range(pattern));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_pattern_format(formatted, next_indent(indent), part0);
-                for part in part1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_pattern_format(formatted, next_indent(indent), part);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            tuple_format(
+                formatted,
+                range_line_span(pattern_range(pattern)),
+                indent,
+                parts,
+                syntax_pattern_format,
+            );
         }
         SyntaxPattern::Record {
             open_curly_start: _,
             fields,
             closed_curly_start: _,
         } => {
-            formatted.push('{');
-            if let Some((field0, field1_up)) = fields.split_first() {
-                let line_span = range_line_span(pattern_range(pattern));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                syntax_pattern_record_field_format(formatted, indent, field0);
-                for field in field1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, indent);
-                    syntax_pattern_record_field_format(formatted, indent, field);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push('}');
+            record_format(
+                formatted,
+                range_line_span(pattern_range(pattern)),
+                indent,
+                fields,
+                syntax_pattern_record_field_format,
+            );
         }
     }
 }
@@ -14458,62 +14515,40 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             parameters,
             result,
         } => {
-            formatted.push_str("fn(");
-            if let Some(parameters) = parameters
-                && let Some((parameter0, parameter1_up)) = parameters.parameters.split_first()
-            {
-                let parameters_line_span =
-                    range_line_span(fn_parameters_range(parameters, type_end));
-                if parameters_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_type_format(formatted, next_indent(indent), parameter0);
-                for parameter in parameter1_up {
-                    space_or_linebreak_indented_into(
-                        formatted,
-                        parameters_line_span,
-                        next_indent(indent),
-                    );
-                    syntax_type_format(formatted, next_indent(indent), parameter);
-                }
-                if parameters_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push(')');
-            let line_span = range_line_span(type_range(type_));
-            space_or_linebreak_indented_into(formatted, line_span, indent);
-            if let Some(result) = result {
-                syntax_type_format(formatted, indent, result);
-            }
+            fn_format(
+                formatted,
+                range_line_span(type_range(type_)),
+                indent,
+                parameters
+                    .as_ref()
+                    .map(|p| p.parameters.as_slice())
+                    .unwrap_or(&[]),
+                |parameter0, parameter1_up| {
+                    range_line_span(lsp_types::Range {
+                        start: type_start(parameter0),
+                        end: type_end(parameter1_up.last().unwrap_or(parameter0)),
+                    })
+                },
+                syntax_type_format,
+                |formatted, indent| {
+                    if let Some(result) = result {
+                        syntax_type_format(formatted, indent, result);
+                    }
+                },
+            );
         }
         SyntaxType::Construct { name, arguments } => {
-            formatted.push_str(&name.value);
-            if let Some(SyntaxTypeConstructParenthesizedArguments {
-                open_paren_start: _,
-                arguments,
-                closed_paren_start: _,
-            }) = arguments
-                && let Some((argument0, argument1_up)) = arguments.split_first()
-            {
-                formatted.push('(');
-                let line_span = range_line_span(lsp_types::Range {
-                    start: name.start,
-                    end: type_range(argument1_up.last().unwrap_or(argument0)).end,
-                });
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_type_format(formatted, next_indent(indent), argument0);
-                for argument_type in argument1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_type_format(formatted, next_indent(indent), argument_type);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            type_construct_format(
+                formatted,
+                range_line_span(type_range(type_)),
+                indent,
+                &name.value,
+                arguments
+                    .as_ref()
+                    .map(|a| a.arguments.as_slice())
+                    .unwrap_or(&[]),
+                syntax_type_format,
+            );
         }
         SyntaxType::Tuple {
             star_start: _,
@@ -14521,67 +14556,39 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             parts,
             closed_paren_start: _,
         } => {
-            formatted.push('*');
-            if let Some((part0, part1_up)) = parts.split_first() {
-                formatted.push('(');
-                let line_span = range_line_span(type_range(type_));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_type_format(formatted, next_indent(indent), part0);
-                for part in part1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_type_format(formatted, next_indent(indent), part);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            tuple_format(
+                formatted,
+                range_line_span(type_range(type_)),
+                indent,
+                parts,
+                syntax_type_format,
+            );
         }
         SyntaxType::Record {
             open_curly_start: _,
             fields,
             closed_curly_start: _,
         } => {
-            formatted.push('{');
-            if let Some((field0, field1_up)) = fields.split_first() {
-                let line_span = range_line_span(type_range(type_));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                syntax_type_field_format(formatted, indent, field0);
-                for field in field1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, indent);
-                    syntax_type_field_format(formatted, indent, field);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push('}');
+            record_format(
+                formatted,
+                range_line_span(type_range(type_)),
+                indent,
+                fields,
+                syntax_type_field_format,
+            );
         }
         SyntaxType::Choice {
             open_bracket_start: _,
             variants,
             closed_bracket_start: _,
         } => {
-            formatted.push('[');
-            if let Some((variant0, variant1_up)) = variants.split_first() {
-                let line_span = range_line_span(type_range(type_));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                syntax_type_variant_format(formatted, indent, variant0);
-                for variant in variant1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, indent);
-                    syntax_type_variant_format(formatted, indent, variant);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push(']');
+            type_choice_format(
+                formatted,
+                range_line_span(type_range(type_)),
+                indent,
+                variants,
+                syntax_type_variant_format,
+            );
         }
     }
 }
@@ -16840,62 +16847,52 @@ pub fn type_format_single_line(formatted: &mut String, type_: &Type) {
             formatted.push_str(name);
         }
         Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
-            formatted.push_str(name);
-            if let Some((argument0, argument1_up)) = arguments.split_first() {
-                formatted.push('(');
-                type_format_single_line(formatted, argument0);
-                for argument in argument1_up {
-                    formatted.push(' ');
-                    type_format_single_line(formatted, argument);
-                }
-                formatted.push(')');
-            }
+            type_construct_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                name,
+                arguments,
+                |formatted, _, argument| type_format_single_line(formatted, argument),
+            );
         }
         Type::Fn { parameters, result } => {
-            formatted.push_str("fn(");
-            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
-                type_format_single_line(formatted, parameter0);
-                for parameter in parameter1_up {
-                    formatted.push(' ');
-                    type_format_single_line(formatted, parameter);
-                }
-            }
-            formatted.push_str(") ");
-            type_format_single_line(formatted, result);
+            fn_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                parameters,
+                |_, _| LineSpan::Single,
+                |formatted, _, parameter| type_format_single_line(formatted, parameter),
+                |formatted, _| type_format_single_line(formatted, result),
+            );
         }
         Type::Tuple(parts) => {
-            formatted.push('*');
-            if let Some((part0, part1_up)) = parts.split_first() {
-                formatted.push('(');
-                type_format_single_line(formatted, part0);
-                for part in part1_up {
-                    formatted.push(' ');
-                    type_format_single_line(formatted, part);
-                }
-                formatted.push(')');
-            }
+            tuple_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                parts,
+                |formatted, _, part| type_format_single_line(formatted, part),
+            );
         }
         Type::Record(fields) => {
-            formatted.push('{');
-            if let Some((field0, field1_up)) = fields.split_first() {
-                type_field_format_single_line(formatted, field0);
-                for field in field1_up {
-                    formatted.push(' ');
-                    type_field_format_single_line(formatted, field);
-                }
-            }
-            formatted.push('}');
+            record_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                fields,
+                |formatted, _, field| type_field_format_single_line(formatted, field),
+            );
         }
         Type::Choice(variants) => {
-            formatted.push('[');
-            if let Some((variant0, variant1_up)) = variants.split_first() {
-                type_variant_format_single_line(formatted, variant0);
-                for variant in variant1_up {
-                    formatted.push(' ');
-                    type_variant_format_single_line(formatted, variant);
-                }
-            }
-            formatted.push(']');
+            type_choice_format(
+                formatted,
+                LineSpan::Single,
+                0,
+                variants,
+                |formatted, _, variant| type_variant_format_single_line(formatted, variant),
+            );
         }
     }
 }
@@ -16922,107 +16919,55 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
             formatted.push_str(name);
         }
         Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
-            formatted.push_str(name);
-            if let Some((argument0, argument1_up)) = arguments.split_first() {
-                formatted.push('(');
-                let line_span: LineSpan = type_line_span(type_);
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                type_format(formatted, next_indent(indent), argument0);
-                for argument in argument1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    type_format(formatted, next_indent(indent), argument);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            type_construct_format(
+                formatted,
+                type_line_span(type_),
+                indent,
+                name,
+                arguments,
+                type_format,
+            );
         }
         Type::Fn { parameters, result } => {
-            formatted.push_str("fn(");
-            let line_span: LineSpan = type_line_span(type_);
-            if let Some((parameter0, parameter1_up)) = parameters.split_first() {
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                type_format(formatted, next_indent(indent), parameter0);
-                for parameter in parameter1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    type_format(formatted, next_indent(indent), parameter);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push(')');
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            type_format(formatted, next_indent(indent), result);
+            fn_format(
+                formatted,
+                type_line_span(type_),
+                indent,
+                parameters,
+                |parameter0, parameter1_up| {
+                    type_info_length_estimate_line_span(
+                        std::iter::once(parameter0)
+                            .chain(parameter1_up)
+                            .map(|type_variant_value| 1 + type_length_estimate(type_variant_value))
+                            .sum::<usize>(),
+                    )
+                },
+                type_format,
+                |formatted, indent| type_format(formatted, indent, result),
+            );
         }
         Type::Tuple(parts) => {
-            formatted.push('*');
-            if let Some((part0, part1_up)) = parts.split_first() {
-                formatted.push('(');
-                let line_span: LineSpan = type_line_span(type_);
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                type_format(formatted, next_indent(indent), part0);
-                for part in part1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    type_format(formatted, next_indent(indent), part);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                formatted.push(')');
-            }
+            tuple_format(formatted, type_line_span(type_), indent, parts, type_format);
         }
-        Type::Record(fields) => type_record_format(formatted, indent, fields),
+        Type::Record(fields) => {
+            record_format(
+                formatted,
+                type_record_line_span(fields),
+                indent,
+                fields,
+                type_field_format,
+            );
+        }
         Type::Choice(variants) => {
-            formatted.push('[');
-            match variants.split_first() {
-                None => {}
-                Some((variant0, variant1_up)) => {
-                    let line_span: LineSpan = type_line_span(type_);
-                    if line_span == LineSpan::Multiple {
-                        linebreak_indented_into(formatted, indent);
-                    }
-                    type_variant_format(formatted, indent, variant0);
-                    for variant in variant1_up {
-                        space_or_linebreak_indented_into(formatted, line_span, indent);
-                        type_variant_format(formatted, indent, variant);
-                    }
-                    if line_span == LineSpan::Multiple {
-                        linebreak_indented_into(formatted, indent);
-                    }
-                }
-            }
-            formatted.push(']');
+            type_choice_format(
+                formatted,
+                type_line_span(type_),
+                indent,
+                variants,
+                type_variant_format,
+            );
         }
     }
-}
-fn type_record_format(formatted: &mut String, indent: usize, fields: &[TypeField]) {
-    formatted.push('{');
-    match fields.split_first() {
-        None => {}
-        Some((field0, field1_up)) => {
-            let line_span: LineSpan = type_record_line_span(fields);
-            if line_span == LineSpan::Multiple {
-                linebreak_indented_into(formatted, indent);
-            }
-            type_field_format(formatted, indent, field0);
-            for field in field1_up {
-                space_or_linebreak_indented_into(formatted, line_span, indent);
-                type_field_format(formatted, indent, field);
-            }
-            if line_span == LineSpan::Multiple {
-                linebreak_indented_into(formatted, indent);
-            }
-        }
-    }
-    formatted.push('}');
 }
 
 fn type_field_format(formatted: &mut String, indent: usize, type_field: &TypeField) {
