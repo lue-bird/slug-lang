@@ -280,6 +280,7 @@ cargo install --offline --debug --path . slug
 - core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
 - consider format: only linebreaking between leading and follow-up syntax (e.g. field name - field value, or type name(arguments on the same line - last argument) when they are currently not on the same line. This might feel more intuitive for e.g. record and choice type aliases and make things like opt(span(..multiline..)) more compact and also clear
 - add more examples
+- actually make the "automatically refresh output code on type" work
 - website with online repl
 
 - consider introducing operation that can set an index after new unset items. Something like `add-unset-then`.

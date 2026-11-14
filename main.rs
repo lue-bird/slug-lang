@@ -1313,7 +1313,7 @@ fn respond_to_completion(
                     type_: _,
                 } => {
                     if let Some(parameters) = parameters {
-                        for name in &parameters.parameters {
+                        for name in &parameters.values {
                             if name.start == use_start {
                                 return None;
                             }
@@ -1336,7 +1336,7 @@ fn respond_to_completion(
                         }
                         available_existing_variables.insert(&type_parameter.value);
                     }
-                    for parameter in parameters.iter().flat_map(|p| &p.parameters) {
+                    for parameter in parameters.iter().flat_map(|p| &p.values) {
                         slug::syntax_pattern_type_variables_into(
                             &mut available_existing_variables,
                             parameter,
