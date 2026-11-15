@@ -1,6 +1,4 @@
-programming language which uses indexes bound to specific arrays instead of references.
-An earlier attempt at enabling this pattern using linear types was [sloe](http://codeberg.org/lue-bird/sloe).
-
+programming language which uses indexes bound to specific array buffers instead of references.
 ```slug
 fn greet<Chars>(name str) span(Chars char)
     add-str-chars<Chars>("Hello, "str)
@@ -13,34 +11,67 @@ install with (requires having [rust installed](https://rust-lang.org/tools/insta
 cargo install --git https://codeberg.org/lue-bird/slug-lang slug
 ```
 
-[skip to syntax overview](#syntax)
+Think of how you'd parse infos from emails in a log file.
+You might try collecting some views over text and a few extra array buffers.
+```rust
+struct Email {
+    local: []char, // non-empty
+    host_labels: [][]char, // non-empty
+    top_level: []char, // non-empty
+}
+struct ParsedFileEmails {
+    emails: Vec<Email>,
+    host_labels: Vec<[]char>,
+    text: Vec<char>, // in practice you might store the text somewhere else
+}
+````
+With this setup you need to be careful: the slices could get invalidated once the underlying array buffers grow.
+So you might switch to
+```rust
+struct Email {
+    local: Range, // non-empty
+    host_labels: Range, // non-empty
+    top_level: Range, // non-empty
+}
+struct ParsedFileEmails {
+    emails: Vec<Email>,
+    host_labels: Vec<Range>,
+    text: Vec<char>,
+}
+```
+Does it feel good to write code like this?
+Wish you could specify which references/indexes point into the which collection and have the compiler verify this for you?
+Here's some slug code:
+```slug
+ty email(Host-labels Text)
+    {
+        local span(Text char)
+        host-labels span(Host-labels span(Text char))
+        top-level span(Text char)
+    }
+ty parsed-file-emails
+    {   
+        emails opt(span([Email] email([Host-labels] [Text])))
+        
+        emails-buffer buf([Email] email([Host-labels] [Text]))
+        host-labels buf([Host-labels] span([Text] char))
+        text buf([Text] char)
+    }
+```
+Now it's clear to humans and the compiler that `local` and `top-level` point into the same array buffer of chars and that `host-labels` points into a separate array buffer of ranges into the array buffer of chars.
+(`[`Some-name`]` represents an enum with just that one member, you can think of it as just a tag type for now)
 
-## 🧩 each slot/span has one associated collection
-(TODO rewrite to be more approachable)
+This is more powerful than you may think:
+- whenever a function parameter or result uses a slot or span but no buf with the same type parameters is in reach there, these bufs can be passed implicitly. This means inserting into a buf and accessing a buf for example never requires passing a buf. With that slots and spans should feel almost as convenient as plain references
+- all types know how to drop and clone themselves (using the fact that the necessary implied bufs are always present at that point). These operations tend to be cheap in slug and are thus inserted automatically
 
-TODO say why other memory approaches suck a bit:
-Individual allocation segments for recursive references and for contained slices (e.g. rust's `Box`/`String`/`Vec`/`Box<str>`/`Box<[]>`)
-  - memory is usually more , meaning it's harder to predict 
-  - usually no simple way to pre-allocate space for different purposes
-  - to drop, this usually means traversing the whole structure, wandering from pointer to pointer when all we would want to do is just delete all memory that was used for one purpose in one fell swoop
-  - pointers are usually 64 bit wide which can be wasteful
+Having these kinds of features is what makes the language fun to use in my opinion. Compare with my earlier attempt at enabling this pattern: [sloe](https://codeberg.org/lue-bird/sloe) which is probably faster on average but felt like it sucked every particle of joy out of the room :(
 
-Arenas and especially storing arenas does solve most of these,
-especially when combined with some kind of tagging system so that no arenas are accidentally confused.
-but
-  - 64 bit wide
-  - no way to free and reuse parts of it
-  - (less important) no way to traverse it
-  - ??? I swear there was more TODO
+The rules to make it all safe (checked by the compiler):
+  - you can never have multiple collections that have the same item and origin type in reach
+  - when exiting a scope where new array buffers were introduced, you cannot return slots and spans with the same origin and item type without also returning the containing array buffer 
 
-Plain integers as index and range types come with some drawbacks:
-  - collections need to be passed to every function that needs access. Adding/removing just one collection means changing a bunch of signatures and callsites. I find this tiring
-  - every access comes with a bounds check and potential crash or error handling
-  - you can accidentally use them to access the wrong collection
-  - If the underlying collections are alive for a while, items that have become useless may need to be removed and replaced with new items (think e.g. game enemies that have been eliminated).
-    Keeping indexes in sync is a common source of bugs
-
-Here's how you could represent the syntax of slug's `ty` declarations:
+For a more complex example, here's how you could represent the syntax of slug's `ty` declarations:
 ```slug
 ty type-alias(Syntax Source)
     {
@@ -49,6 +80,9 @@ ty type-alias(Syntax Source)
     }
 
 ty type(Syntax Source)
+# notice here how we use the Syntax parameters with different item types.
+# This is fine because we know these bufs are all created and destroyed at the same time.
+# Rule of thumb: One purpose = one unique type variable
     [
         Variable(span(Source char))
         Tuple(opt(span(Syntax type(Syntax Source))))
@@ -63,51 +97,48 @@ ty type(Syntax Source)
             opt(span(Syntax type(Syntax Source)))
         )
         Record(
-            {
-                names opt(span(Syntax span(Source char)))
-                values opt(span(Syntax type(Syntax Source)))
-            }
+            opt(span(Syntax type-record-field(Syntax Source)))
         )
-        Choice(
-            {
-                names opt(span(Syntax span(Source char)))
-                values
-                    opt(
-                        span(
-                            Syntax
-                            opt(span(Syntax type(Syntax Source)))
-                        )
-                    )
-            }
+        Choice( 
+            opt(span(Syntax type-choice-variant(Syntax Source)))
         )
     ]
-```
-The rule to make it all safe: you can never have multiple collections that have the same item and origin type in reach.
 
-Use nested bufs instead of one big one to operate on one chunk in a clear way, e.g. pre-allocating, altering, reusing memory, stepping, quick bulk deletion / bulk access / bulk modification without needing to reach into _all_ items of the same kind.
-```slug
-ty project-state
+ty type-record-field(Syntax Source)
     {
-    type-aliases opt(span([Syntax] type-alias([Syntax] [Source])))
-    
-    source buf([Source] char)
-    names buf([Syntax] span([Source] char))
-    types buf([Syntax] type([Syntax] [Source]))
-    type-variant-values buf([Syntax] opt(span([Syntax] type([Syntax] [Source]))))
-    type-aliases-buf buf([Syntax] type-alias([Syntax] [Source]))
+        name span(Source char)
+        value type(Syntax Source)
+    }
+
+ty type-choice-variant(Syntax Source)
+    {
+        name span(Source char)
+        values opt(span(Syntax type(Syntax Source)))
+    }
+
+ty file
+    {
+        type-aliases opt(span([Syntax] type-alias([Syntax] [Source])))
+        
+        source buf([Source] char)
+        names buf([Syntax] span([Source] char))
+        types buf([Syntax] type([Syntax] [Source]))
+        type-variant-values buf([Syntax] opt(span([Syntax] type([Syntax] [Source]))))
+        type-aliases-buf buf([Syntax] type-alias([Syntax] [Source]))
     }
 
 ty state
-# multiple open workspaces which have independent state
+# we store each file independently so that e.g. removing/replacing one file
+# doesn't need to crawl through the syntax tree to free each slot and span
     {
-    projects opt(span([Project]))
-    projects-buf buf([Project] project-state)
+        files opt(span([File] file))
+        projects-buf buf([File] file)
     }
 
 fn initial-state() state
     {
-    projects No<opt(span([Project] project-state))>
-    projects-buf buf-empty<[Project] project-state>()
+        projects No<opt(span([File] file))>
+        projects-buf buf-empty<[File] file>()
     }
 ```
 
@@ -259,6 +290,30 @@ For other editors, there's usually a way to specify `slug` as the language serve
 
 
 > As a user of slug you can stop reading here. The rest is for developers and those interested in language design
+
+## ramblings
+Allocating individual recursive references and slices (e.g. rust's `Box`/`String`/`Vec`/`Box<str>`/`Box<[]>`)
+  - memory is usually more , meaning it's harder to predict 
+  - usually no simple way to pre-allocate space for different purposes
+  - to drop, this usually means traversing the whole structure, wandering from pointer to pointer when all we would want to do is just delete all memory that was used for one purpose in one fell swoop
+  - pointers are usually 64 bit wide which can be wasteful
+
+Arenas and especially storing an arena for each "group of memory allocations for a specific purpose" does solve most of these,
+especially when combined with some kind of tagging system so that no arenas are accidentally confused.
+but
+  - let's say you grow a few buffers stored in an arena multiple times. Now you have a good bit of stale ("leaked") memory around that you can't give back. I think this can be fine but it's iffy
+  - 64 bit wide
+  - no way to free and reuse parts of it
+  - no way to traverse it
+
+We could then consider creating an arena for every item type. TODO
+
+Plain integers as index and range types come with some drawbacks:
+  - collections need to be passed to every function that needs access. Adding/removing just one collection means changing a bunch of signatures and callsites. I find this tiring
+  - every access comes with a bounds check and potential crash or error handling
+  - you can accidentally use them to access the wrong collection
+  - If the underlying collections are alive for a while, items that have become useless may need to be removed and replaced with new items (think e.g. game enemies that have been eliminated).
+    Keeping indexes in sync is a common source of bugs
 
 ## dev setup
 to recompile, run
