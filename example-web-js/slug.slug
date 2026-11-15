@@ -1,0 +1,230 @@
+
+ty state
+    {
+        mouse-x u32
+        mouse-y u32
+    }
+
+fn initial-state() state
+    {
+        mouse-x 0u32
+        mouse-y 0u32
+    }
+
+ty event
+    [
+        Mouse-moved({x u32 y u32})
+        Event-json-had-an-unexpected-shape
+    ]
+
+fn on-event(event event state state) state
+    if event {
+        Mouse-moved({x moved-to-x y moved-to-y})
+            = {mouse-x _ mouse-y _} state
+            {
+                mouse-x moved-to-x
+                mouse-y moved-to-y
+            }
+        Event-json-had-an-unexpected-shape state
+    }
+
+fn view<View>(state state) html(View event)
+    = {mouse-x mouse-x mouse-y mouse-y} state
+    html-el(
+        "p"str
+        add<View>(html-attribute<View event>("style"str "height:100vh;"str))
+        .slot-to-span()
+        .span-add(
+            Event-listener<html-modifier(View event)>(
+                "mousemove"str
+                fn(event json(View))
+                    if
+                        {
+                            x
+                                event.json-field-value("clientX"str)
+                                .opt-map-merge(fn(json json(View)) json-to-u32(json))
+                            y
+                                event.json-field-value("clientY"str)
+                                .opt-map-merge(fn(json json(View)) json-to-u32(json))
+                        }
+                    {
+                        {x Yes(x) y Yes(y)}
+                            Mouse-moved<event>({x x y y})
+                        _ Event-json-had-an-unexpected-shape<event>
+                    }
+            )
+        )
+        .opt-yes()
+        add<View>(
+            Text<html(View event)>(
+                Dynamic<text(View)>(
+                    add-str-chars<View>("Hello, world. Your mouse is at: x="str)
+                    .span-add-u32-chars(mouse-x)
+                    .span-add-str-chars(", y="str)
+                    .span-add-u32-chars(mouse-y)
+                    .opt-yes()
+                )
+            )
+        )
+        .slot-to-span()
+        .opt-yes()
+    )
+
+# the rest of the file is just a types and helpers
+
+ty html(View Event)
+    [
+        Text(text(View))
+        Element(
+            str
+            opt(span(View html-modifier(View Event)))
+            opt(span(View html(View Event)))
+        )
+    ]
+
+fn html-el(
+    tag str
+    modifiers opt(span(View html-modifier(View Event)))
+    subs opt(span(View html(View Event)))
+)
+    html(View Event)
+    Element<html(View Event)>(tag modifiers subs)
+
+ty html-modifier(View Event)
+    [
+        Attribute(str text(View))
+        Event-listener(str fn(json(View)) Event)
+    ]
+
+fn html-attribute<View Event>(key str value str) html-modifier(View Event)
+    Attribute<html-modifier(View Event)>(
+        key
+        Static<text(View)>(value)
+    )
+
+ty text(Chars)
+# allocate only when necessary
+    [Static(str) Dynamic(opt(span(Chars char)))]
+
+ty json(Json)
+# only a subset for this example
+    [
+        Null
+        True
+        False
+        Number(f32)
+        String(opt(span(Json char)))
+        Object(
+            opt(span(Json json-object-field(Json)))
+        )
+    ]
+
+ty json-object-field(Json)
+    {
+        name opt(span(Json char))
+        value json(Json)
+    }
+
+fn json-to-u32(json json(Json)) opt(u32)
+    if json {
+        Number(n)
+            i32-to-u32(f32-round-nearest-else-away-from-0-to-i32-clamp(n))
+        _ No<opt(u32)>
+    }
+
+fn json-field-value(
+    json json(Json)
+    field-name str
+)
+    opt(json(Json))
+    if json {
+        Object(fields)
+            json-object-field-value(fields field-name)
+        _ No<opt(json(Json))>
+    }
+
+fn json-object-field-value(
+    fields opt(span(Json json-object-field(Json)))
+    field-name str
+)
+    opt(json(Json))
+    if
+        opt-span-step-while(
+            fields
+            Up<[Down]>
+            field-name
+            fn(field-name str field slot(Json json-object-field(Json)))
+                = {name name value value} item(field)
+                if opt-span-equals-str-chars(name field-name) {
+                    No Going<[Done(json(Json))]>(field-name)
+                    Yes Done<[Going(str)]>(value)
+                }
+        )
+    {
+        Going(_) No<opt(json(Json))>
+        Done(value _) Yes<[No]>(value)
+    }
+
+fn opt-span-equals-str-chars(
+    span opt(span(Chars char))
+    prefix str
+)
+    [Yes No]
+    = step-result
+        opt-span-step-while(
+            span
+            Up<[Down]>
+            prefix
+            fn(state str slot slot(Chars char))
+                = *(str-start opt-str-after) str-start(state)
+                if u32-order(char-to-u32(item(slot)) char-to-u32(str-start)) {
+                    Equal
+                        if opt-str-after {
+                            No Done<[Going(str)]>(Prefixed<[Not-prefixed]>)
+                            Yes(str-after) Going<[Done([Prefixed Not-prefixed])]>(str-after)
+                        }
+                    _
+                        Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
+                }
+        )
+    if step-result {
+        Going(_) No<[Yes]>
+        Done(Not-prefixed _) No<[Yes]>
+        Done(Prefixed span-after-prefix)
+            if u32-order(opt-span-length(span-after-prefix) 0u32) {
+                Equal Yes<[No]>
+                _ No<[Yes]>
+            }
+    }
+
+fn opt-map-merge(opt opt(A) f fn(A) opt(B)) opt(B)
+    if opt {
+        No No<opt(B)>
+        Yes(yes) f(yes)
+    }
+
+fn opt-yes(yes Yes) opt(Yes)
+    Yes<[No]>(yes)
+
+# to make interfacing on the js side a bit easier by having nicer buf names
+
+fn view-with-explicit-bufs(
+    {
+        state state state
+        htmls htmls buf(View html(View event))
+        html-modifiers html-modifiers buf(View html-modifier(View event))
+        text text buf(View char)
+    }
+)
+    {
+        html html(View event)
+        htmls buf(View html(View event))
+        html-modifiers buf(View html-modifier(View event))
+        text buf(View char)
+    }
+    {
+        html view<View>(state)
+        htmls htmls
+        html-modifiers html-modifiers
+        text text
+    }
