@@ -7074,9 +7074,10 @@ fn project_type_alias_to_js(
     for parameter in parameters {
         output.push_str("@template ");
         name_to_uppercase_local_js(output, parameter);
+        output.push(' ');
     }
     output.push_str(" @typedef {");
-    type_to_js(output, aliased_type);
+    type_to_js(output, aliased_type, type_aliases);
     output.push_str("} ");
     output.push_str(&name_to_uppercase_js_segment(name));
     output.push_str("\n*/\n");
@@ -7133,7 +7134,7 @@ fn syntax_project_fn_to_js(
     );
     for (parameter_index, parameter_type) in parameter_types.iter().flatten().enumerate() {
         output.push_str("@param {");
-        type_to_js(output, parameter_type);
+        type_to_js(output, parameter_type, type_aliases);
         output.push_str("} a");
         use std::fmt::Write as _;
         _ = write!(output, "{parameter_index}");
@@ -7144,9 +7145,9 @@ fn syntax_project_fn_to_js(
         for implicit_buf in &implicit_bufs {
             type_buf_js_variable_name(output, &implicit_buf.origin, &implicit_buf.item);
             output.push_str(": Buf<");
-            type_to_js(output, &implicit_buf.origin);
+            type_to_js(output, &implicit_buf.origin, type_aliases);
             output.push_str(", ");
-            type_to_js(output, &implicit_buf.item);
+            type_to_js(output, &implicit_buf.item, type_aliases);
             output.push_str(">, ");
         }
         for type_parameter in type_parameters {
@@ -7164,7 +7165,7 @@ fn syntax_project_fn_to_js(
     }
 
     output.push_str("@returns {");
-    type_to_js(output, result_type);
+    type_to_js(output, result_type, type_aliases);
     output.push_str("}\n*/\n");
     let function_scope_start = expression_start(syntax_result, expressions);
     output.push_str("export function ");
@@ -7233,7 +7234,11 @@ fn syntax_project_fn_to_js(
     js_scope_result_variable(output, function_scope_start);
     output.push_str(";\n}\n\n");
 }
-fn type_to_js(output: &mut String, type_: &Type) {
+fn type_to_js(
+    output: &mut String,
+    type_: &Type,
+    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+) {
     match type_ {
         Type::Variable(name) => {
             name_to_uppercase_local_js(output, name);
@@ -7244,7 +7249,7 @@ fn type_to_js(output: &mut String, type_: &Type) {
             } else {
                 output.push('[');
                 for part in parts {
-                    type_to_js(output, part);
+                    type_to_js(output, part, type_aliases);
                     output.push_str(", ");
                 }
                 output.push(']');
@@ -7258,7 +7263,7 @@ fn type_to_js(output: &mut String, type_: &Type) {
                 for field in fields {
                     output.push_str(&name_to_lowercase_js(&field.name));
                     output.push_str(": ");
-                    type_to_js(output, &field.value);
+                    type_to_js(output, &field.value, type_aliases);
                     output.push_str(", ");
                 }
                 output.push('}');
@@ -7269,7 +7274,11 @@ fn type_to_js(output: &mut String, type_: &Type) {
                 output.push_str(choice_empty_js_type_name);
             }
             Some((variant0, variant1_up)) => {
-                fn variant_type_to_js(output: &mut String, variant: &TypeVariant) {
+                fn variant_type_to_js(
+                    output: &mut String,
+                    variant: &TypeVariant,
+                    type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
+                ) {
                     output.push_str("{ ");
                     output.push_str(&name_to_lowercase_js(&variant.name));
                     output.push_str(": ");
@@ -7279,13 +7288,13 @@ fn type_to_js(output: &mut String, type_: &Type) {
                         }
                         1 => {
                             if let Some(variant_value) = variant.values.first() {
-                                type_to_js(output, variant_value);
+                                type_to_js(output, variant_value, type_aliases);
                             }
                         }
                         2.. => {
                             output.push('[');
                             for variant_value in &variant.values {
-                                type_to_js(output, variant_value);
+                                type_to_js(output, variant_value, type_aliases);
                                 output.push_str(", ");
                             }
                             output.push(']');
@@ -7293,10 +7302,10 @@ fn type_to_js(output: &mut String, type_: &Type) {
                     }
                     output.push_str(" }");
                 }
-                variant_type_to_js(output, variant0);
+                variant_type_to_js(output, variant0, type_aliases);
                 for variant in variant1_up {
                     output.push_str(" | ");
-                    variant_type_to_js(output, variant);
+                    variant_type_to_js(output, variant, type_aliases);
                 }
             }
         },
@@ -7304,10 +7313,10 @@ fn type_to_js(output: &mut String, type_: &Type) {
             output.push_str(&name_to_uppercase_js_segment(name));
             if let Some((argument0, argument1_up)) = arguments.split_first() {
                 output.push('<');
-                type_to_js(output, argument0);
+                type_to_js(output, argument0, type_aliases);
                 for argument in argument1_up {
                     output.push_str(", ");
-                    type_to_js(output, argument);
+                    type_to_js(output, argument, type_aliases);
                 }
                 output.push('>');
             }
@@ -7316,11 +7325,25 @@ fn type_to_js(output: &mut String, type_: &Type) {
             output.push('(');
             for parameter in parameters {
                 output.push_str("_: ");
-                type_to_js(output, parameter);
+                type_to_js(output, parameter, type_aliases);
                 output.push_str(", ");
             }
+            let implicit_bufs =
+                function_signature_implicit_bufs(parameters.iter(), Some(result), type_aliases);
+            if !implicit_bufs.is_empty() {
+                output.push_str("$: { ");
+                for implicit_buf in &implicit_bufs {
+                    type_buf_js_variable_name(output, &implicit_buf.origin, &implicit_buf.item);
+                    output.push_str(": Buf<");
+                    type_to_js(output, &implicit_buf.origin, type_aliases);
+                    output.push_str(", ");
+                    type_to_js(output, &implicit_buf.item, type_aliases);
+                    output.push_str(">, ");
+                }
+                output.push('}');
+            }
             output.push_str(") => ");
-            type_to_js(output, result);
+            type_to_js(output, result, type_aliases);
         }
     }
 }
@@ -7351,12 +7374,12 @@ fn syntax_pattern_to_js_matches_condition(
                         .as_ref()
                         .is_some_and(|values| values.values.len() >= 2)
                     {
-                        format!("{to_match}.{}", name_to_lowercase_js(&name.value))
-                    } else {
                         format!(
                             "{to_match}.{}[{value_index}]",
                             name_to_lowercase_js(&name.value)
                         )
+                    } else {
+                        format!("{to_match}.{}", name_to_lowercase_js(&name.value))
                     },
                 );
             }
@@ -7803,7 +7826,7 @@ fn syntax_expression_to_js<'a>(
         } => {
             js_scope_result_variable(output, scope_start);
             output.push_str(" = (");
-            for (parameter_index, _) in parameters.iter().enumerate() {
+            for (parameter_index, _) in parameters.iter().flat_map(|p| &p.values).enumerate() {
                 output.push('a');
                 use std::fmt::Write as _;
                 _ = write!(output, "{parameter_index}");
@@ -8176,7 +8199,7 @@ fn specialize_implicits_js(
             output.push('$');
         }
     } else {
-        output.push('{');
+        output.push_str("{ ...$, ");
         for implicit_buf in implicit_bufs {
             type_buf_js_variable_name(output, &implicit_buf.origin, &implicit_buf.item);
             output.push_str(": $[");
@@ -8205,6 +8228,10 @@ fn specialize_implicits_js(
                 &specialized_implicit_buf_origin,
                 &specialized_implicit_buf_item,
             );
+            // to debug buf names:
+            // output.push_str(
+            //     "] || (function() { throw Error('buf missing. available: ' + $); })()",
+            // );
             output.push_str("], ");
         }
         for (type_variable, type_variable_replacement_type) in type_variables_to_substitute {

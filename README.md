@@ -197,10 +197,10 @@ resulting-expression
 
 # pattern match, checked for exhaustiveness
 if value {
-first-query-pattern
-    first-result
-second-query-pattern
-    second-result
+    first-query-pattern
+        first-result
+    second-query-pattern
+        second-result
 }
 
 # project function declaration.
@@ -236,9 +236,9 @@ ty pair(First Second-parameter) type-using-the-type-variables
 # a "choice type" that can come in different shapes ("variants")
 # which each have a unique name and one associated value.
 [
-First-option-no-associated-values
-Second-option(some(u32))
-Third-option-multiple-arguments(u32 f32)
+    First-option-no-associated-values
+    Second-option(some(u32))
+    Third-option-multiple-arguments(u32 f32)
 ]
 
 # creating variants.
@@ -291,6 +291,13 @@ For other editors, there's usually a way to specify `slug` as the language serve
 
 > As a user of slug you can stop reading here. The rest is for developers and those interested in language design
 
+
+## dev setup
+to recompile, run
+```bash
+cargo install --offline --debug --path . slug
+```
+
 ## ramblings
 Allocating individual recursive references and slices (e.g. rust's `Box`/`String`/`Vec`/`Box<str>`/`Box<[]>`)
   - memory is usually more , meaning it's harder to predict 
@@ -315,12 +322,6 @@ Plain integers as index and range types come with some drawbacks:
   - If the underlying collections are alive for a while, items that have become useless may need to be removed and replaced with new items (think e.g. game enemies that have been eliminated).
     Keeping indexes in sync is a common source of bugs
 
-## dev setup
-to recompile, run
-```bash
-cargo install --offline --debug --path . slug
-```
-
 
 ## ergonomic improvements over sloe
 - eliminating the need for any type variables and `Origin-erased`
@@ -332,10 +333,14 @@ cargo install --offline --debug --path . slug
 - more familiar syntax
 
 ## TODO
+- report expression variants where the type contains the variant name but a different count of values
+- js change variant representation to `{tag:""} | {tag:"", v:value} | {tag,v{index}:value {index}}` which should help exhaustive switch() {} and create less objects for multi-value variants
 - core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
+- core add opt-yes for pipe-ability. Alternatively allow piping into Variant constructors (probably better?)
+- provide better errors for record query patterns with mismatching type
+- on prepare rename, reject variants
 - consider format: only linebreaking between leading and follow-up syntax (e.g. field name - field value, or type name(arguments on the same line - last argument) when they are currently not on the same line. This might feel more intuitive for e.g. record and choice type aliases and make things like opt(span(..multiline..)) more compact and also clear
 - add more examples
-- actually make the "automatically refresh output code on type" work
 - website with online repl
 
 - consider introducing operation that can set an index after new unset items. Something like `add-unset-then`.
@@ -346,7 +351,10 @@ cargo install --offline --debug --path . slug
 
 ## known design weaknesses
 - The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes operations like recursive traversals quadratic.
-  My hope is that compile optimizations can eliminate many of those. If this assumptions turns out to be false, I may need to look into e.g. "automatic input-only parameters = don't drop" and or lobster/...-adjacent stuff. There may also be a more efficient representation for slot counts, like an enum(u2){0,1,2,look-in-side-list} for every item that looks in a side-list for higher counts.
+  My hope is that compile optimizations can eliminate many of those. If this assumptions turns out to be false, look into e.g.
+    - not doing anything on drop for slot/span if the containing buf only has 1 owner and is dropped in the sme breath
+    - "automatic input-only parameters = don't drop" and or lobster/...-adjacent stuff
+    - a more efficient representation for slot counts, like an enum(u2){0,1,2,look-in-side-list} for every item that looks in a side-list for higher counts
 - building spans of a nested structure is quadratic because there is no concept of "claimed unset slots/spans"
 - while implicit passing of bufs is one "killer convenience feature" of slug, it comes with a bunch of drawbacks.
   For example, if bufs were explicitly passed,
@@ -391,6 +399,7 @@ cargo install --offline --debug --path . slug
   They should live in separate bufs to save space and be faster.
   
   Also similarly, there could be a distinction for shared mutable and shared immutable slots. I wonder if there is a point?
+- dot-piping into tuples
 - add go as an output target. Rejected because there's nice way to locally disable array bounds checks
 
 ### explicit share-able view types (outdated syntax)
