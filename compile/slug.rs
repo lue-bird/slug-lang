@@ -4030,8 +4030,8 @@ fn syntax_query_pattern_check<'a>(
                     .map(|p| remaining_expected_type_fields.swap_remove(p))
                 else {
                     let error_message: String = format!(
-                        "This pattern matches a record with the field .{} but the expected record type here only expects these fields
-.{}
+                        "This pattern matches a record with the field {} but the expected record type here only expects these fields
+{}
 Are there duplicate fields?
 Otherwise, you might have intended this pattern to belong to a different if. Use parens for the if case results of ifs with multiple cases",
                             field.name.value,
@@ -4370,27 +4370,34 @@ pub fn function_signature_implicit_bufs<'a>(
 ) -> std::collections::HashSet<TypeBuf> {
     let mut type_bufs = std::collections::HashSet::new();
     {
-        let mut parameter_type_bufs_to_ignore = std::collections::HashSet::new();
+        let mut parameter_type_directly_reachable_bufs = std::collections::HashSet::new();
         for parameter in parameters.clone() {
             type_reachable_bufs(
                 parameter,
                 vec![],
                 type_aliases,
                 &mut |newly_reachable, _| {
-                    parameter_type_bufs_to_ignore.insert(newly_reachable);
+                    parameter_type_directly_reachable_bufs.insert(newly_reachable);
                 },
             );
         }
         for parameter in parameters {
             type_implicit_bufs(
                 parameter,
-                &parameter_type_bufs_to_ignore,
+                &parameter_type_directly_reachable_bufs,
                 type_aliases,
                 &mut type_bufs,
             );
         }
     }
     if let Some(result) = result {
+        // we do not consider parameter_type_directly_reachable_bufs
+        // to be reachable in the result because this would allow
+        // creating inaccessible slots and spans out of thin air, like
+        // fn buf-add(_ buf(Origin Item) Item) slot(Origin Item)
+        // = slot buf-add(buf-empty<* u32>() 1u32)
+        // = new-buf-with-the-same-origin buf-empty<* u32>()
+        // item() !!crash
         type_insert_implicit_bufs_ignoring_reachable(result, type_aliases, &mut type_bufs);
     }
     type_bufs
@@ -4681,7 +4688,7 @@ fn project_type_alias_to_zig(
     }
     output.push_str("\n");
     {
-        output.push_str("fn @\"clone ");
+        output.push_str("pub fn @\"clone ");
         output.push_str(&name_to_uppercase_zig(name));
         output.push_str("\"(");
         for parameter in parameters {
@@ -4707,7 +4714,7 @@ fn project_type_alias_to_zig(
         output.push_str("}\n");
     }
     {
-        output.push_str("fn @\"drop ");
+        output.push_str("pub fn @\"drop ");
         output.push_str(&name_to_uppercase_zig(name));
         output.push_str("\"(");
         for parameter in parameters {
@@ -7075,14 +7082,14 @@ fn project_type_alias_to_js(
     output.push_str("\n*/\n");
 
     // can be improved: add @param and @type and @template comment
-    output.push_str("function drop$");
+    output.push_str("export function drop$");
     output.push_str(&name_to_uppercase_js_segment(name));
     output.push_str("(it, $) {\n");
     js_variable_drop(output, "it", aliased_type, type_aliases);
     output.push_str("}\n");
 
     // can be improved: add @param and @type and @template comment
-    output.push_str("function clone$");
+    output.push_str("export function clone$");
     output.push_str(&name_to_uppercase_js_segment(name));
     output.push_str("(it, $) {\n");
     js_variable_clone(output, "it", aliased_type, type_aliases);
@@ -10604,7 +10611,7 @@ fn type_check_introduced_bufs_do_not_overlap(
     });
 }
 fn introduced_reachable_buf_overlaps_error_message() -> Box<str> {
-    Box::from("A buf with the same origin and is already reachable here:
+    Box::from("A buf with the same origin and is already reachable here.
 Having 2 possibly different bufs of the same type could allow accessing slots/spans from one buf at a different buf")
 }
 
@@ -11965,7 +11972,7 @@ pub static core_fns: std::sync::LazyLock<std::collections::HashMap<Name, Checked
                 documentation: "Saturating cast to fit it into an i32",
                 type_parameters: vec![],
                 parameters: vec![type_u32],
-                result: type_p32,
+                result: type_i32,
             },
             CoreFnInfo {
                 name: "u32-round-to-nearest-f32-else-even",
