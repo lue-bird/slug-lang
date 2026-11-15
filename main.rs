@@ -1044,7 +1044,7 @@ fn respond_to_prepare_rename(
             start: use_start,
             value: name,
         }),
-        slug::SyntaxSymbol::VariantOrUnknown(name) => slug::name_range(name),
+        slug::SyntaxSymbol::VariantOrUnknown(_) => return None,
         slug::SyntaxSymbol::ProjectFnOrVariableUnknown {
             name,
             construct_info: _,

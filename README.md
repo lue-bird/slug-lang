@@ -335,9 +335,8 @@ Plain integers as index and range types come with some drawbacks:
 ## TODO
 - js change variant representation to `{tag:""} | {tag:"", v:value} | {tag,v{index}:value {index}}` which should help exhaustive switch() {} and create less objects for multi-value variants
 - core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
-- core add opt-yes for pipe-ability. Alternatively allow piping into Variant constructors (probably better?)
+- allow piping into Variant constructor. Then remove fn opt-yes in examples
 - provide better errors for record query patterns with mismatching type
-- on prepare rename, reject variants
 - consider format: only linebreaking between leading and follow-up syntax (e.g. field name - field value, or type name(arguments on the same line - last argument) when they are currently not on the same line. This might feel more intuitive for e.g. record and choice type aliases and make things like opt(span(..multiline..)) more compact and also clear
 - add more examples
 - website with online repl
