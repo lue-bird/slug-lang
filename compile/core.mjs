@@ -56,6 +56,25 @@ export function f32$to_string(n) {
 export function buf$counts_view(buf) {
   return new Uint16Array(buf.counts);
 }
+/** @template Origin, Item
+ * @param {Buf<Origin, Item>} buf
+ * @param {Opt<Span<Origin, Item>>} span
+ */
+export function buf$optSpanSlice(buf, span) {
+  if ("no" in span) {
+    return [];
+  } else {
+    return buf$spanSlice(buf, span.yes);
+  }
+}
+/** @template Origin, Item
+ * @param {Buf<Origin, Item>} buf
+ * @param {Span<Origin, Item>} span
+ */
+export function buf$spanSlice(buf, span) {
+  return buf.items.slice(span.start, span.start + span.length);
+}
+
 /** @param {Order} _ @returns {void} */
 export function order$drop(_) {}
 /** @param {Order} _ @returns {void} */
