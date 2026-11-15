@@ -85,17 +85,17 @@ export function buf$spanSlice(buf, span) {
 }
 
 /** @param {Order} _ @returns {void} */
-export function order$drop(_) {}
+export function drop$Order(_) {}
 /** @param {Order} _ @returns {void} */
-export function order$clone(_) {}
+export function clone$Order(_) {}
 /** @template $Yes @param {Opt<$Yes>} opt @param {{ dropYes: (_: $Yes) => void }} $ opt @returns {void} */
-export function opt$drop(opt, $) {
+export function drop$Opt(opt, $) {
   if ("yes" in opt) {
     $.dropYes(opt.yes);
   }
 }
 /** @template $Yes @param {Opt<$Yes>} opt @param {{ cloneYes: (_: $Yes) => void }} $ opt @returns {void} */
-export function opt$clone(opt, $) {
+export function clone$Opt(opt, $) {
   if ("yes" in opt) {
     $.cloneYes(opt.yes);
   }
@@ -468,43 +468,46 @@ export function span_end_of_length_positive(span, length) {
     },
   ];
 }
-/** @template $Origin, $Item, $State
+/** @template $Origin, $Item, $State, $Ctx
  * @param {Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{(state: $State, slot: Slot<$Origin, $Item>) => $State} step
+ * @param{(state: $State, slot: Slot<$Origin, $Item>, $: $Ctx) => $State} step
+ * @param {$Ctx} $
  * @returns {$State} */
-export function span_step(span, direction, state, step) {
+export function span_step(span, direction, state, step, $) {
   if ("up" in direction) {
     for (let i = span.start; i < span.start + span.length; i++) {
-      state = step(state, i);
+      state = step(state, i, $);
     }
   } else {
     for (let i = span.start + span.length - 1; i >= span.start; i--) {
-      state = step(state, i);
+      state = step(state, i, $);
     }
   }
   return state;
 }
-/** @template $Origin, $Item, $State
+/** @template $Origin, $Item, $State, $Ctx
  * @param {Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param{$State} state
- * @param{(state: $State, slot: Slot<$Origin, $Item>) => $State} step
+ * @param{(state: $State, slot: Slot<$Origin, $Item>, $: $Ctx) => $State} step
+ * @param {$Ctx} $
  * @returns {$State} */
-export function opt_span_step(span, direction, state, step) {
-  return "no" in span ? state : span_step(span.yes, direction, state, step);
+export function opt_span_step(span, direction, state, step, $) {
+  return "no" in span ? state : span_step(span.yes, direction, state, step, $);
 }
-/** @template $Done, $Going, $Origin, $Item
+/** @template $Done, $Going, $Origin, $Item, $Ctx
  * @param {Span<$Origin, $Item>} span
  * @param{{ up: void } | { down: void }} direction
  * @param {$Going} state
- * @param {(state: $Going, slot: Slot<$Origin, $Item>) => { going: $Going } | { done: $Done }} step
+ * @param {(state: $Going, slot: Slot<$Origin, $Item>, $: $Ctx) => { going: $Going } | { done: $Done }} step
+ * @param {$Ctx} $
  * @returns {{ going: $Going } | { done: [$Done, Opt<Span<$Origin, $Item>>] }} */
-export function span_step_while(span, direction, state, step) {
+export function span_step_while(span, direction, state, step, $) {
   if ("up" in direction) {
     for (let i = span.start; i < span.start + span.length; i++) {
-      const step_result = step(state, i);
+      const step_result = step(state, i, $);
       if ("done" in step_result) {
         const rest_length = span.start + span.length - 1 - i;
         return {
@@ -520,7 +523,7 @@ export function span_step_while(span, direction, state, step) {
     }
   } else {
     for (let i = span.start + span.length - 1; i >= span.start; i--) {
-      const step_result = step(state, i);
+      const step_result = step(state, i, $);
       if ("done" in step_result) {
         const rest_length = i - span.start;
         return {
@@ -537,15 +540,16 @@ export function span_step_while(span, direction, state, step) {
   }
   return { going: state };
 }
-/** @template $Done, $Going, $Origin, $Item
+/** @template $Done, $Going, $Origin, $Item, $Ctx
  * @param {Opt<Span<$Origin, $Item>>} span
  * @param{{ up: void } | { down: void }} direction
  * @param {$Going} state
- * @param {(state: $Going, slot: Slot<$Origin, $Item>) => { going: $Going } | { done: $Done }} step
+ * @param {(state: $Going, slot: Slot<$Origin, $Item>, $: $Ctx) => { going: $Going } | { done: $Done }} step
+ * @param {$Ctx} $
  * @returns {{ going: $Going } | { done: [$Done, Opt<Span<$Origin, $Item>>] }} */
-export function opt_span_step_while(span, direction, state, step) {
+export function opt_span_step_while(span, direction, state, step, $) {
   if ("no" in span) return { going: state };
-  return span_step_while(span.yes, direction, state, step);
+  return span_step_while(span.yes, direction, state, step, $);
 }
 
 /** @template $Item, $Origin
@@ -771,14 +775,14 @@ export function replace(slot, new_item, $) {
   return old_item;
 }
 /** @template $In, $Item, $Origin, $Out
- * @param {{ "buf(Origin Item)": Buf<$Origin, $Item> }} $
  * @param {Slot<$Origin, $Item>} slot
  * @param {$In} in_
- * @param {(inø: $In, item:$Item) => [$Out, $Item]} step
+ * @param {(inø: $In, item:$Item, $: { "buf(Origin Item)": Buf<$Origin, $Item> }) => [$Out, $Item]} step
+ * @param {{ "buf(Origin Item)": Buf<$Origin, $Item> }} $
  * @returns {$Out} */
 export function item_step(slot, in_, step, $) {
   const item = $["buf(Origin Item)"].items[slot];
-  const [stepped_out, stepped_item] = step(in_, item);
+  const [stepped_out, stepped_item] = step(in_, item, $);
   $["buf(Origin Item)"].items[slot] = stepped_item;
   return stepped_out;
 }
