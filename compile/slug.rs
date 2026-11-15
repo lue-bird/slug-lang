@@ -9350,7 +9350,7 @@ If there should only ever by one variant, using a record with a single field is 
                         choices_used,
                     )
                 })
-                .collect()
+                .collect::<Option<Vec<_>>>()
             else {
                 return None;
             };
@@ -9380,6 +9380,12 @@ If there should only ever by one variant, using a record with a single field is 
                             return None;
                         }
                     }
+                    check_for_value_count_different_from_expected_type(
+                        errors,
+                        || name_range(with_start_position_as_ref(name)),
+                        checked_value_types.len(),
+                        expected_value_types,
+                    );
                     Some(checked_type)
                 }
                 None => Some(Type::Choice(
