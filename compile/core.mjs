@@ -67,6 +67,15 @@ export function buf$optSpanSlice(buf, span) {
     return buf$spanSlice(buf, span.yes);
   }
 }
+/** Sets its length to 0 but does not deallocate.
+ * **Important: only valid if slug code holds no references to this buf**
+ * @template Origin, Item
+ * @param {Buf<Origin, Item>} buf
+ */
+export function buf$clear(buf) {
+  buf.items.length = 0;
+  buf.counts.resize(0);
+}
 /** @template Origin, Item
  * @param {Buf<Origin, Item>} buf
  * @param {Span<Origin, Item>} span
