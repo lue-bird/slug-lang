@@ -18,7 +18,6 @@ export default grammar({
         $.keyword_ty,
         $.type_name,
         optional(seq("(", repeat($.type_variable), ")")),
-        repeat($.comment),
         $.type,
       ),
     keyword_ty: ($) => "ty",
@@ -31,7 +30,6 @@ export default grammar({
         repeat($.pattern_typed),
         ")",
         $.type,
-        // repeat($.comment) are already included in expression
         $.expression,
       ),
 

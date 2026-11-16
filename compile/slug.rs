@@ -799,7 +799,7 @@ fn parse_before_next_linebreak_or_end_as_str<'a>(state: &mut ParseState<'a>) -> 
 }
 
 /// a valid slug symbol that must be followed by a character that could not be part of an slug identifier
-fn parse_slug_keyword_as_start(
+fn parse_syntax_keyword_as_start(
     state: &mut ParseState,
     symbol: &str,
 ) -> Option<lsp_types::Position> {
@@ -815,27 +815,27 @@ fn parse_slug_keyword_as_start(
         None
     }
 }
-fn parse_slug_whitespace(state: &mut ParseState) {
+fn parse_syntax_whitespace(state: &mut ParseState) {
     while parse_linebreak(state)
         || parse_same_line_char_if(state, |c| c.is_whitespace() || c == ',')
     {}
 }
-fn parse_slug_comments(state: &mut ParseState) -> Option<SyntaxComments> {
-    let Some(line0) = parse_slug_comment(state) else {
+fn parse_syntax_comments(state: &mut ParseState) -> Option<SyntaxComments> {
+    let Some(line0) = parse_syntax_comment(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut line1_up = Vec::new();
-    while let Some(next_comment_line) = parse_slug_comment(state) {
+    while let Some(next_comment_line) = parse_syntax_comment(state) {
         line1_up.push(next_comment_line);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     Some(SyntaxComments {
         line0: line0,
         line1_up: line1_up,
     })
 }
-fn parse_slug_comment(state: &mut ParseState) -> Option<WithStartPosition<Box<str>>> {
+fn parse_syntax_comment(state: &mut ParseState) -> Option<WithStartPosition<Box<str>>> {
     let Some(hashtag_start) = parse_symbol_as_start(state, "#") else {
         return None;
     };
@@ -847,7 +847,7 @@ fn parse_slug_comment(state: &mut ParseState) -> Option<WithStartPosition<Box<st
 fn is_slug_lowercase_name_start(name_start: char) -> bool {
     name_start.is_ascii_lowercase()
 }
-fn parse_slug_lowercase_name(state: &mut ParseState) -> Option<Name> {
+fn parse_syntax_lowercase_name(state: &mut ParseState) -> Option<Name> {
     let mut chars_from_offset: std::str::Chars = state.source[state.offset_utf8..].chars();
     if let Some(first_char) = chars_from_offset.next()
         && is_slug_lowercase_name_start(first_char)
@@ -866,15 +866,17 @@ fn parse_slug_lowercase_name(state: &mut ParseState) -> Option<Name> {
         None
     }
 }
-fn parse_slug_lowercase_name_with_start(state: &mut ParseState) -> Option<WithStartPosition<Name>> {
+fn parse_syntax_lowercase_name_with_start(
+    state: &mut ParseState,
+) -> Option<WithStartPosition<Name>> {
     let start_position: lsp_types::Position = state.position;
-    parse_slug_lowercase_name(state).map(|name| WithStartPosition {
+    parse_syntax_lowercase_name(state).map(|name| WithStartPosition {
         start: start_position,
         value: name,
     })
 }
 
-fn parse_slug_uppercase_name(state: &mut ParseState) -> Option<Name> {
+fn parse_syntax_uppercase_name(state: &mut ParseState) -> Option<Name> {
     let mut chars_from_offset = state.source[state.offset_utf8..].chars();
     if let Some(first_char) = chars_from_offset.next()
         && first_char.is_ascii_uppercase()
@@ -893,9 +895,11 @@ fn parse_slug_uppercase_name(state: &mut ParseState) -> Option<Name> {
         None
     }
 }
-fn parse_slug_uppercase_name_with_start(state: &mut ParseState) -> Option<WithStartPosition<Name>> {
+fn parse_syntax_uppercase_name_with_start(
+    state: &mut ParseState,
+) -> Option<WithStartPosition<Name>> {
     let start_position: lsp_types::Position = state.position;
-    parse_slug_uppercase_name(state).map(|name| WithStartPosition {
+    parse_syntax_uppercase_name(state).map(|name| WithStartPosition {
         start: start_position,
         value: name,
     })
@@ -918,10 +922,26 @@ pub fn parse_project(project_source: &str) -> SyntaxProject {
     let mut last_parsed_was_valid = true;
     let mut last_parsed_valid_end_offset_utf8 = state.offset_utf8;
     let mut last_parsed_valid_end_position = state.position;
-    parse_slug_whitespace(&mut state);
+    parse_syntax_whitespace(&mut state);
     'parsing_items: loop {
-        match parse_project_item(&mut state, &mut expressions) {
-            None => {
+        let documentation = match parse_syntax_comments(&mut state) {
+            None => None,
+            Some(comments) => {
+                if state.position.line > comments_end(&comments).line + 1 {
+                    items.push(SyntaxProjectItem::Comments(comments));
+                    None
+                } else {
+                    Some(comments)
+                }
+            }
+        };
+        match parse_project_fn(&mut state, documentation, &mut expressions)
+            .or_else(|documentation| parse_project_ty(&mut state, documentation))
+        {
+            Err(comments) => {
+                if let Some(comments) = comments {
+                    items.push(SyntaxProjectItem::Comments(comments));
+                }
                 if !parse_any_char(&mut state) {
                     if !last_parsed_was_valid {
                         items.push(SyntaxProjectItem::Unrecognized {
@@ -936,7 +956,7 @@ pub fn parse_project(project_source: &str) -> SyntaxProject {
                 }
                 last_parsed_was_valid = false;
             }
-            Some(item) => {
+            Ok(item) => {
                 if !last_parsed_was_valid {
                     items.push(SyntaxProjectItem::Unrecognized {
                         range: lsp_types::Range {
@@ -948,7 +968,7 @@ pub fn parse_project(project_source: &str) -> SyntaxProject {
                 }
                 items.push(item);
                 last_parsed_was_valid = true;
-                parse_slug_whitespace(&mut state);
+                parse_syntax_whitespace(&mut state);
                 last_parsed_valid_end_offset_utf8 = state.offset_utf8;
                 last_parsed_valid_end_position = state.position;
             }
@@ -957,27 +977,20 @@ pub fn parse_project(project_source: &str) -> SyntaxProject {
     SyntaxProject { items, expressions }
 }
 
-fn parse_project_item(
+fn parse_project_ty(
     state: &mut ParseState,
-    expressions: &mut Buf<Expressions, SyntaxExpression>,
-) -> Option<SyntaxProjectItem> {
-    parse_project_fn(state, expressions)
-        .or_else(|| parse_project_ty(state))
-        .or_else(|| parse_slug_comments(state).map(SyntaxProjectItem::Comments))
-}
-fn parse_project_ty(state: &mut ParseState) -> Option<SyntaxProjectItem> {
+    documentation: Option<SyntaxComments>,
+) -> Result<SyntaxProjectItem, Option<SyntaxComments>> {
     let Some(ty_keyword_start) = parse_symbol_as_start(state, "ty") else {
-        return None;
+        return Err(documentation);
     };
-    parse_slug_whitespace(state);
-    let name = parse_slug_lowercase_name_with_start(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
+    let name = parse_syntax_lowercase_name_with_start(state);
+    parse_syntax_whitespace(state);
     let parameters = parse_ty_parameters(state);
-    parse_slug_whitespace(state);
-    let documentation = parse_slug_comments(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let type_ = parse_type(state);
-    Some(SyntaxProjectItem::TypeAlias {
+    Ok(SyntaxProjectItem::TypeAlias {
         ty_keyword_start,
         name,
         parameters,
@@ -991,11 +1004,11 @@ fn parse_ty_parameters(
     let Some(open_paren_start) = parse_symbol_as_start(state, "(") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut parameters = Vec::new();
-    while let Some(parameter) = parse_slug_uppercase_name_with_start(state) {
+    while let Some(parameter) = parse_syntax_uppercase_name_with_start(state) {
         parameters.push(parameter);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_paren_start = parse_symbol_as_start(state, ")");
     Some(SyntaxParenthesizedValues {
@@ -1006,35 +1019,34 @@ fn parse_ty_parameters(
 }
 fn parse_project_fn(
     state: &mut ParseState,
+    documentation: Option<SyntaxComments>,
     expressions: &mut Buf<Expressions, SyntaxExpression>,
-) -> Option<SyntaxProjectItem> {
+) -> Result<SyntaxProjectItem, Option<SyntaxComments>> {
     let Some(fn_keyword_start) = parse_symbol_as_start(state, "fn") else {
-        return None;
+        return Err(documentation);
     };
-    parse_slug_whitespace(state);
-    let name = parse_slug_lowercase_name_with_start(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
+    let name = parse_syntax_lowercase_name_with_start(state);
+    parse_syntax_whitespace(state);
     let _ = parse_symbol(state, "<");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut type_parameters = Vec::new();
-    while let Some(type_parameter_name) = parse_slug_uppercase_name_with_start(state) {
+    while let Some(type_parameter_name) = parse_syntax_uppercase_name_with_start(state) {
         type_parameters.push(type_parameter_name);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let _ = parse_symbol(state, ">");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let parameters = parse_parenthesized_values(state, parse_parameter_pattern);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     _ = parse_symbol(state, ":");
     _ = parse_symbol(state, "-");
     _ = parse_symbol(state, ">");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let result_type = parse_type(state);
-    parse_slug_whitespace(state);
-    let documentation = parse_slug_comments(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let result = parse_expression(state, expressions);
-    Some(SyntaxProjectItem::Fn {
+    Ok(SyntaxProjectItem::Fn {
         fn_keyword_start,
         name,
         type_parameters,
@@ -1051,13 +1063,13 @@ fn parse_parenthesized_values<Value>(
     let Some(open_paren_start) = parse_symbol_as_start(state, "(") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut parameters = Vec::with_capacity(1);
     while let Some(parameter) = parse_value(state) {
         parameters.push(parameter);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let closed_paren_start = parse_symbol_as_start(state, ")");
     Some(SyntaxParenthesizedValues {
         open_paren_start,
@@ -1078,26 +1090,26 @@ pub fn parse_project_fn_signature(state: &mut ParseState) -> Option<ProjectFnSig
     let Some(fn_keyword_start) = parse_symbol_as_start(state, "fn") else {
         return None;
     };
-    parse_slug_whitespace(state);
-    let name = parse_slug_lowercase_name_with_start(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
+    let name = parse_syntax_lowercase_name_with_start(state);
+    parse_syntax_whitespace(state);
     let _ = parse_symbol(state, ":");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut type_parameters = Vec::new();
-    while let Some(type_parameter_name) = parse_slug_uppercase_name_with_start(state) {
+    while let Some(type_parameter_name) = parse_syntax_uppercase_name_with_start(state) {
         type_parameters.push(type_parameter_name);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut parameter_types = Vec::new();
     while let Some(parameter_type) = parse_type(state) {
         parameter_types.push(parameter_type);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_paren_start = parse_symbol_as_start(state, ")");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let result_type = parse_type(state);
     Some(ProjectFnSignature {
         fn_keyword_start: fn_keyword_start,
@@ -1124,12 +1136,12 @@ pub fn parse_query_pattern(state: &mut ParseState) -> Option<SyntaxPattern> {
         .or_else(|| parse_query_pattern_record(state))
 }
 fn parse_parameter_pattern_variable(state: &mut ParseState) -> Option<SyntaxPattern> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_lowercase_name_with_start(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     _ = parse_symbol(state, ":");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let type_ = parse_type(state);
     Some(SyntaxPattern::Variable {
         name: name,
@@ -1140,9 +1152,9 @@ fn parse_parameter_pattern_ignored(state: &mut ParseState) -> Option<SyntaxPatte
     let Some(underscore_start) = parse_symbol_as_start(state, "_") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     _ = parse_symbol(state, ":");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let type_ = parse_type(state);
     Some(SyntaxPattern::Ignored {
         underscore_start,
@@ -1150,7 +1162,7 @@ fn parse_parameter_pattern_ignored(state: &mut ParseState) -> Option<SyntaxPatte
     })
 }
 fn parse_query_pattern_variable(state: &mut ParseState) -> Option<SyntaxPattern> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_lowercase_name_with_start(state) else {
         return None;
     };
     Some(SyntaxPattern::Variable {
@@ -1177,10 +1189,10 @@ fn parse_pattern_variant(
     state: &mut ParseState,
     parse_value: impl Fn(&mut ParseState) -> Option<SyntaxPattern>,
 ) -> Option<SyntaxPattern> {
-    let Some(name) = parse_slug_uppercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_uppercase_name_with_start(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let values = parse_pattern_variant_values(state, parse_value);
     Some(SyntaxPattern::Variant { name, values })
 }
@@ -1191,11 +1203,11 @@ fn parse_pattern_variant_values(
     let Some(open_paren_start) = parse_symbol_as_start(state, "(") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut values = Vec::with_capacity(1);
     while let Some(value) = parse_value(state) {
         values.push(value);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_paren_start = parse_symbol_as_start(state, ")");
     Some(SyntaxParenthesizedValues {
@@ -1208,12 +1220,12 @@ fn parse_colon_type_arguments(state: &mut ParseState) -> Option<SyntaxExpression
     let Some(open_angle_start) = parse_symbol_as_start(state, "<") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut types = Vec::with_capacity(1);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     while let Some(type_) = parse_type(state) {
         types.push(type_);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_angle_start = parse_symbol_as_start(state, ">");
     Some(SyntaxExpressionCallTypeArguments {
@@ -1226,7 +1238,7 @@ fn parse_parameter_pattern_tuple(state: &mut ParseState) -> Option<SyntaxPattern
     let Some(star_start) = parse_symbol_as_start(state, "*") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let parts = parse_parenthesized_values(state, parse_parameter_pattern);
     Some(SyntaxPattern::Tuple { star_start, parts })
 }
@@ -1234,7 +1246,7 @@ fn parse_query_pattern_tuple(state: &mut ParseState) -> Option<SyntaxPattern> {
     let Some(star_start) = parse_symbol_as_start(state, "*") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let parts = parse_parenthesized_values(state, parse_query_pattern);
     Some(SyntaxPattern::Tuple { star_start, parts })
 }
@@ -1242,11 +1254,11 @@ fn parse_parameter_pattern_record(state: &mut ParseState) -> Option<SyntaxPatter
     let Some(open_curly_start) = parse_symbol_as_start(state, "{") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut fields = Vec::new();
     while let Some(field) = parse_record_field(state, |state| parse_parameter_pattern(state)) {
         fields.push(field);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_curly_start = parse_symbol_as_start(state, "}");
     Some(SyntaxPattern::Record {
@@ -1259,11 +1271,11 @@ fn parse_query_pattern_record(state: &mut ParseState) -> Option<SyntaxPattern> {
     let Some(open_curly_start) = parse_symbol_as_start(state, "{") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut fields = Vec::new();
     while let Some(field) = parse_record_field(state, |state| parse_query_pattern(state)) {
         fields.push(field);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_curly_start = parse_symbol_as_start(state, "}");
     Some(SyntaxPattern::Record {
@@ -1283,7 +1295,7 @@ pub fn parse_type(state: &mut ParseState) -> Option<SyntaxType> {
         .or_else(|| parse_type_choice(state))
 }
 fn parse_type_variable(state: &mut ParseState) -> Option<SyntaxType> {
-    let Some(name) = parse_slug_uppercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_uppercase_name_with_start(state) else {
         return None;
     };
     Some(SyntaxType::Variable(name))
@@ -1292,7 +1304,7 @@ fn parse_type_tuple(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(star_start) = parse_symbol_as_start(state, "*") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let parts = parse_parenthesized_values(state, parse_type);
     Some(SyntaxType::Tuple { star_start, parts })
 }
@@ -1300,11 +1312,11 @@ fn parse_type_record(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(open_curly_start) = parse_symbol_as_start(state, "{") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut fields = Vec::new();
     while let Some(field) = parse_record_field(state, |state| parse_type(state)) {
         fields.push(field);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_curly_start = parse_symbol_as_start(state, "}");
     Some(SyntaxType::Record {
@@ -1317,11 +1329,11 @@ fn parse_type_choice(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(open_bracket_start) = parse_symbol_as_start(state, "[") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut variants = Vec::new();
     while let Some(variant) = parse_type_variant(state) {
         variants.push(variant);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_bracket_start = parse_symbol_as_start(state, "]");
     Some(SyntaxType::Choice {
@@ -1331,10 +1343,10 @@ fn parse_type_choice(state: &mut ParseState) -> Option<SyntaxType> {
     })
 }
 fn parse_type_variant(state: &mut ParseState) -> Option<SyntaxTypeVariant> {
-    let Some(name) = parse_slug_uppercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_uppercase_name_with_start(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let values = parse_type_variant_values(state);
     Some(SyntaxTypeVariant { name: name, values })
 }
@@ -1344,13 +1356,13 @@ fn parse_type_variant_values(
     let Some(open_paren_start) = parse_symbol_as_start(state, "(") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut values = Vec::with_capacity(1);
     while let Some(value) = parse_type(state) {
         values.push(value);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let closed_paren_start = parse_symbol_as_start(state, ")");
     Some(SyntaxParenthesizedValues {
         open_paren_start,
@@ -1359,20 +1371,20 @@ fn parse_type_variant_values(
     })
 }
 fn parse_type_construct(state: &mut ParseState) -> Option<SyntaxType> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_lowercase_name_with_start(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let arguments = parse_parenthesized_values(state, parse_type);
     Some(SyntaxType::Construct { name, arguments })
 }
 fn parse_type_fn(state: &mut ParseState) -> Option<SyntaxType> {
-    let Some(fn_keyword_start) = parse_slug_keyword_as_start(state, "fn") else {
+    let Some(fn_keyword_start) = parse_syntax_keyword_as_start(state, "fn") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let parameters = parse_parenthesized_values(state, parse_type);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let result = parse_type(state);
     Some(SyntaxType::Fn {
         fn_keyword_start,
@@ -1398,12 +1410,12 @@ pub fn parse_expression(
     else {
         return None;
     };
-    while let () = parse_slug_whitespace(state)
+    while let () = parse_syntax_whitespace(state)
         && let Some(dot_start) = parse_symbol_as_start(state, ".")
-        && let () = parse_slug_whitespace(state)
+        && let () = parse_syntax_whitespace(state)
         // this returning None means parsing it as a call would be pointless
         // so we consume the dot and pretend it wasn't there
-        && let Some(name) = parse_slug_lowercase_name_with_start(state)
+        && let Some(name) = parse_syntax_lowercase_name_with_start(state)
     {
         let start_expression_dot = SyntaxExpressionArgumentDot {
             dot_start: dot_start,
@@ -1427,7 +1439,7 @@ fn parse_expression_tuple(
     let Some(star_start) = parse_symbol_as_start(state, "*") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let parts = parse_parenthesized_values(state, |state| parse_expression(state, expressions));
     Some(SyntaxExpression::Tuple { star_start, parts })
 }
@@ -1438,12 +1450,12 @@ fn parse_expression_record(
     let Some(open_curly_start) = parse_symbol_as_start(state, "{") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut fields = Vec::new();
     while let Some(field) = parse_record_field(state, |state| parse_expression(state, expressions))
     {
         fields.push(field);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_curly_start = parse_symbol_as_start(state, "}");
     Some(SyntaxExpression::Record {
@@ -1456,10 +1468,10 @@ fn parse_record_field<Value>(
     state: &mut ParseState,
     parse_value: impl FnOnce(&mut ParseState) -> Option<Value>,
 ) -> Option<SyntaxRecordField<Value>> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_lowercase_name_with_start(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     _ = parse_symbol(state, ":");
     let value = parse_value(state);
     Some(SyntaxRecordField {
@@ -1472,7 +1484,7 @@ fn parse_expression_number(state: &mut ParseState) -> Option<SyntaxExpression> {
     let Some(value) = parse_number(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let type_ = parse_type(state);
     Some(SyntaxExpression::Number {
         value: WithStartPosition {
@@ -1486,7 +1498,7 @@ fn parse_expression_str(state: &mut ParseState) -> Option<SyntaxExpression> {
     let Some(str) = parse_str(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let type_ = parse_type(state);
     Some(SyntaxExpression::Text {
         open_quote_start: str.open_quote_start,
@@ -1599,10 +1611,10 @@ fn parse_expression_commented(
     state: &mut ParseState,
     expressions: &mut Buf<Expressions, SyntaxExpression>,
 ) -> Option<SyntaxExpression> {
-    let Some(comments) = parse_slug_comments(state) else {
+    let Some(comments) = parse_syntax_comments(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let expression = parse_expression(state, expressions);
     Some(SyntaxExpression::Commented {
         comments: comments,
@@ -1613,7 +1625,7 @@ fn parse_expression_variable_or_call(
     state: &mut ParseState,
     expressions: &mut Buf<Expressions, SyntaxExpression>,
 ) -> Option<SyntaxExpression> {
-    let Some(name) = parse_slug_lowercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_lowercase_name_with_start(state) else {
         return None;
     };
     Some(
@@ -1632,9 +1644,9 @@ fn parse_expression_variable_or_call_after_first_argument_dot_name(
     first_argument_dot: Option<SyntaxExpressionArgumentDot<Slot<Expressions>>>,
     name: WithStartPosition<Name>,
 ) -> SyntaxExpression {
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let type_arguments = parse_colon_type_arguments(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let arguments_rest =
         parse_parenthesized_values(state, |state| parse_expression(state, expressions));
     if type_arguments.is_none() && arguments_rest.is_none() {
@@ -1660,14 +1672,14 @@ fn parse_expression_variant(
     state: &mut ParseState,
     expressions: &mut Buf<Expressions, SyntaxExpression>,
 ) -> Option<SyntaxExpression> {
-    let Some(name) = parse_slug_uppercase_name_with_start(state) else {
+    let Some(name) = parse_syntax_uppercase_name_with_start(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     // this will parse things like Variant * () as a variant without any parenthesized arguments.
     // This is fine since either interpretation is invalid
     let type_ = parse_expression_variant_type_argument(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let values = parse_expression_variant_values(state, expressions);
     Some(SyntaxExpression::Variant {
         name,
@@ -1681,9 +1693,9 @@ fn parse_expression_variant_type_argument(
     let Some(open_angle_start) = parse_symbol_as_start(state, "<") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let type_ = parse_type(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let closed_angle_start = parse_symbol_as_start(state, ">");
     Some(SyntaxExpressionVariantType {
         open_angle_start,
@@ -1698,11 +1710,11 @@ fn parse_expression_variant_values(
     let Some(open_paren_start) = parse_symbol_as_start(state, "(") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut values = Vec::with_capacity(1);
     while let Some(value) = parse_expression(state, expressions) {
         values.push(value);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_paren_start = parse_symbol_as_start(state, ")");
     Some(SyntaxParenthesizedValues {
@@ -1715,12 +1727,12 @@ fn parse_expression_fn(
     state: &mut ParseState,
     expressions: &mut Buf<Expressions, SyntaxExpression>,
 ) -> Option<SyntaxExpression> {
-    let Some(fn_keyword_start) = parse_slug_keyword_as_start(state, "fn") else {
+    let Some(fn_keyword_start) = parse_syntax_keyword_as_start(state, "fn") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let parameters = parse_parenthesized_values(state, parse_parameter_pattern);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let result = parse_expression(state, expressions);
     Some(SyntaxExpression::Fn {
         fn_keyword_start,
@@ -1735,11 +1747,11 @@ fn parse_expression_destruct(
     let Some(equals_start) = parse_symbol_as_start(state, "=") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let pattern = parse_query_pattern(state);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let queried = parse_expression(state, expressions);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let result = parse_expression(state, expressions);
     Some(SyntaxExpression::Destruct {
         equals_start,
@@ -1752,18 +1764,18 @@ fn parse_expression_if(
     state: &mut ParseState,
     expressions: &mut Buf<Expressions, SyntaxExpression>,
 ) -> Option<SyntaxExpression> {
-    let Some(if_keyword_start) = parse_slug_keyword_as_start(state, "if") else {
+    let Some(if_keyword_start) = parse_syntax_keyword_as_start(state, "if") else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let queried = parse_expression(state, expressions);
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let open_curly_start = parse_symbol_as_start(state, "{");
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let mut cases = Vec::new();
     while let Some(case) = parse_expression_if_case(state, expressions) {
         cases.push(case);
-        parse_slug_whitespace(state);
+        parse_syntax_whitespace(state);
     }
     let closed_curly_start = parse_symbol_as_start(state, "}");
     Some(SyntaxExpression::If {
@@ -1781,7 +1793,7 @@ fn parse_expression_if_case(
     let Some(pattern) = parse_query_pattern(state) else {
         return None;
     };
-    parse_slug_whitespace(state);
+    parse_syntax_whitespace(state);
     let result = parse_expression(state, expressions);
     Some(SyntaxExpressionIfCase {
         pattern: pattern,
@@ -12429,17 +12441,16 @@ fn tried-unwrap(tried [Success(Ok) Failure([])]) Ok
 ```
 Another nice use case: Creating a value whose only purpose is transporting type info:
 ```slug
-ty type-only(Type)
 # enables what is often called "phantom types"
-    [A Unconstructible(Type [])]
+ty type-only(Type) [A Unconstructible(Type [])]
 
 # usage example
 
+# Alternative to using a plain u32 which is tiny bit harder to abuse.
+# Can still point out of bounds,
+# alias another weak-slot or be used for the wrong span.
+# As a result, access will always return opt and should be checked with care
 ty weak-slot(Origin)
-    # Alternative to using a plain u32 which is tiny bit harder to abuse.
-    # Can still point out of bounds,
-    # alias another weak-slot or be used for the wrong span.
-    # As a result, access will always return opt and should be checked with care
     {origin type-only(Origin) index u32}
 
 fn index-to-weak-slot<Origin>(index u32) weak-slot(Origin)
@@ -12519,12 +12530,11 @@ Note that to only read the start index you can directly call `span-start-index`"
                 documentation: "Split after a given length with the start half known to have positive length.
 If the length is greater than the given span's length, .start will be the existing span and .after will be empty.
 ```slug
-fn span-slot-at(span span(Origin) index u32)
-    {
-        before opt(span(Origin))
-        at slot(Origin)
-        after opt(span(Origin))
-    }
+fn span-slot-at(span span(Origin) index u32) {
+    before opt(span(Origin))
+    at slot(Origin)
+    after opt(span(Origin))
+}
     = *(until after)
         span-start-of-length-positive(span 1p32.p32-add(index))
     = *(before at) span-end(until)
@@ -12573,7 +12583,8 @@ See `opt-span-after-str-chars` for an example.
                 documentation: "Strip the given start string off the given span once.
 If the span does not have this prefix, return `No`.
 ```slug
-fn opt-span-trim-start-str-chars(span opt(span(Origin char)) prefix str) span(Origin char)
+fn opt-span-trim-start-str-chars(span opt(span(Origin char)) prefix str)
+    opt(span(Origin char))
     if span.opt-span-after-str-chars(prefix) {
         No span
         Yes(span-after-prefix)
@@ -12604,7 +12615,8 @@ See `opt-span-before-str-chars` for an example.
                 documentation: "Strip the given end string off the given span once.
 If the span does not have this suffix, return `No`.
 ```slug
-fn opt-span-trim-end-str-chars(span opt(span(Origin char)) suffix str) span(Origin char)
+fn opt-span-trim-end-str-chars(span opt(span(Origin char)) suffix str)
+    opt(span(Origin char))
     if span.opt-span-before-str-chars(suffix) {
         No span
         Yes(span-before-suffix)
@@ -12690,11 +12702,10 @@ An example can be found in `opt-span-step-while`",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line
 by returning Going or exiting early with Done (like calling `break` in other languages).
 ```slug
-fn next-non-space(span opt(span(Origin)))
-    {
-        non-space opt(char)
-        after opt(span(Origin))
-    }
+fn next-non-space(span opt(span(Origin))) {
+    non-space opt(char)
+    after opt(span(Origin))
+}
     if
         opt-span-step-while(
             span
@@ -12709,10 +12720,10 @@ fn next-non-space(span opt(span(Origin)))
             fn(* slot slot(Origin))
                 = char item(slot)
                 if u32-order(char-to-u32(char) char-to-u32(\" \"char)) {
-                Equal Going<[Done(char)]>(*)
-                Less Done<[Going(*)]>(char)
-                Greater Done<[Going(*)]>(char)
-            }
+                    Equal Going<[Done(char)]>(*)
+                    Less Done<[Going(*)]>(char)
+                    Greater Done<[Going(*)]>(char)
+                }
         )
     {
         Going(chars)
@@ -13108,10 +13119,7 @@ Try to use sparingly",
 If start and end spans are not already connected, both are appended at the end and their original spans are unset.
 As an example, you could implement `span-add` in slug itself as
 ```slug
-fn span-add(
-    span span(Origin Item)
-    new Item
-)
+fn span-add(span span(Origin Item) new Item)
     span(Origin Item)
     # the first line is optional: it ensures that the new slot will actually be connected,
     # meaning the new item can stay at its position
@@ -13748,7 +13756,11 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                 documentation,
                 type_,
             } => {
-                formatted.push_str("\nty ");
+                formatted.push('\n');
+                if let Some(documentation) = documentation {
+                    syntax_comments_format(&mut formatted, 0, documentation);
+                }
+                formatted.push_str("ty ");
                 if let Some(name) = name {
                     formatted.push_str(&name.value);
                 }
@@ -13763,36 +13775,26 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                     }
                     formatted.push(')');
                 }
-                match documentation {
-                    Some(documentation) => {
-                        linebreak_indented_into(&mut formatted, 0);
-                        syntax_comments_format(&mut formatted, 0, documentation);
-                        indented_into(&mut formatted, next_indent(0));
-                        if let Some(type_) = type_ {
-                            syntax_type_format(&mut formatted, next_indent(0), type_);
-                        }
+                match type_ {
+                    Some(type_) => {
+                        let type_line_span = range_line_span(lsp_types::Range {
+                            start: *ty_keyword_start,
+                            end: type_start(type_),
+                        });
+                        space_or_linebreak_indented_into(
+                            &mut formatted,
+                            type_line_span,
+                            next_indent(0),
+                        );
+                        syntax_type_format(
+                            &mut formatted,
+                            last_item_indent(type_line_span, 0),
+                            type_,
+                        );
                     }
-                    None => match type_ {
-                        Some(type_) => {
-                            let type_line_span = range_line_span(lsp_types::Range {
-                                start: *ty_keyword_start,
-                                end: type_start(type_),
-                            });
-                            space_or_linebreak_indented_into(
-                                &mut formatted,
-                                type_line_span,
-                                next_indent(0),
-                            );
-                            syntax_type_format(
-                                &mut formatted,
-                                last_item_indent(type_line_span, 0),
-                                type_,
-                            );
-                        }
-                        None => {
-                            formatted.push(' ');
-                        }
-                    },
+                    None => {
+                        formatted.push(' ');
+                    }
                 }
                 formatted.push('\n');
             }
@@ -13805,7 +13807,11 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                 documentation,
                 result,
             } => {
-                formatted.push_str("\nfn ");
+                formatted.push('\n');
+                if let Some(documentation) = documentation {
+                    syntax_comments_format(&mut formatted, 0, documentation);
+                }
+                formatted.push_str("fn ");
                 if let Some(name) = name {
                     formatted.push_str(&name.value);
                 }
@@ -13849,39 +13855,22 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                         formatted.push(' ');
                     }
                 }
-                match documentation {
-                    Some(documentation) => {
-                        linebreak_indented_into(&mut formatted, 0);
-                        syntax_comments_format(&mut formatted, 0, documentation);
-                        indented_into(&mut formatted, next_indent(0));
-                        if let Some(result) = result {
-                            syntax_expression_format(
-                                &mut formatted,
-                                next_indent(0),
-                                &project.expressions,
-                                result,
-                            );
-                        }
-                    }
-                    None => {
-                        if let Some(result) = result {
-                            let result_line_span = range_line_span(lsp_types::Range {
-                                start: *fn_keyword_start,
-                                end: expression_start(result, &project.expressions),
-                            });
-                            space_or_linebreak_indented_into(
-                                &mut formatted,
-                                result_line_span,
-                                next_indent(0),
-                            );
-                            syntax_expression_format(
-                                &mut formatted,
-                                last_item_indent(result_line_span, 0),
-                                &project.expressions,
-                                result,
-                            );
-                        }
-                    }
+                if let Some(result) = result {
+                    let result_line_span = range_line_span(lsp_types::Range {
+                        start: *fn_keyword_start,
+                        end: expression_start(result, &project.expressions),
+                    });
+                    space_or_linebreak_indented_into(
+                        &mut formatted,
+                        result_line_span,
+                        next_indent(0),
+                    );
+                    syntax_expression_format(
+                        &mut formatted,
+                        last_item_indent(result_line_span, 0),
+                        &project.expressions,
+                        result,
+                    );
                 }
                 formatted.push('\n');
             }

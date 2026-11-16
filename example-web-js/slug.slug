@@ -87,9 +87,11 @@ fn html-attribute<View Event>(key str value str) html-modifier(View Event)
         Static<text(View)>(value)
     )
 
-ty text(Chars)
 # allocate only when necessary
-    [Static(str) Dynamic(opt(span(Chars char)))]
+ty text(Chars) [
+    Static(str)
+    Dynamic(opt(span(Chars char)))
+]
 
 ty json(Json) [
     Null
@@ -166,7 +168,6 @@ fn opt-yes(yes Yes) opt(Yes)
     Yes<[No]>(yes)
 
 # to make interfacing on the js side a bit easier by having nicer buf names
-
 fn view-with-explicit-bufs({
     state state state
     htmls htmls buf(View html(View event))

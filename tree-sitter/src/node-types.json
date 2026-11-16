@@ -748,10 +748,6 @@
       "required": true,
       "types": [
         {
-          "type": "comment",
-          "named": true
-        },
-        {
           "type": "keyword_ty",
           "named": true
         },

@@ -197,13 +197,12 @@ if value {
 # project function declaration.
 # For type variables in the result that aren't used in the input,
 # functions require appended type parameters: <...>
+# Placing a comment immediately before a declaration is interpreted as documentation
 fn function-name<Type-arguments That-are-only-used-in-the-result>(
     parameter-patterns-with-types
     another-parameter
 )
     result-type
-# optional documentation
-# comment
     result-expression
 
 # type name without arguments
@@ -302,9 +301,9 @@ cargo install --offline --debug --path . slug
 ## TODO
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
 - consider indenting dot-calls
-- change the place for project item documentation to directly before the fn or ty. Reason: to be familiar, following the convention set by literally all other languges
 - add more examples
 - website with online repl
+- allow comments in a few more places
 
 ## known design weaknesses
 - The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes operations like recursive traversals quadratic.
