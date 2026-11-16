@@ -43,20 +43,18 @@ Does it feel good to write code like this?
 Wish you could specify which references/indexes point into the which collection and have the compiler verify this for you?
 Here's some slug code:
 ```slug
-ty email(Host-labels Text)
-    {
-        local span(Text char)
-        host-labels span(Host-labels span(Text char))
-        top-level span(Text char)
-    }
-ty parsed-file-emails
-    {   
-        emails opt(span([Email] email([Host-labels] [Text])))
-        
-        emails-buffer buf([Email] email([Host-labels] [Text]))
-        host-labels buf([Host-labels] span([Text] char))
-        text buf([Text] char)
-    }
+ty email(Host-labels Text) {
+    local span(Text char)
+    host-labels span(Host-labels span(Text char))
+    top-level span(Text char)
+}
+ty parsed-file-emails {   
+    emails opt(span([Email] email([Host-labels] [Text])))
+    
+    emails-buffer buf([Email] email([Host-labels] [Text]))
+    host-labels buf([Host-labels] span([Text] char))
+    text buf([Text] char)
+}
 ```
 Now it's clear to humans and the compiler that `local` and `top-level` point into the same array buffer of chars and that `host-labels` points into a separate array buffer of ranges into the array buffer of chars.
 (`[`Some-name`]` represents an enum with just that one member, you can think of it as just a tag type for now)
@@ -73,73 +71,66 @@ The rules to make it all safe (checked by the compiler):
 
 For a more complex example, here's how you could represent the syntax of slug's `ty` declarations:
 ```slug
-ty type-alias(Syntax Source)
-    {
-        parameters opt(span(Syntax span(Source char)))
-        type type(Syntax Source)
-    }
+ty type-alias(Syntax Source) {
+    parameters opt(span(Syntax span(Source char)))
+    type type(Syntax Source)
+}
 
-ty type(Syntax Source)
-# notice here how we use the Syntax parameters with different item types.
-# This is fine because we know these bufs are all created and destroyed at the same time.
-# Rule of thumb: One purpose = one unique type variable
-    [
-        Variable(span(Source char))
-        Tuple(opt(span(Syntax type(Syntax Source))))
-        Fn(
-            {
-                parameters opt(span(Syntax type(Syntax Source)))
-                result slot(Syntax type(Syntax Source))
-            }
-        )
-        Alias(
-            span(Source char)
-            opt(span(Syntax type(Syntax Source)))
-        )
-        Record(
-            opt(span(Syntax type-record-field(Syntax Source)))
-        )
-        Choice( 
-            opt(span(Syntax type-choice-variant(Syntax Source)))
-        )
-    ]
+ty type(Syntax Source) [
+    Variable(span(Source char))
+    Tuple(opt(span(Syntax type(Syntax Source))))
+    Fn({
+        parameters opt(span(Syntax type(Syntax Source)))
+        result slot(Syntax type(Syntax Source))
+    })
+    Alias(
+        span(Source char)
+        opt(span(Syntax type(Syntax Source)))
+    )
+    Record(
+        opt(span(Syntax type-record-field(Syntax Source)))
+    )
+    Choice( 
+        opt(span(Syntax type-choice-variant(Syntax Source)))
+    )
+]
 
-ty type-record-field(Syntax Source)
-    {
-        name span(Source char)
-        value type(Syntax Source)
-    }
+ty type-record-field(Syntax Source) {
+    name span(Source char)
+    value type(Syntax Source)
+}
 
-ty type-choice-variant(Syntax Source)
-    {
-        name span(Source char)
-        values opt(span(Syntax type(Syntax Source)))
-    }
+ty type-choice-variant(Syntax Source) {
+    name span(Source char)
+    values opt(span(Syntax type(Syntax Source)))
+}
+```
+Notice here how we use the same `Syntax` parameter with different item types.
+This is fine because we know these bufs are all created and destroyed at the same time.
+Rule of thumb: One purpose = one unique type variable
 
-ty file
-    {
-        type-aliases opt(span([Syntax] type-alias([Syntax] [Source])))
-        
-        source buf([Source] char)
-        names buf([Syntax] span([Source] char))
-        types buf([Syntax] type([Syntax] [Source]))
-        type-variant-values buf([Syntax] opt(span([Syntax] type([Syntax] [Source]))))
-        type-aliases-buf buf([Syntax] type-alias([Syntax] [Source]))
-    }
+Here's how we could store each file independently so that e.g. removing/replacing one file
+doesn't need to crawl through the syntax tree to free each slot and span:
+```slug
+ty file {
+    type-aliases opt(span([Syntax] type-alias([Syntax] [Source])))
+    
+    source buf([Source] char)
+    names buf([Syntax] span([Source] char))
+    types buf([Syntax] type([Syntax] [Source]))
+    type-variant-values buf([Syntax] opt(span([Syntax] type([Syntax] [Source]))))
+    type-aliases-buf buf([Syntax] type-alias([Syntax] [Source]))
+}
 
-ty state
-# we store each file independently so that e.g. removing/replacing one file
-# doesn't need to crawl through the syntax tree to free each slot and span
-    {
-        files opt(span([File] file))
-        projects-buf buf([File] file)
-    }
+ty state {
+    files opt(span([File] file))
+    projects-buf buf([File] file)
+}
 
-fn initial-state() state
-    {
-        projects No<opt(span([File] file))>
-        projects-buf buf-empty<[File] file>()
-    }
+fn initial-state() state {
+    projects No<opt(span([File] file))>
+    projects-buf buf-empty<[File] file>()
+}
 ```
 
 ## syntax
@@ -310,16 +301,10 @@ cargo install --offline --debug --path . slug
 
 ## TODO
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
-- provide better errors for record query patterns with mismatching type
-- consider format: only linebreaking between leading and follow-up syntax (e.g. field name - field value, or type name(arguments on the same line - last argument) when they are currently not on the same line. This might feel more intuitive for e.g. record and choice type aliases and make things like opt(span(..multiline..)) more compact and also clear
+- consider indenting dot-calls
+- change the place for project item documentation to directly before the fn or ty. Reason: to be familiar, following the convention set by literally all other languges
 - add more examples
 - website with online repl
-
-- consider introducing operation that can set an index after new unset items. Something like `add-unset-then`.
-  A better option may be changing counts to `bitpack struct { is_unset: bool, count: u15 }` and introducing
-  unset slots and spans. This would also maybe solve the current "buf-pre-allocate needs to take in a buf which defeats the whole point of slug"
-- consider allowing `buf` to be configured to never free slots (acting like an arena). This means no counts are ever recorded (massive for temporary bufs) but also any `item-at-index` stuff outside of `span` is likely to hit dead items and is thus invalid.
-  Question: How to represent in zig?
 
 ## known design weaknesses
 - The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes operations like recursive traversals quadratic.
@@ -337,11 +322,17 @@ cargo install --offline --debug --path . slug
   This means that individual counter increments and decrements are entirely pointless but are almost impossible to optimize out :(
   
   The same applies to spans that are kept around to enable bulk deletion. All slots inside must be checked individually which is slow. Maybe there is a buf representation which encodes all this more clearly?
-- the syntax is ugly. It feels dense. It feels disorganized. It feels unintuitive (somehow). Any help appreciated!
+- the syntax is fairly ugly. It feels dense. It feels disorganized. It feels unintuitive (somehow).
+  destruct syntax indents weirdly when put directly after e.g. a single-line case pattern
+  Any help appreciated!
 
 ## potential improvements in the future
 - zig codegen: implement leak-free error handling via "errdefer { for all reachable bufs: drop(allocator) }"
-- consider requiring `:` for parameter pattern variables between the name and type. This is probably more obvious and is a little more robust. Downside: more typing and still not super clear. Format: name: type
+- consider introducing operation that can set an index after new unset items. Something like `add-unset-then`.
+  A better option may be changing counts to `bitpack struct { is_unset: bool, count: u15 }` and introducing
+  unset slots and spans. This would also maybe solve the current "buf-pre-allocate needs to take in a buf which defeats the whole point of slug"
+- consider allowing `buf` to be configured to never free slots (acting like an arena). This means no counts are ever recorded (massive for temporary bufs) but also any `item-at-index` stuff outside of `span` is likely to hit dead items and is thus invalid.
+  Question: How to represent in zig?
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
 - automatically figure out optimizations for "consume-only" parameters not needing to be cloned
 - I would **LOVE** if there was a way to allow for "unspecialized function types". If e.g. rust gains support for this, we should add this (and maybe backport it to sloe)
@@ -352,12 +343,7 @@ cargo install --offline --debug --path . slug
 ## rejected
 (some points may be outdated)
 
-- should `^origin` be included in each `slot` and `span`?
-  This would complicate the language for users and compiler authors, especially around type signatures.
-  Reasons for consideration:
-    - no proper way to distinguish between e.g. temporary spans and permanent spans, to avoid e.g. possibly quadratic `span-add` operations
-    - no proper way to distinguish slots with the same element type but different semantics. E.g. `{ users span(slot(person-info)) creators span(slot(person-info)) }`
-- types currently use `*` for slot, `_` for span instead of regular names. Disadvantage: Their name in operations is not obvious. Hover info should help. Advantages: Shorter and it's actually a primitive with special rules. Giving it a normal name doesn't do it justice
+- consider requiring `:` for parameter pattern variables between the name and type. This is probably more obvious and is a little more robust. Downside: more typing and still not super clear. Format: name: type
 - consider changing `f(0 1)` syntax to `(f 0 1)` including types. This takes up 1 more space. It is however more consistent with record and variant syntax and can potentially start suggesting completions earlier.
   By far the biggest disadvantage is familiarity. People will hate the lispiness :(
 - closures/ any/dyn-types

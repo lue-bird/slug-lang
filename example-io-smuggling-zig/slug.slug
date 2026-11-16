@@ -7,15 +7,13 @@
 # The internal io state is parameterized, so slug functions
 # can work with whatever implementation-specific data you feed it
 
-fn print-random-quote(
-    {
-        io io Io
-        http-get http-get fn(Io str) opt(span(* char))
-        stdout-write-char-slice
-            stdout-write-char-slice fn(Io opt(span(* char))) *
-        stdout-flush stdout-flush fn(Io) *
-    }
-)
+fn print-random-quote({
+    io io Io
+    http-get http-get fn(Io str) opt(span(* char))
+    stdout-write-char-slice
+        stdout-write-char-slice fn(Io opt(span(* char))) *
+    stdout-flush stdout-flush fn(Io) *
+})
     *
     = _ buf-empty<* char>()
     = quote-response
@@ -41,13 +39,12 @@ fn opt-span-strip-start-to-after-str-chars(
     opt(span(Chars char))
     if opt-span.opt-span-after-str-chars(excluded-end) {
         Yes(after-end) after-end
-        No
-            if opt-span {
-                No No<opt(span(Chars char))>
-                Yes(span)
-                    = *(_ after) span-start(span)
-                    opt-span-strip-start-to-after-str-chars(after excluded-end)
-            }
+        No if opt-span {
+            No No<opt(span(Chars char))>
+            Yes(span)
+                = *(_ after) span-start(span)
+                opt-span-strip-start-to-after-str-chars(after excluded-end)
+        }
     }
 
 fn opt-span-strip-end-to-before-str-chars(
@@ -57,11 +54,10 @@ fn opt-span-strip-end-to-before-str-chars(
     opt(span(Chars char))
     if opt-span.opt-span-before-str-chars(excluded-end) {
         Yes(after-end) after-end
-        No
-            if opt-span {
-                No No<opt(span(Chars char))>
-                Yes(span)
-                    = *(before _) span-end(span)
-                    opt-span-strip-end-to-before-str-chars(before excluded-end)
-            }
+        No if opt-span {
+            No No<opt(span(Chars char))>
+            Yes(span)
+                = *(before _) span-end(span)
+                opt-span-strip-end-to-before-str-chars(before excluded-end)
+        }
     }

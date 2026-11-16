@@ -1,9 +1,8 @@
 
-ty stack(Origin Item)
-    [
-        Empty
-        Filled(Item slot(Origin stack(Origin Item)))
-    ]
+ty stack(Origin Item) [
+    Empty
+    Filled(Item slot(Origin stack(Origin Item)))
+]
 
 fn stack-cons(tail stack(Origin Item) new-head Item) stack(Origin Item)
     Filled<stack(Origin Item)>(new-head insert<Origin>(tail))

@@ -115,7 +115,7 @@ pub struct SyntaxParenthesizedValues<Value> {
 #[derive(Debug)]
 pub struct SyntaxExpressionCallTypeArguments {
     pub open_angle_start: lsp_types::Position,
-    pub types: Vec<SyntaxType>,
+    pub values: Vec<SyntaxType>,
     pub closed_angle_start: Option<lsp_types::Position>,
 }
 #[derive(Debug)]
@@ -170,6 +170,7 @@ pub enum SyntaxExpression {
     If {
         if_keyword_start: lsp_types::Position,
         queried: Option<Slot<Expressions>>,
+        // TODO convert to Option<struct {start:Position, ...}>
         open_curly_start: Option<lsp_types::Position>,
         cases: Vec<SyntaxExpressionIfCase>,
         closed_curly_start: Option<lsp_types::Position>,
@@ -303,7 +304,7 @@ pub fn parenthesized_values_end<Value>(
         values,
         closed_paren_start,
     }: &SyntaxParenthesizedValues<Value>,
-    value_end: impl Fn(&Value) -> lsp_types::Position,
+    value_end: impl FnOnce(&Value) -> lsp_types::Position,
 ) -> lsp_types::Position {
     closed_paren_start
         .map(|closed_bracket_start| symbol_end(closed_bracket_start, ")"))
@@ -466,7 +467,7 @@ pub fn pattern_end(pattern: &SyntaxPattern) -> lsp_types::Position {
 pub fn expression_call_type_arguments_end(
     SyntaxExpressionCallTypeArguments {
         open_angle_start,
-        types,
+        values: types,
         closed_angle_start,
     }: &SyntaxExpressionCallTypeArguments,
 ) -> lsp_types::Position {
@@ -1217,7 +1218,7 @@ fn parse_colon_type_arguments(state: &mut ParseState) -> Option<SyntaxExpression
     let closed_angle_start = parse_symbol_as_start(state, ">");
     Some(SyntaxExpressionCallTypeArguments {
         open_angle_start,
-        types,
+        values: types,
         closed_angle_start,
     })
 }
@@ -6578,10 +6579,10 @@ pub fn type_format_single_line_with_zig_variables(formatted: &mut String, type_:
         Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
             type_construct_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 name,
                 arguments,
+                |_| LineSpan::Single,
                 |formatted, _, argument| {
                     type_format_single_line_with_zig_variables(formatted, argument)
                 },
@@ -6593,7 +6594,7 @@ pub fn type_format_single_line_with_zig_variables(formatted: &mut String, type_:
                 LineSpan::Single,
                 0,
                 parameters,
-                |_, _| LineSpan::Single,
+                |_| LineSpan::Single,
                 |formatted, _, parameter| {
                     type_format_single_line_with_zig_variables(formatted, parameter)
                 },
@@ -6603,18 +6604,18 @@ pub fn type_format_single_line_with_zig_variables(formatted: &mut String, type_:
         Type::Tuple(parts) => {
             tuple_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 parts,
+                |_| LineSpan::Single,
                 |formatted, _, part| type_format_single_line_with_zig_variables(formatted, part),
             );
         }
         Type::Record(fields) => {
             record_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 fields,
+                |_| LineSpan::Single,
                 |formatted, _, field| {
                     formatted.push_str(&field.name);
                     formatted.push(' ');
@@ -6625,9 +6626,9 @@ pub fn type_format_single_line_with_zig_variables(formatted: &mut String, type_:
         Type::Choice(variants) => {
             type_choice_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 variants,
+                |_| LineSpan::Single,
                 |formatted, _, variant| {
                     formatted.push_str(&variant.name);
                     if let Some((value0, value1_up)) = variant.values.split_first() {
@@ -9116,7 +9117,7 @@ Available variable names are {}",
                 };
                 let type_argument_count = syntax_type_arguments
                     .as_ref()
-                    .map(|args| args.types.len())
+                    .map(|args| args.values.len())
                     .unwrap_or(0);
                 if type_argument_count != project_fn_info.type_parameters.len() {
                     errors.push(ErrorNode {
@@ -9135,7 +9136,7 @@ Type arguments are provided each wrapped in curly braces after the fn name, like
                 }
                 let Some(type_arguments) = syntax_type_arguments
                     .iter()
-                    .flat_map(|args| &args.types)
+                    .flat_map(|args| &args.values)
                     .map(|syntax_type_argument| {
                         syntax_type_check_not_in_type_alias(
                             syntax_type_argument,
@@ -11274,10 +11275,10 @@ fn type_diff_format(formatted: &mut String, indent: usize, type_diff: &TypeDiff)
         TypeDiff::CoreConstructOrAlias { name, arguments } => {
             type_construct_format(
                 formatted,
-                type_diff_line_span(type_diff),
                 indent,
                 name,
                 arguments,
+                |_| type_diff_line_span(type_diff),
                 |formatted, indent, argument| {
                     option_type_diff_format(formatted, next_indent(indent), argument.as_ref())
                 },
@@ -13650,6 +13651,54 @@ fn space_or_linebreak_indented_into(formatted: &mut String, line_span: LineSpan,
 fn next_indent(current_indent: usize) -> usize {
     (current_indent + 1).next_multiple_of(4)
 }
+fn last_item_indent(items_line_span: LineSpan, indent: usize) -> usize {
+    match items_line_span {
+        LineSpan::Single => indent,
+        LineSpan::Multiple => next_indent(indent),
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnclosingSymbolRequirement {
+    Required,
+    OmitIfEmpty,
+}
+fn enclosed_values_format<Value>(
+    formatted: &mut String,
+    indent: usize,
+    parens_requirement: EnclosingSymbolRequirement,
+    open_symbol: char,
+    closed_symbol: char,
+    values: &[Value],
+    values_line_span_before_last: impl FnOnce(/* last value */ &Value) -> LineSpan,
+    value_format: impl Fn(&mut String, usize, &Value),
+) {
+    if parens_requirement == EnclosingSymbolRequirement::Required {
+        formatted.push(open_symbol);
+    }
+    if let Some((last_value, values_before_last)) = values.split_last() {
+        if parens_requirement == EnclosingSymbolRequirement::OmitIfEmpty {
+            formatted.push(open_symbol);
+        }
+        let line_span = values_line_span_before_last(last_value);
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, next_indent(indent));
+        }
+        for value in values_before_last {
+            value_format(formatted, next_indent(indent), value);
+            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
+        }
+        value_format(formatted, last_item_indent(line_span, indent), last_value);
+        if line_span == LineSpan::Multiple {
+            linebreak_indented_into(formatted, indent);
+        }
+        if parens_requirement == EnclosingSymbolRequirement::OmitIfEmpty {
+            formatted.push(closed_symbol);
+        }
+    }
+    if parens_requirement == EnclosingSymbolRequirement::Required {
+        formatted.push(closed_symbol);
+    }
+}
 
 fn syntax_comments_format(formatted: &mut String, indent: usize, comments: &SyntaxComments) {
     for line in std::iter::once(&comments.line0).chain(&comments.line1_up) {
@@ -13693,7 +13742,7 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
         }
         match item {
             SyntaxProjectItem::TypeAlias {
-                ty_keyword_start: _,
+                ty_keyword_start,
                 name,
                 parameters,
                 documentation,
@@ -13719,22 +13768,31 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                         linebreak_indented_into(&mut formatted, 0);
                         syntax_comments_format(&mut formatted, 0, documentation);
                         indented_into(&mut formatted, next_indent(0));
+                        if let Some(type_) = type_ {
+                            syntax_type_format(&mut formatted, next_indent(0), type_);
+                        }
                     }
                     None => match type_ {
                         Some(type_) => {
+                            let type_line_span = range_line_span(lsp_types::Range {
+                                start: *ty_keyword_start,
+                                end: type_start(type_),
+                            });
                             space_or_linebreak_indented_into(
                                 &mut formatted,
-                                range_line_span(type_range(type_)),
+                                type_line_span,
                                 next_indent(0),
+                            );
+                            syntax_type_format(
+                                &mut formatted,
+                                last_item_indent(type_line_span, 0),
+                                type_,
                             );
                         }
                         None => {
                             formatted.push(' ');
                         }
                     },
-                }
-                if let Some(type_) = type_ {
-                    syntax_type_format(&mut formatted, next_indent(0), type_);
                 }
                 formatted.push('\n');
             }
@@ -13752,70 +13810,78 @@ pub fn syntax_project_format(project: &SyntaxProject, source: &str) -> String {
                     formatted.push_str(&name.value);
                 }
                 syntax_type_parameters_format(&mut formatted, type_parameters);
-                let header_line_span = range_line_span(lsp_types::Range {
-                    start: *fn_keyword_start,
-                    end: result_type
+                enclosed_values_format(
+                    &mut formatted,
+                    0,
+                    EnclosingSymbolRequirement::Required,
+                    '(',
+                    ')',
+                    parameters
                         .as_ref()
-                        .map(|result_type| type_end(result_type))
-                        .or_else(|| {
-                            parameters
-                                .as_ref()
-                                .map(|parameters| parenthesized_values_end(parameters, pattern_end))
+                        .map(|p| p.values.as_slice())
+                        .unwrap_or(&[]),
+                    |last| {
+                        range_line_span(lsp_types::Range {
+                            start: *fn_keyword_start,
+                            end: pattern_start(last),
                         })
-                        .or_else(|| {
-                            name.as_ref()
-                                .map(|name| name_end(with_start_position_as_ref(name)))
-                        })
-                        .unwrap_or_else(|| symbol_end(*fn_keyword_start, "fn")),
-                });
-                formatted.push('(');
-                if let Some(parameters) = parameters
-                    && let Some((parameter0, parameter1_up)) = parameters.values.split_first()
-                {
-                    if header_line_span == LineSpan::Multiple {
-                        linebreak_indented_into(&mut formatted, next_indent(0));
-                    }
-                    syntax_pattern_format(&mut formatted, next_indent(0), parameter0);
-                    for parameter in parameter1_up {
-                        space_or_linebreak_indented_into(
-                            &mut formatted,
-                            header_line_span,
-                            next_indent(0),
-                        );
-                        syntax_pattern_format(&mut formatted, next_indent(0), parameter);
-                    }
-                    if header_line_span == LineSpan::Multiple {
-                        linebreak_indented_into(&mut formatted, 0);
-                    }
-                }
-                formatted.push(')');
+                    },
+                    syntax_pattern_format,
+                );
                 match result_type {
                     Some(result_type) => {
+                        let result_type_line_span = range_line_span(lsp_types::Range {
+                            start: *fn_keyword_start,
+                            end: type_start(result_type),
+                        });
                         space_or_linebreak_indented_into(
                             &mut formatted,
-                            header_line_span,
+                            result_type_line_span,
                             next_indent(0),
                         );
-                        syntax_type_format(&mut formatted, next_indent(0), result_type);
+                        syntax_type_format(
+                            &mut formatted,
+                            last_item_indent(result_type_line_span, 0),
+                            result_type,
+                        );
                     }
                     None => {
-                        space_or_linebreak_indented_into(&mut formatted, header_line_span, 0);
+                        formatted.push(' ');
                     }
                 }
-                if let Some(documentation) = documentation {
-                    linebreak_indented_into(&mut formatted, 0);
-                    syntax_comments_format(&mut formatted, 0, documentation);
-                    indented_into(&mut formatted, next_indent(0));
-                } else {
-                    linebreak_indented_into(&mut formatted, next_indent(0));
-                }
-                if let Some(result) = result {
-                    syntax_expression_format(
-                        &mut formatted,
-                        next_indent(0),
-                        &project.expressions,
-                        result,
-                    );
+                match documentation {
+                    Some(documentation) => {
+                        linebreak_indented_into(&mut formatted, 0);
+                        syntax_comments_format(&mut formatted, 0, documentation);
+                        indented_into(&mut formatted, next_indent(0));
+                        if let Some(result) = result {
+                            syntax_expression_format(
+                                &mut formatted,
+                                next_indent(0),
+                                &project.expressions,
+                                result,
+                            );
+                        }
+                    }
+                    None => {
+                        if let Some(result) = result {
+                            let result_line_span = range_line_span(lsp_types::Range {
+                                start: *fn_keyword_start,
+                                end: expression_start(result, &project.expressions),
+                            });
+                            space_or_linebreak_indented_into(
+                                &mut formatted,
+                                result_line_span,
+                                next_indent(0),
+                            );
+                            syntax_expression_format(
+                                &mut formatted,
+                                last_item_indent(result_line_span, 0),
+                                &project.expressions,
+                                result,
+                            );
+                        }
+                    }
                 }
                 formatted.push('\n');
             }
@@ -13880,126 +13946,101 @@ fn syntax_string_format(formatted: &mut String, content: &str) {
 }
 fn tuple_format<Part>(
     formatted: &mut String,
-    line_span: LineSpan,
     indent: usize,
     parts: &[Part],
+    parts_line_span_before_last: impl FnOnce(/* last part */ &Part) -> LineSpan,
     part_format: impl Fn(&mut String, usize, &Part),
 ) {
     formatted.push('*');
-    if let Some((part0, part1_up)) = parts.split_first() {
-        formatted.push('(');
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, next_indent(indent));
-        }
-        part_format(formatted, next_indent(indent), part0);
-        for part in part1_up {
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            part_format(formatted, next_indent(indent), part);
-        }
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, indent);
-        }
-        formatted.push(')');
-    }
+    enclosed_values_format(
+        formatted,
+        indent,
+        EnclosingSymbolRequirement::OmitIfEmpty,
+        '(',
+        ')',
+        parts,
+        parts_line_span_before_last,
+        part_format,
+    );
 }
 fn record_format<Field>(
     formatted: &mut String,
-    line_span: LineSpan,
     indent: usize,
     fields: &[Field],
+    fields_line_span_before_last: impl FnOnce(/* last field */ &Field) -> LineSpan,
     field_format: impl Fn(&mut String, usize, &Field),
 ) {
-    formatted.push('{');
-    if let Some((field0, field1_up)) = fields.split_first() {
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, next_indent(indent));
-        }
-        field_format(formatted, next_indent(indent), field0);
-        for field in field1_up {
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            field_format(formatted, next_indent(indent), field);
-        }
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, indent);
-        }
-    }
-    formatted.push('}');
+    enclosed_values_format(
+        formatted,
+        indent,
+        EnclosingSymbolRequirement::Required,
+        '{',
+        '}',
+        fields,
+        fields_line_span_before_last,
+        field_format,
+    );
 }
 fn type_choice_format<Variant>(
     formatted: &mut String,
-    line_span: LineSpan,
     indent: usize,
     variants: &[Variant],
+    variants_line_span_before_last: impl FnOnce(/* last variant */ &Variant) -> LineSpan,
     variant_format: impl Fn(&mut String, usize, &Variant),
 ) {
-    formatted.push('[');
-    if let Some((variant0, variant1_up)) = variants.split_first() {
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, next_indent(indent));
-        }
-        variant_format(formatted, next_indent(indent), variant0);
-        for variant in variant1_up {
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            variant_format(formatted, next_indent(indent), variant);
-        }
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, indent);
-        }
-    }
-    formatted.push(']');
+    enclosed_values_format(
+        formatted,
+        indent,
+        EnclosingSymbolRequirement::Required,
+        '[',
+        ']',
+        variants,
+        variants_line_span_before_last,
+        variant_format,
+    );
 }
 fn type_construct_format<Argument>(
     formatted: &mut String,
-    line_span: LineSpan,
     indent: usize,
     name: &Name,
     arguments: &[Argument],
+    arguments_line_span_before_last: impl FnOnce(/* last argument */ &Argument) -> LineSpan,
     argument_format: impl Fn(&mut String, usize, &Argument),
 ) {
     formatted.push_str(name);
-    if let Some((argument0, argument1_up)) = arguments.split_first() {
-        formatted.push('(');
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, next_indent(indent));
-        }
-        argument_format(formatted, next_indent(indent), argument0);
-        for argument in argument1_up {
-            space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            argument_format(formatted, next_indent(indent), argument);
-        }
-        if line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, indent);
-        }
-        formatted.push(')');
-    }
+    enclosed_values_format(
+        formatted,
+        indent,
+        EnclosingSymbolRequirement::OmitIfEmpty,
+        '(',
+        ')',
+        arguments,
+        arguments_line_span_before_last,
+        argument_format,
+    );
 }
 fn fn_format<Parameter>(
     formatted: &mut String,
-    line_span: LineSpan,
+    line_span_before_result: LineSpan,
     indent: usize,
     parameters: &[Parameter],
-    parameters_line_span: impl FnOnce(&Parameter, &[Parameter]) -> LineSpan,
+    parameters_line_span_before_last: impl FnOnce(/* last parameter */ &Parameter) -> LineSpan,
     parameter_format: impl Fn(&mut String, usize, &Parameter),
     result_format: impl Fn(&mut String, usize),
 ) {
-    formatted.push_str("fn(");
-    if let Some((parameter0, parameter1_up)) = parameters.split_first() {
-        let parameters_line_span = parameters_line_span(parameter0, parameter1_up);
-        if parameters_line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, next_indent(indent));
-        }
-        parameter_format(formatted, next_indent(indent), parameter0);
-        for parameter in parameter1_up {
-            space_or_linebreak_indented_into(formatted, parameters_line_span, next_indent(indent));
-            parameter_format(formatted, next_indent(indent), parameter);
-        }
-        if parameters_line_span == LineSpan::Multiple {
-            linebreak_indented_into(formatted, indent);
-        }
-    }
-    formatted.push(')');
-    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-    result_format(formatted, next_indent(indent));
+    formatted.push_str("fn");
+    enclosed_values_format(
+        formatted,
+        indent,
+        EnclosingSymbolRequirement::Required,
+        '(',
+        ')',
+        parameters,
+        parameters_line_span_before_last,
+        parameter_format,
+    );
+    space_or_linebreak_indented_into(formatted, line_span_before_result, next_indent(indent));
+    result_format(formatted, last_item_indent(line_span_before_result, indent));
 }
 fn syntax_expression_format(
     formatted: &mut String,
@@ -14061,68 +14102,44 @@ fn syntax_expression_format(
                 formatted.push('.');
             }
             formatted.push_str(&name.value);
-            if let Some(type_arguments) = type_arguments
-                && let Some((type_argument0, type_argument1_up)) =
-                    type_arguments.types.split_first()
-            {
-                formatted.push('<');
-                let type_arguments_line_span = range_line_span(lsp_types::Range {
-                    start: type_arguments.open_angle_start,
-                    end: type_arguments
-                        .closed_angle_start
-                        .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
-                        .unwrap_or_else(|| {
-                            type_end(type_arguments.types.last().unwrap_or(type_argument0))
-                        }),
-                });
-                if type_arguments_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_type_format(formatted, next_indent(indent), type_argument0);
-                for type_argument in type_argument1_up {
-                    space_or_linebreak_indented_into(
-                        formatted,
-                        type_arguments_line_span,
-                        next_indent(indent),
-                    );
-                    syntax_type_format(formatted, next_indent(indent), type_argument);
-                }
-                if type_arguments_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push('>');
-            }
-            formatted.push('(');
-            if let Some(arguments_rest) = arguments_rest
-                && let Some((rest_argument0, rest_argument1_up)) =
-                    arguments_rest.values.split_first()
-            {
-                let arguments_line_span =
-                    range_line_span(parenthesized_values_range(arguments_rest, |argument| {
-                        expression_end(argument, expressions)
-                    }));
-                if arguments_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_expression_format(
-                    formatted,
-                    next_indent(indent),
-                    expressions,
-                    rest_argument0,
-                );
-                for argument in rest_argument1_up {
-                    space_or_linebreak_indented_into(
-                        formatted,
-                        arguments_line_span,
-                        next_indent(indent),
-                    );
-                    syntax_expression_format(formatted, next_indent(indent), expressions, argument);
-                }
-                if arguments_line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-            }
-            formatted.push(')');
+            enclosed_values_format(
+                formatted,
+                indent,
+                EnclosingSymbolRequirement::OmitIfEmpty,
+                '<',
+                '>',
+                type_arguments
+                    .as_ref()
+                    .map(|a| a.values.as_slice())
+                    .unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: name.start,
+                        end: type_start(last),
+                    })
+                },
+                syntax_type_format,
+            );
+            enclosed_values_format(
+                formatted,
+                indent,
+                EnclosingSymbolRequirement::Required,
+                '(',
+                ')',
+                arguments_rest
+                    .as_ref()
+                    .map(|p| p.values.as_slice())
+                    .unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: name.start,
+                        end: expression_start(last, expressions),
+                    })
+                },
+                |formatted, indent, value| {
+                    syntax_expression_format(formatted, indent, expressions, value)
+                },
+            );
         }
         SyntaxExpression::Variant {
             name,
@@ -14133,101 +14150,109 @@ fn syntax_expression_format(
             if let Some(SyntaxExpressionVariantType {
                 open_angle_start,
                 type_: Some(type_),
-                closed_angle_start,
+                closed_angle_start: _,
             }) = type_
             {
                 formatted.push('<');
                 let type_line_span = range_line_span(lsp_types::Range {
                     start: *open_angle_start,
-                    end: closed_angle_start
-                        .map(|closed_angle_start| symbol_end(closed_angle_start, ">"))
-                        .unwrap_or_else(|| type_end(type_)),
+                    end: type_start(type_),
                 });
                 if type_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, next_indent(indent));
                 }
-                syntax_type_format(formatted, next_indent(indent), type_);
+                syntax_type_format(formatted, last_item_indent(type_line_span, indent), type_);
                 if type_line_span == LineSpan::Multiple {
                     linebreak_indented_into(formatted, indent);
                 }
                 formatted.push('>');
             }
-            if let Some((value0, value1_up)) = values
-                .as_ref()
-                .and_then(|values| values.values.split_first())
-            {
-                formatted.push('(');
-                let line_span = range_line_span(expression_range(expression, expressions));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_expression_format(formatted, next_indent(indent), expressions, value0);
-                for value in value1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_expression_format(formatted, next_indent(indent), expressions, value);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            enclosed_values_format(
+                formatted,
+                indent,
+                EnclosingSymbolRequirement::OmitIfEmpty,
+                '(',
+                ')',
+                values.as_ref().map(|p| p.values.as_slice()).unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: name.start,
+                        end: expression_start(last, expressions),
+                    })
+                },
+                |formatted, indent, value| {
+                    syntax_expression_format(formatted, indent, expressions, value)
+                },
+            );
         }
         SyntaxExpression::Fn {
-            fn_keyword_start: _,
+            fn_keyword_start,
             parameters,
             result,
         } => {
+            let result = result.as_ref().map(|result| expressions.item(result));
             fn_format(
                 formatted,
-                range_line_span(expression_range(expression, expressions)),
+                match result {
+                    None => LineSpan::Single,
+                    Some(result) => range_line_span(lsp_types::Range {
+                        start: *fn_keyword_start,
+                        end: expression_start(result, expressions),
+                    }),
+                },
                 indent,
                 parameters
                     .as_ref()
                     .map(|p| p.values.as_slice())
                     .unwrap_or(&[]),
-                |parameter0, parameter1_up| {
-                    range_line_span(pattern_range(parameter1_up.last().unwrap_or(parameter0)))
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: *fn_keyword_start,
+                        end: pattern_start(last),
+                    })
                 },
                 syntax_pattern_format,
                 |formatted, indent| {
                     if let Some(result) = result {
-                        syntax_expression_format(
-                            formatted,
-                            indent,
-                            expressions,
-                            expressions.item(result),
-                        );
+                        syntax_expression_format(formatted, indent, expressions, result);
                     }
                 },
             );
         }
-        SyntaxExpression::Tuple {
-            star_start: _,
-            parts,
-        } => {
+        SyntaxExpression::Tuple { star_start, parts } => {
             tuple_format(
                 formatted,
-                range_line_span(expression_range(expression, expressions)),
                 indent,
                 parts
                     .as_ref()
                     .map(|parts| parts.values.as_slice())
                     .unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: *star_start,
+                        end: expression_start(last, expressions),
+                    })
+                },
                 |formatted, indent, part| {
                     syntax_expression_format(formatted, indent, expressions, part)
                 },
             );
         }
         SyntaxExpression::Record {
-            open_curly_start: _,
+            open_curly_start,
             fields,
             closed_curly_start: _,
         } => {
             record_format(
                 formatted,
-                range_line_span(expression_range(expression, expressions)),
                 indent,
                 fields,
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: *open_curly_start,
+                        end: last.name.start,
+                    })
+                },
                 |formatted, indent, field| {
                     syntax_expression_record_field_format(formatted, indent, expressions, field)
                 },
@@ -14259,12 +14284,20 @@ fn syntax_expression_format(
                     formatted.push_str("  ");
                 }
                 Some(pattern) => {
+                    let pattern_line_span = range_line_span(lsp_types::Range {
+                        start: *equals_start,
+                        end: pattern_start(pattern),
+                    });
                     space_or_linebreak_indented_into(
                         formatted,
-                        range_line_span(pattern_range(pattern)),
+                        pattern_line_span,
                         next_indent(indent),
                     );
-                    syntax_pattern_format(formatted, next_indent(indent), pattern);
+                    syntax_pattern_format(
+                        formatted,
+                        last_item_indent(pattern_line_span, indent),
+                        pattern,
+                    );
                 }
             }
             if let Some(queried) = queried {
@@ -14283,7 +14316,7 @@ fn syntax_expression_format(
             }
         }
         SyntaxExpression::If {
-            if_keyword_start: _,
+            if_keyword_start,
             queried,
             open_curly_start: _,
             cases,
@@ -14296,19 +14329,37 @@ fn syntax_expression_format(
                 }
                 Some(queried) => {
                     let queried = expressions.item(queried);
-                    let line_span = range_line_span(expression_range(queried, expressions));
+                    let line_span = range_line_span(lsp_types::Range {
+                        start: *if_keyword_start,
+                        end: expression_start(queried, expressions),
+                    });
                     space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_expression_format(formatted, next_indent(indent), expressions, queried);
+                    syntax_expression_format(
+                        formatted,
+                        last_item_indent(line_span, indent),
+                        expressions,
+                        queried,
+                    );
                     space_or_linebreak_indented_into(formatted, line_span, indent);
                 }
             }
-            formatted.push('{');
-            for case in cases {
-                linebreak_indented_into(formatted, next_indent(indent));
-                syntax_expression_if_case_format(formatted, next_indent(indent), expressions, case);
-            }
-            linebreak_indented_into(formatted, indent);
-            formatted.push('}');
+            enclosed_values_format(
+                formatted,
+                indent,
+                EnclosingSymbolRequirement::Required,
+                '{',
+                '}',
+                cases,
+                |last_case| {
+                    range_line_span(lsp_types::Range {
+                        start: *if_keyword_start,
+                        end: pattern_start(&last_case.pattern),
+                    })
+                },
+                |formatted, indent, case| {
+                    syntax_expression_if_case_format(formatted, indent, expressions, case)
+                },
+            );
         }
     }
 }
@@ -14316,7 +14367,6 @@ fn syntax_expression_record_field_format(
     formatted: &mut String,
     indent: usize,
     expressions: &Buf<Expressions, SyntaxExpression>,
-
     field: &SyntaxRecordField<SyntaxExpression>,
 ) {
     formatted.push_str(&field.name.value);
@@ -14327,10 +14377,15 @@ fn syntax_expression_record_field_format(
         Some(value) => {
             let line_span = range_line_span(lsp_types::Range {
                 start: field.name.start,
-                end: expression_range(value, expressions).end,
+                end: expression_start(value, expressions),
             });
             space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            syntax_expression_format(formatted, next_indent(indent), expressions, value);
+            syntax_expression_format(
+                formatted,
+                last_item_indent(line_span, indent),
+                expressions,
+                value,
+            );
         }
     }
 }
@@ -14338,7 +14393,6 @@ fn syntax_expression_if_case_format(
     formatted: &mut String,
     indent: usize,
     expressions: &Buf<Expressions, SyntaxExpression>,
-
     case: &SyntaxExpressionIfCase,
 ) {
     syntax_pattern_format(formatted, indent, &case.pattern);
@@ -14349,10 +14403,15 @@ fn syntax_expression_if_case_format(
         Some(result) => {
             let line_span = range_line_span(lsp_types::Range {
                 start: pattern_start(&case.pattern),
-                end: expression_end(result, expressions),
+                end: expression_start(result, expressions),
             });
             space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-            syntax_expression_format(formatted, next_indent(indent), expressions, result);
+            syntax_expression_format(
+                formatted,
+                last_item_indent(line_span, indent),
+                expressions,
+                result,
+            );
         }
     }
 }
@@ -14361,72 +14420,75 @@ fn syntax_pattern_format(formatted: &mut String, indent: usize, pattern: &Syntax
         SyntaxPattern::Variable { name, type_ } => {
             formatted.push_str(&name.value);
             if let Some(type_) = type_ {
-                space_or_linebreak_indented_into(
-                    formatted,
-                    range_line_span(pattern_range(pattern)),
-                    indent,
-                );
-                syntax_type_format(formatted, indent, type_);
+                let line_span = range_line_span(lsp_types::Range {
+                    start: name.start,
+                    end: pattern_start(pattern),
+                });
+                space_or_linebreak_indented_into(formatted, line_span, indent);
+                syntax_type_format(formatted, last_item_indent(line_span, indent), type_);
             }
         }
         SyntaxPattern::Ignored {
-            underscore_start: _,
+            underscore_start,
             type_,
         } => {
             formatted.push('_');
             if let Some(type_) = type_ {
-                space_or_linebreak_indented_into(
-                    formatted,
-                    range_line_span(pattern_range(pattern)),
-                    indent,
-                );
-                syntax_type_format(formatted, indent, type_);
+                let line_span = range_line_span(lsp_types::Range {
+                    start: *underscore_start,
+                    end: pattern_start(pattern),
+                });
+                space_or_linebreak_indented_into(formatted, line_span, indent);
+                syntax_type_format(formatted, last_item_indent(line_span, indent), type_);
             }
         }
         SyntaxPattern::Variant { name, values } => {
             formatted.push_str(&name.value.as_ref());
-            if let Some((value0, value1_up)) = values
-                .as_ref()
-                .and_then(|values| values.values.split_first())
-            {
-                formatted.push('(');
-                let line_span = range_line_span(pattern_range(pattern));
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, next_indent(indent));
-                }
-                syntax_pattern_format(formatted, next_indent(indent), value0);
-                for value in value1_up {
-                    space_or_linebreak_indented_into(formatted, line_span, next_indent(indent));
-                    syntax_pattern_format(formatted, next_indent(indent), value);
-                }
-                if line_span == LineSpan::Multiple {
-                    linebreak_indented_into(formatted, indent);
-                }
-                formatted.push(')');
-            }
+            enclosed_values_format(
+                formatted,
+                indent,
+                EnclosingSymbolRequirement::OmitIfEmpty,
+                '(',
+                ')',
+                values.as_ref().map(|p| p.values.as_slice()).unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: name.start,
+                        end: pattern_start(last),
+                    })
+                },
+                syntax_pattern_format,
+            );
         }
-        SyntaxPattern::Tuple {
-            star_start: _,
-            parts,
-        } => {
+        SyntaxPattern::Tuple { star_start, parts } => {
             tuple_format(
                 formatted,
-                range_line_span(pattern_range(pattern)),
                 indent,
                 parts.as_ref().map(|p| p.values.as_slice()).unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: *star_start,
+                        end: pattern_start(last),
+                    })
+                },
                 syntax_pattern_format,
             );
         }
         SyntaxPattern::Record {
-            open_curly_start: _,
+            open_curly_start,
             fields,
             closed_curly_start: _,
         } => {
             record_format(
                 formatted,
-                range_line_span(pattern_range(pattern)),
                 indent,
                 fields,
+                |last| {
+                    range_line_span(gen_lsp_types::Range {
+                        start: *open_curly_start,
+                        end: last.name.start,
+                    })
+                },
                 syntax_pattern_record_field_format,
             );
         }
@@ -14459,7 +14521,7 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
             formatted.push_str(&name.value);
         }
         SyntaxType::Fn {
-            fn_keyword_start: _,
+            fn_keyword_start,
             parameters,
             result,
         } => {
@@ -14471,10 +14533,10 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                     .as_ref()
                     .map(|p| p.values.as_slice())
                     .unwrap_or(&[]),
-                |parameter0, parameter1_up| {
+                |last| {
                     range_line_span(lsp_types::Range {
-                        start: type_start(parameter0),
-                        end: type_end(parameter1_up.last().unwrap_or(parameter0)),
+                        start: *fn_keyword_start,
+                        end: type_start(last),
                     })
                 },
                 syntax_type_format,
@@ -14488,51 +14550,68 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
         SyntaxType::Construct { name, arguments } => {
             type_construct_format(
                 formatted,
-                range_line_span(type_range(type_)),
                 indent,
                 &name.value,
                 arguments
                     .as_ref()
                     .map(|a| a.values.as_slice())
                     .unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: name.start,
+                        end: type_start(last),
+                    })
+                },
                 syntax_type_format,
             );
         }
-        SyntaxType::Tuple {
-            star_start: _,
-            parts,
-        } => {
+        SyntaxType::Tuple { star_start, parts } => {
             tuple_format(
                 formatted,
-                range_line_span(type_range(type_)),
                 indent,
                 parts.as_ref().map(|p| p.values.as_slice()).unwrap_or(&[]),
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: *star_start,
+                        end: type_start(last),
+                    })
+                },
                 syntax_type_format,
             );
         }
         SyntaxType::Record {
-            open_curly_start: _,
+            open_curly_start,
             fields,
             closed_curly_start: _,
         } => {
             record_format(
                 formatted,
-                range_line_span(type_range(type_)),
                 indent,
                 fields,
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: *open_curly_start,
+                        end: last.name.start,
+                    })
+                },
                 syntax_type_field_format,
             );
         }
         SyntaxType::Choice {
-            open_bracket_start: _,
+            open_bracket_start,
             variants,
             closed_bracket_start: _,
         } => {
             type_choice_format(
                 formatted,
-                range_line_span(type_range(type_)),
                 indent,
                 variants,
+                |last| {
+                    range_line_span(lsp_types::Range {
+                        start: *open_bracket_start,
+                        end: last.name.start,
+                    })
+                },
                 syntax_type_variant_format,
             );
         }
@@ -14852,7 +14931,7 @@ fn expression_symbol_at_position<'a>(
             }
             type_arguments
                 .iter()
-                .flat_map(|type_argument| &type_argument.types)
+                .flat_map(|type_argument| &type_argument.values)
                 .find_map(|type_argument| type_symbol_at_position(type_argument, position, scope))
                 .or_else(|| {
                     first_argument_dot.as_ref().and_then(
@@ -15940,7 +16019,7 @@ fn syntax_expression_symbol_uses_into(
                     }
                 }
             }
-            for type_argument in type_arguments.iter().flat_map(|args| &args.types) {
+            for type_argument in type_arguments.iter().flat_map(|args| &args.values) {
                 syntax_type_symbol_uses_into(uses, type_argument, symbol);
             }
             if let Some(first_argument_dot) = first_argument_dot {
@@ -16544,7 +16623,7 @@ fn syntax_expression_highlight(
             }
             syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Function);
             if let Some(type_arguments) = type_arguments {
-                for type_ in &type_arguments.types {
+                for type_ in &type_arguments.values {
                     syntax_type_highlight(state, type_);
                 }
             }
@@ -16769,10 +16848,10 @@ pub fn type_format_single_line(formatted: &mut String, type_: &Type) {
         Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
             type_construct_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 name,
                 arguments,
+                |_| LineSpan::Single,
                 |formatted, _, argument| type_format_single_line(formatted, argument),
             );
         }
@@ -16782,7 +16861,7 @@ pub fn type_format_single_line(formatted: &mut String, type_: &Type) {
                 LineSpan::Single,
                 0,
                 parameters,
-                |_, _| LineSpan::Single,
+                |_| LineSpan::Single,
                 |formatted, _, parameter| type_format_single_line(formatted, parameter),
                 |formatted, _| type_format_single_line(formatted, result),
             );
@@ -16790,27 +16869,27 @@ pub fn type_format_single_line(formatted: &mut String, type_: &Type) {
         Type::Tuple(parts) => {
             tuple_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 parts,
+                |_| LineSpan::Single,
                 |formatted, _, part| type_format_single_line(formatted, part),
             );
         }
         Type::Record(fields) => {
             record_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 fields,
+                |_| LineSpan::Single,
                 |formatted, _, field| type_field_format_single_line(formatted, field),
             );
         }
         Type::Choice(variants) => {
             type_choice_format(
                 formatted,
-                LineSpan::Single,
                 0,
                 variants,
+                |_| LineSpan::Single,
                 |formatted, _, variant| type_variant_format_single_line(formatted, variant),
             );
         }
@@ -16841,10 +16920,10 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
         Type::CoreConstruct { name, arguments } | Type::Alias { name, arguments } => {
             type_construct_format(
                 formatted,
-                type_line_span(type_),
                 indent,
                 name,
                 arguments,
+                |_| type_line_span(type_),
                 type_format,
             );
         }
@@ -16854,10 +16933,10 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
                 type_line_span(type_),
                 indent,
                 parameters,
-                |parameter0, parameter1_up| {
+                |_| {
                     type_info_length_estimate_line_span(
-                        std::iter::once(parameter0)
-                            .chain(parameter1_up)
+                        parameters
+                            .iter()
                             .map(|type_variant_value| 1 + type_length_estimate(type_variant_value))
                             .sum::<usize>(),
                     )
@@ -16867,23 +16946,29 @@ pub fn type_format(formatted: &mut String, indent: usize, type_: &Type) {
             );
         }
         Type::Tuple(parts) => {
-            tuple_format(formatted, type_line_span(type_), indent, parts, type_format);
+            tuple_format(
+                formatted,
+                indent,
+                parts,
+                |_| type_line_span(type_),
+                type_format,
+            );
         }
         Type::Record(fields) => {
             record_format(
                 formatted,
-                type_record_line_span(fields),
                 indent,
                 fields,
+                |_| type_record_line_span(fields),
                 type_field_format,
             );
         }
         Type::Choice(variants) => {
             type_choice_format(
                 formatted,
-                type_line_span(type_),
                 indent,
                 variants,
+                |_| type_line_span(type_),
                 type_variant_format,
             );
         }
