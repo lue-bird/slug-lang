@@ -478,6 +478,69 @@ export function span_end_of_length_positive(span, length) {
     },
   ];
 }
+/** @template $Origin
+ * @param {Span<$Origin, Char>} span
+ * @param {Str} prefix
+ * @param {{ "buf(Origin char)": Buf<$Origin, Char> }} $
+ * @returns {Opt<Opt<Span<$Origin, Char>>>} */
+export function span_after_str_chars(span, prefix, $) {
+  let i = span.start;
+  for (const prefixChar of prefix) {
+    if (i >= span.start + span.length || prefixChar != $["buf(Origin char)"].items[i]) {
+      return { tag: "no" };
+    }
+    i++;
+  }
+  const lengthAfter = span.start + span.length - i;
+  return {
+    tag: "yes",
+    v:
+      lengthAfter >= 1
+        ? { tag: "yes", v: { start: i, length: lengthAfter } }
+        : { tag: "no" },
+  };
+}
+/** @template $Origin
+ * @param {Opt<Span<$Origin, Char>>} span
+ * @param {Str} prefix
+ * @param {{ "buf(Origin char)": Buf<$Origin, Char> }} $
+ * @returns {Opt<Opt<Span<$Origin, Char>>>} */
+export function opt_span_after_str_chars(span, prefix, $) {
+  return span.tag === "no" ? { tag: "no" } : span_after_str_chars(span.v, prefix, $);
+}
+/** @template $Origin
+ * @param {Span<$Origin, Char>} span
+ * @param {Str} suffix
+ * @param {{ "buf(Origin char)": Buf<$Origin, Char> }} $
+ * @returns {Opt<Opt<Span<$Origin, Char>>>} */
+export function span_before_str_chars(span, suffix, $) {
+  // is there any way to implement this without 2 passes or an intermediate string?
+  const prefixCharCount = str_char_count(suffix);
+  if (prefixCharCount > span.length) return { tag: "no" };
+  let i = span.start + span.length - prefixCharCount;
+  for (const prefixChar of suffix) {
+    if (prefixChar != $["buf(Origin char)"].items[i]) {
+      return { tag: "no" };
+    }
+    i++;
+  }
+  const lengthAfter = span.length - prefixCharCount;
+  return {
+    tag: "yes",
+    v:
+      lengthAfter >= 1
+        ? { tag: "yes", v: { start: span.start, length: lengthAfter } }
+        : { tag: "no" },
+  };
+}
+/** @template $Origin
+ * @param {Opt<Span<$Origin, Char>>} span
+ * @param {Str} suffix
+ * @param {{ "buf(Origin char)": Buf<$Origin, Char> }} $
+ * @returns {Opt<Opt<Span<$Origin, Char>>>} */
+export function opt_span_before_str_chars(span, suffix, $) {
+  return span.tag === "no" ? { tag: "no" } : span_before_str_chars(span.v, suffix, $);
+}
 /** @template $Origin, $Item, $State, $Ctx
  * @param {Span<$Origin, $Item>} span
  * @param{{ tag: 'up' } | { tag: 'down' }} direction

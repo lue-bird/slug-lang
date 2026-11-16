@@ -167,34 +167,13 @@ fn json-object-field-value(
 
 fn opt-span-equals-str-chars(
     span opt(span(Chars char))
-    prefix str
+    str str
 )
     [Yes No]
-    = step-result
-        opt-span-step-while(
-            span
-            Up<[Down]>
-            prefix
-            fn(state str slot slot(Chars char))
-                = *(str-start opt-str-after) str-start(state)
-                if u32-order(char-to-u32(item(slot)) char-to-u32(str-start)) {
-                    Equal
-                        if opt-str-after {
-                            No Done<[Going(str)]>(Prefixed<[Not-prefixed]>)
-                            Yes(str-after) Going<[Done([Prefixed Not-prefixed])]>(str-after)
-                        }
-                    _
-                        Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
-                }
-        )
-    if step-result {
-        Going(_) No<[Yes]>
-        Done(Not-prefixed _) No<[Yes]>
-        Done(Prefixed span-after-prefix)
-            if u32-order(opt-span-length(span-after-prefix) 0u32) {
-                Equal Yes<[No]>
-                _ No<[Yes]>
-            }
+    if span.opt-span-after-str-chars(str) {
+        Yes(No) Yes<[No]>
+        No No<[Yes]>
+        Yes(Yes(_)) No<[Yes]>
     }
 
 fn opt-map-merge(opt opt(A) f fn(A) opt(B)) opt(B)

@@ -1667,6 +1667,74 @@ pub fn span_end_of_length_positive(
 } {
     return @"%span".splitBeforeEndLengthPositive(@"%length");
 }
+pub fn span_after_str_chars(
+    comptime @"%Origin": SlugType,
+    ctx: anytype,
+    @"%span": Span(@"%Origin".Ty, Char),
+    @"%prefix": Str,
+) Opt(Opt(Span(@"%Origin".Ty, Char))) {
+    var @"%prefix_chars" = @"%prefix".utf8.iterator();
+    var @"%i" = @"%span".start;
+    while (@"%prefix_chars".nextCodepoint()) |@"%prefix_char"| {
+        if (@"%i" >= @"%span".start + @"%span".length.positive or @"%prefix_char" !=
+            ctxBuf(ctx, @"%Origin", SlugType.char).items.items[@"%i"])
+        {
+            return .{ .no = {} };
+        }
+        @"%i" += 1;
+    }
+    return .{
+        .yes = if (P32.fromU32(@"%span".start + @"%span".length.positive - @"%i")) |@"%length_after"| .{
+            .yes = .{ .start = @"%i", .length = @"%length_after" },
+        } else .{ .no = {} },
+    };
+}
+pub fn opt_span_after_str_chars(
+    comptime @"%Origin": SlugType,
+    ctx: anytype,
+    @"%opt_span": Opt(Span(@"%Origin".Ty, Char)),
+    @"%prefix": Str,
+) Opt(Opt(Span(@"%Origin".Ty, Char))) {
+    return switch (@"%opt_span") {
+        .no => .{ .no = {} },
+        .yes => |@"%span"| span_after_str_chars(@"%Origin", ctx, @"%span", @"%prefix"),
+    };
+}
+pub fn span_before_str_chars(
+    comptime @"%Origin": SlugType,
+    ctx: anytype,
+    @"%span": Span(@"%Origin".Ty, Char),
+    @"%suffix": Str,
+) Opt(Opt(Span(@"%Origin".Ty, Char))) {
+    const @"%suffix_char_count" = @"%suffix".codepoint_count_p32().positive;
+    if (@"%suffix_char_count" > @"%span".length.positive) return .{ .no = {} };
+    var @"%i" = @"%span".start + @"%span".length.positive - @"%suffix_char_count";
+    var @"%suffix_chars" = @"%suffix".utf8.iterator();
+    while (@"%suffix_chars".nextCodepoint()) |@"%prefix_char"| {
+        if (@"%prefix_char" !=
+            ctxBuf(ctx, @"%Origin", SlugType.char).items.items[@"%i"])
+        {
+            return .{ .no = {} };
+        }
+        @"%i" += 1;
+    }
+    return .{
+        .yes = if (P32.fromU32(@"%span".length.positive - @"%suffix_char_count")) |@"%length_before"| .{
+            .yes = .{ .start = @"%span".start, .length = @"%length_before" },
+        } else .{ .no = {} },
+    };
+}
+pub fn opt_span_before_str_chars(
+    comptime @"%Origin": SlugType,
+    ctx: anytype,
+    @"%opt_span": Opt(Span(@"%Origin".Ty, Char)),
+    @"%suffix": Str,
+) Opt(Opt(Span(@"%Origin".Ty, Char))) {
+    return switch (@"%opt_span") {
+        .no => .{ .no = {} },
+        .yes => |@"%span"| span_before_str_chars(@"%Origin", ctx, @"%span", @"%suffix"),
+    };
+}
 pub fn opt_span_step(
     comptime @"%Item": SlugType,
     comptime @"%Origin": SlugType,

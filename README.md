@@ -298,30 +298,6 @@ to recompile, run
 cargo install --offline --debug --path . slug
 ```
 
-## ramblings
-Allocating individual recursive references and slices (e.g. rust's `Box`/`String`/`Vec`/`Box<str>`/`Box<[]>`)
-  - memory is usually more , meaning it's harder to predict 
-  - usually no simple way to pre-allocate space for different purposes
-  - to drop, this usually means traversing the whole structure, wandering from pointer to pointer when all we would want to do is just delete all memory that was used for one purpose in one fell swoop
-  - pointers are usually 64 bit wide which can be wasteful
-
-Arenas and especially storing an arena for each "group of memory allocations for a specific purpose" does solve most of these,
-especially when combined with some kind of tagging system so that no arenas are accidentally confused.
-but
-  - let's say you grow a few buffers stored in an arena multiple times. Now you have a good bit of stale ("leaked") memory around that you can't give back. I think this can be fine but it's iffy
-  - 64 bit wide
-  - no way to free and reuse parts of it
-  - no way to traverse it
-
-We could then consider creating an arena for every item type. TODO
-
-Plain integers as index and range types come with some drawbacks:
-  - collections need to be passed to every function that needs access. Adding/removing just one collection means changing a bunch of signatures and callsites. I find this tiring
-  - every access comes with a bounds check and potential crash or error handling
-  - you can accidentally use them to access the wrong collection
-  - If the underlying collections are alive for a while, items that have become useless may need to be removed and replaced with new items (think e.g. game enemies that have been eliminated).
-    Keeping indexes in sync is a common source of bugs
-
 
 ## ergonomic improvements over sloe
 - eliminating the need for any type variables and `Origin-erased`
@@ -333,7 +309,6 @@ Plain integers as index and range types come with some drawbacks:
 - more familiar syntax
 
 ## TODO
-- core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
 - provide better errors for record query patterns with mismatching type
 - consider format: only linebreaking between leading and follow-up syntax (e.g. field name - field value, or type name(arguments on the same line - last argument) when they are currently not on the same line. This might feel more intuitive for e.g. record and choice type aliases and make things like opt(span(..multiline..)) more compact and also clear
@@ -436,3 +411,29 @@ as this _requires_ & to be interpreted as "the incoming &s were themselves passe
 Arguably the easiest resolution is either
 - (not flexible enough!) treat all parameter &s as living as long as the outer function
 - require specifying on all parameter &s whether they live as long as the inner or outer function, e.g. `&` vs `_&` (or maybe `*`?)
+
+
+## ramblings - not valuable. skip
+Allocating individual recursive references and slices (e.g. rust's `Box`/`String`/`Vec`/`Box<str>`/`Box<[]>`)
+  - memory is usually more , meaning it's harder to predict 
+  - usually no simple way to pre-allocate space for different purposes
+  - to drop, this usually means traversing the whole structure, wandering from pointer to pointer when all we would want to do is just delete all memory that was used for one purpose in one fell swoop
+  - pointers are usually 64 bit wide which can be wasteful
+
+Arenas and especially storing an arena for each "group of memory allocations for a specific purpose" does solve most of these,
+especially when combined with some kind of tagging system so that no arenas are accidentally confused.
+but
+  - let's say you grow a few buffers stored in an arena multiple times. Now you have a good bit of stale ("leaked") memory around that you can't give back. I think this can be fine but it's iffy
+  - 64 bit wide
+  - no way to free and reuse parts of it
+  - no way to traverse it
+
+We could then consider creating an arena for every item type.
+I will explore this in [fuff](https://codeberg.org/lue-bird/fuff)
+
+Plain integers as index and range types come with some drawbacks:
+  - collections need to be passed to every function that needs access. Adding/removing just one collection means changing a bunch of signatures and callsites. I find this tiring
+  - every access comes with a bounds check and potential crash or error handling
+  - you can accidentally use them to access the wrong collection
+  - If the underlying collections are alive for a while, items that have become useless may need to be removed and replaced with new items (think e.g. game enemies that have been eliminated).
+    Keeping indexes in sync is a common source of bugs

@@ -1,8 +1,6 @@
-if you've cloned the slug repository, run from this directory with
+run with
 ```bash
-cargo run --manifest-path ../Cargo.toml js && node main.mjs
+slug js
 ```
-if you've installed `slug`, run with
-```bash
-slug js && node main.mjs
-```
+then open the directory with your local server of choice.
+For example, run [serve](https://github.com/vercel/serve) and open the printed localhost url.

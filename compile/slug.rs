@@ -12556,6 +12556,68 @@ See also `span-start-of-length-positive`, `span-end`.",
                 ]),
             },
             CoreFnInfo {
+                name: "span-after-str-chars",
+                documentation: "Strip the given start string off the given span once.
+See `opt-span-after-str-chars` for an example.
+```",
+                type_parameters: vec![],
+                parameters: vec![
+                    type_span(type_variable("Origin"), type_char),
+                    type_str,
+                ],
+                result: type_opt(type_opt(type_span(type_variable("Origin"), type_char))),
+            },
+            CoreFnInfo {
+                name: "opt-span-after-str-chars",
+                documentation: "Strip the given start string off the given span once.
+If the span does not have this prefix, return `No`.
+```slug
+fn opt-span-trim-start-str-chars(span opt(span(Origin char)) prefix str) span(Origin char)
+    if span.opt-span-after-str-chars(prefix) {
+        No span
+        Yes(span-after-prefix)
+            span-after-prefix.opt-span-trim-start-str-chars(prefix)
+    }
+```",
+                type_parameters: vec![],
+                parameters: vec![
+                    type_opt(type_span(type_variable("Origin"), type_char)),
+                    type_str,
+                ],
+                result: type_opt(type_opt(type_span(type_variable("Origin"), type_char))),
+            },
+            CoreFnInfo {
+                name: "span-before-str-chars",
+                documentation: "Strip the given end string off the given span once.
+See `opt-span-before-str-chars` for an example.
+```",
+                type_parameters: vec![],
+                parameters: vec![
+                    type_span(type_variable("Origin"), type_char),
+                    type_str,
+                ],
+                result: type_opt(type_opt(type_span(type_variable("Origin"), type_char))),
+            },
+            CoreFnInfo {
+                name: "opt-span-before-str-chars",
+                documentation: "Strip the given end string off the given span once.
+If the span does not have this suffix, return `No`.
+```slug
+fn opt-span-trim-end-str-chars(span opt(span(Origin char)) suffix str) span(Origin char)
+    if span.opt-span-before-str-chars(suffix) {
+        No span
+        Yes(span-before-suffix)
+            span-before-suffix.opt-span-trim-end-str-chars(suffix)
+    }
+```",
+                type_parameters: vec![],
+                parameters: vec![
+                    type_opt(type_span(type_variable("Origin"), type_char)),
+                    type_str,
+                ],
+                result: type_opt(type_opt(type_span(type_variable("Origin"), type_char))),
+            },
+            CoreFnInfo {
                 name: "span-step",
                 documentation: "Step through all slots, updating the given initial state for each taken slot in line.
 A less powerful version that preserves the span is `span-step`",

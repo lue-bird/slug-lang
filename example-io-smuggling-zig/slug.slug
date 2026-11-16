@@ -39,9 +39,9 @@ fn opt-span-strip-start-to-after-str-chars(
     excluded-end str
 )
     opt(span(Chars char))
-    if opt-span-strip-start-str-chars(opt-span excluded-end) {
-        Prefixed(after-end) after-end
-        Not-prefixed
+    if opt-span.opt-span-after-str-chars(excluded-end) {
+        Yes(after-end) after-end
+        No
             if opt-span {
                 No No<opt(span(Chars char))>
                 Yes(span)
@@ -55,75 +55,13 @@ fn opt-span-strip-end-to-before-str-chars(
     excluded-end str
 )
     opt(span(Chars char))
-    if opt-span-strip-end-str-chars(opt-span excluded-end) {
-        Prefixed(after-end) after-end
-        Not-prefixed
+    if opt-span.opt-span-before-str-chars(excluded-end) {
+        Yes(after-end) after-end
+        No
             if opt-span {
                 No No<opt(span(Chars char))>
                 Yes(span)
                     = *(before _) span-end(span)
                     opt-span-strip-end-to-before-str-chars(before excluded-end)
             }
-    }
-
-fn opt-span-strip-start-str-chars(
-    span opt(span(Chars char))
-    prefix str
-)
-    [Not-prefixed Prefixed(opt(span(Chars char)))]
-    = step-result
-        opt-span-step-while(
-            span
-            Up<[Down]>
-            prefix
-            fn(state str slot slot(Chars char))
-                = *(str-start opt-str-after) str-start(state)
-                if u32-order(char-to-u32(item(slot)) char-to-u32(str-start)) {
-                    Equal
-                        if opt-str-after {
-                            No Done<[Going(str)]>(Prefixed<[Not-prefixed]>)
-                            Yes(str-after) Going<[Done([Prefixed Not-prefixed])]>(str-after)
-                        }
-                    _
-                        Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
-                }
-        )
-    if step-result {
-        Going(_)
-            Not-prefixed<[Prefixed(opt(span(Chars char)))]>
-        Done(Not-prefixed _)
-            Not-prefixed<[Prefixed(opt(span(Chars char)))]>
-        Done(Prefixed span-after)
-            Prefixed<[Not-prefixed]>(span-after)
-    }
-
-fn opt-span-strip-end-str-chars(
-    span opt(span(Chars char))
-    suffix str
-)
-    [Not-prefixed Prefixed(opt(span(Chars char)))]
-    = step-result
-        opt-span-step-while(
-            span
-            Down<[Up]>
-            suffix
-            fn(state str slot slot(Chars char))
-                = *(opt-str-before str-end) str-end(state)
-                if u32-order(char-to-u32(item(slot)) char-to-u32(str-end)) {
-                    Equal
-                        if opt-str-before {
-                            No Done<[Going(str)]>(Prefixed<[Not-prefixed]>)
-                            Yes(str-before) Going<[Done([Prefixed Not-prefixed])]>(str-before)
-                        }
-                    _
-                        Done<[Going(str)]>(Not-prefixed<[Prefixed]>)
-                }
-        )
-    if step-result {
-        Going(_)
-            Not-prefixed<[Prefixed(opt(span(Chars char)))]>
-        Done(Not-prefixed _)
-            Not-prefixed<[Prefixed(opt(span(Chars char)))]>
-        Done(Prefixed span-after)
-            Prefixed<[Not-prefixed]>(span-after)
     }
