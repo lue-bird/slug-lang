@@ -333,7 +333,6 @@ Plain integers as index and range types come with some drawbacks:
 - more familiar syntax
 
 ## TODO
-- js change variant representation to `{tag:""} | {tag:"", v:value} | {tag,v{index}:value {index}}` which should help exhaustive switch() {} and create less objects for multi-value variants
 - core add more primitives for strings (e.g. span-strip-str-chars-once(span direction str) for checking starts with or ends with)
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
 - provide better errors for record query patterns with mismatching type

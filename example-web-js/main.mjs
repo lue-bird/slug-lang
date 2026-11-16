@@ -38,37 +38,36 @@ function refreshHtml() {
  * @returns {Node}
  */
 function createHtml(html, htmls, htmlModifiers, text, onEvent) {
-  if ("text" in html) {
-    return document.createTextNode(slugTextToString(html.text, text));
-  } else if ("element" in html) {
-    const element = document.createElement(html.element[0]);
-    for (const modifier of slug.buf$optSpanSlice(htmlModifiers, html.element[1])) {
-      if ("attribute" in modifier) {
-        element.setAttribute(
-          modifier.attribute[0],
-          slugTextToString(modifier.attribute[1], text),
-        );
-      } else if ("event_listener" in modifier) {
-        element.addEventListener(modifier.event_listener[0], (event) => {
-          if (!event) return;
-          const jsonFields = slug.buf_empty();
-          const chars = slug.buf_empty();
-          const eventJson = jsValueToSlugJson(event, jsonFields, chars);
-          const slugEvent = modifier.event_listener[1](eventJson, {
-            "buf(View {name [No Yes(span(View char))] value [Null True False Number(f32) String([No Yes(span(View char))]) Object([No Yes(span(View json-object-field(View)))])]})":
-              jsonFields,
-            "buf(View char)": chars,
-          });
-          onEvent(slugEvent, {});
-        });
+  switch (html.tag) {
+    case "text":
+      return document.createTextNode(slugTextToString(html.v, text));
+    case "element":
+      const element = document.createElement(html.v0);
+      for (const modifier of slug.buf$optSpanSlice(htmlModifiers, html.v1)) {
+        switch (modifier.tag) {
+          case "attribute":
+            element.setAttribute(modifier.v0, slugTextToString(modifier.v1, text));
+            break;
+          case "event_listener":
+            element.addEventListener(modifier.v0, (event) => {
+              if (!event) return;
+              const jsonFields = slug.buf_empty();
+              const chars = slug.buf_empty();
+              const eventJson = jsValueToSlugJson(event, jsonFields, chars);
+              const slugEvent = modifier.v1(eventJson, {
+                "buf(View {name [No Yes(span(View char))] value [Null True False Number(f32) String([No Yes(span(View char))]) Object([No Yes(span(View json-object-field(View)))])]})":
+                  jsonFields,
+                "buf(View char)": chars,
+              });
+              onEvent(slugEvent, {});
+            });
+            break;
+        }
       }
-    }
-    for (const sub of slug.buf$optSpanSlice(htmls, html.element[2])) {
-      element.appendChild(createHtml(sub, htmls, htmlModifiers, text, onEvent));
-    }
-    return element;
-  } else {
-    throw Error("missing case on html");
+      for (const sub of slug.buf$optSpanSlice(htmls, html.v2)) {
+        element.appendChild(createHtml(sub, htmls, htmlModifiers, text, onEvent));
+      }
+      return element;
   }
 }
 /** @template View
@@ -80,36 +79,41 @@ function createHtml(html, htmls, htmlModifiers, text, onEvent) {
 function jsValueToSlugJson(jsEvent, jsonFields, chars) {
   // must check for null first because for some reason typeof null === "object"
   if (jsEvent === null) {
-    return { nullø: undefined };
+    return { tag: "nullø" };
   } else if (typeof jsEvent === "number") {
-    return { number: jsEvent };
+    return { tag: "number", v: jsEvent };
   } else if (typeof jsEvent === "object") {
     /** @type slug.Opt<slug.Span<View, slug.Json_object_field<View>>> */
-    let fields = { no: undefined };
+    let fields = { tag: "no" };
     for (const fieldName of Object.getOwnPropertyNames(Object.getPrototypeOf(jsEvent))) {
       fields = {
-        yes: slug.opt_span_add(
+        tag: "yes",
+        v: slug.opt_span_add(
           fields,
           {
-            name: { yes: slug.add_str_chars(fieldName, { "buf(Origin char)": chars }) },
+            name: {
+              tag: "yes",
+              v: slug.add_str_chars(fieldName, { "buf(Origin char)": chars }),
+            },
             value: jsValueToSlugJson(jsEvent[fieldName], jsonFields, chars),
           },
           { "buf(Origin Item)": jsonFields },
         ),
       };
     }
-    return { object: fields };
+    return { tag: "object", v: fields };
   } else if (typeof jsEvent == "string") {
     return {
-      string:
+      tag: "string",
+      v:
         jsEvent.length === 0
-          ? { no: undefined }
-          : { yes: slug.add_str_chars(jsEvent, { "buf(Origin char)": chars }) },
+          ? { tag: "no" }
+          : { tag: "yes", v: slug.add_str_chars(jsEvent, { "buf(Origin char)": chars }) },
     };
   } else if (typeof jsEvent == "boolean") {
-    return jsEvent ? { trueø: undefined } : { falseø: undefined };
+    return jsEvent ? { tag: "trueø" } : { tag: "falseø" };
   } else {
-    return { nullø: undefined };
+    return { tag: "nullø" };
   }
 }
 /** @template Chars
@@ -118,9 +122,10 @@ function jsValueToSlugJson(jsEvent, jsonFields, chars) {
  * @returns string
  */
 function slugTextToString(text, chars) {
-  if ("staticø" in text) {
-    return text.staticø;
-  } else {
-    return slug.buf$optSpanSlice(chars, text.dynamic).join("");
+  switch (text.tag) {
+    case "staticø":
+      return text.v;
+    case "dynamic":
+      return slug.buf$optSpanSlice(chars, text.v).join("");
   }
 }

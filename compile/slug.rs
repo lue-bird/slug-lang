@@ -7279,28 +7279,29 @@ fn type_to_js(
                     variant: &TypeVariant,
                     type_aliases: &std::collections::HashMap<Name, CheckedTypeAlias>,
                 ) {
-                    output.push_str("{ ");
+                    output.push_str("{ tag: '");
                     output.push_str(&name_to_lowercase_js(&variant.name));
-                    output.push_str(": ");
+                    output.push_str("', ");
                     match variant.values.len() {
-                        0 => {
-                            output.push_str(empty_js_type_name);
-                        }
+                        0 => {}
                         1 => {
+                            output.push_str("v: ");
                             if let Some(variant_value) = variant.values.first() {
                                 type_to_js(output, variant_value, type_aliases);
                             }
                         }
                         2.. => {
-                            output.push('[');
-                            for variant_value in &variant.values {
+                            for (value_index, variant_value) in variant.values.iter().enumerate() {
+                                output.push('v');
+                                use std::fmt::Write as _;
+                                _ = write!(output, "{}", value_index);
+                                output.push_str(": ");
                                 type_to_js(output, variant_value, type_aliases);
                                 output.push_str(", ");
                             }
-                            output.push(']');
                         }
                     }
-                    output.push_str(" }");
+                    output.push('}');
                 }
                 variant_type_to_js(output, variant0, type_aliases);
                 for variant in variant1_up {
@@ -7360,10 +7361,10 @@ fn syntax_pattern_to_js_matches_condition(
             output.push_str("true");
         }
         SyntaxPattern::Variant { name, values } => {
-            output.push('"');
-            output.push_str(&name_to_lowercase_js(&name.value));
-            output.push_str("\" in ");
             output.push_str(to_match);
+            output.push_str(".tag === '");
+            output.push_str(&name_to_lowercase_js(&name.value));
+            output.push('\'');
             for (value_index, value) in values.iter().flat_map(|values| &values.values).enumerate()
             {
                 output.push_str(" && ");
@@ -7374,12 +7375,9 @@ fn syntax_pattern_to_js_matches_condition(
                         .as_ref()
                         .is_some_and(|values| values.values.len() >= 2)
                     {
-                        format!(
-                            "{to_match}.{}[{value_index}]",
-                            name_to_lowercase_js(&name.value)
-                        )
+                        format!("{to_match}.v{value_index}",)
                     } else {
-                        format!("{to_match}.{}", name_to_lowercase_js(&name.value))
+                        format!("{to_match}.v")
                     },
                 );
             }
@@ -7513,26 +7511,35 @@ fn syntax_pattern_to_js_destructuring<'a>(
                 }
                 _ => None,
             };
-            for (value_index, value) in values.iter().flat_map(|values| &values.values).enumerate()
-            {
-                syntax_pattern_to_js_destructuring(
-                    output,
-                    value,
-                    expected_variant_type.and_then(|variant| variant.values.get(value_index)),
-                    &if values
-                        .as_ref()
-                        .is_some_and(|values| values.values.len() >= 2)
+            match values.as_ref().map(|values| values.values.len()) {
+                None | Some(0) => {}
+                Some(1) => {
+                    if let Some(value) = values.as_ref().and_then(|values| values.values.first()) {
+                        syntax_pattern_to_js_destructuring(
+                            output,
+                            value,
+                            expected_variant_type.and_then(|variant| variant.values.first()),
+                            &format!("{to_destructure}.v"),
+                            insert_introduced_variable,
+                            type_aliases,
+                        );
+                    }
+                }
+                Some(2..) => {
+                    for (value_index, value) in
+                        values.iter().flat_map(|values| &values.values).enumerate()
                     {
-                        format!(
-                            "{to_destructure}.{}[{value_index}]",
-                            name_to_lowercase_js(&name.value)
-                        )
-                    } else {
-                        format!("{to_destructure}.{}", name_to_lowercase_js(&name.value))
-                    },
-                    insert_introduced_variable,
-                    type_aliases,
-                );
+                        syntax_pattern_to_js_destructuring(
+                            output,
+                            value,
+                            expected_variant_type
+                                .and_then(|variant| variant.values.get(value_index)),
+                            &format!("{to_destructure}.v{value_index}",),
+                            insert_introduced_variable,
+                            type_aliases,
+                        );
+                    }
+                }
             }
         }
         SyntaxPattern::Tuple {
@@ -7790,31 +7797,34 @@ fn syntax_expression_to_js<'a>(
                 );
             }
             js_scope_result_variable(output, scope_start);
-            output.push_str(" = { ");
+            output.push_str(" = { tag: '");
             output.push_str(&name_to_lowercase_js(&name.value));
-            output.push_str(": ");
+            output.push_str("', ");
             match values
                 .as_ref()
                 .map(|values| values.values.len())
                 .unwrap_or(0)
             {
-                0 => {
-                    output.push_str("undefined");
-                }
+                0 => {}
                 1 => {
                     if let Some(value) = values.as_ref().and_then(|values| values.values.first()) {
+                        output.push_str("v: ");
                         let value_scope_start = expression_start(value, expressions);
                         js_scope_result_variable(output, value_scope_start);
                     }
                 }
                 2.. => {
-                    output.push('[');
-                    for value in values.iter().flat_map(|values| &values.values) {
+                    for (value_index, value) in
+                        values.iter().flat_map(|values| &values.values).enumerate()
+                    {
+                        output.push('v');
+                        use std::fmt::Write as _;
+                        _ = write!(output, "{}", value_index);
+                        output.push_str(": ");
                         let value_scope_start = expression_start(value, expressions);
                         js_scope_result_variable(output, value_scope_start);
                         output.push_str(", ");
                     }
-                    output.push(']');
                 }
             }
             output.push_str("};\n");

@@ -8,8 +8,8 @@
 /** @typedef {string} Str
  * Assumed to contain at least one codepoint and at most 2^32-1 bytes
  */
-/** @template $Yes @typedef {{ yes: $Yes } | { no: void }} Opt */
-/** @typedef {{ less: void } | { equal: void } | { greater: void }} Order */
+/** @template $Yes @typedef {{ tag: 'yes', v: $Yes } | { tag: 'no' }} Opt */
+/** @typedef {{ tag: 'less' } | { tag: 'equal' } | { tag: 'greater' }} Order */
 /** @template $Origin, $Item @typedef {{ items: $Item[], counts: ArrayBuffer } & { readonly origin?: $Origin }} Buf
  * .counts holds Uint16s
  */
@@ -61,10 +61,10 @@ export function buf$counts_view(buf) {
  * @param {Opt<Span<Origin, Item>>} span
  */
 export function buf$optSpanSlice(buf, span) {
-  if ("no" in span) {
+  if (span.tag === "no") {
     return [];
   } else {
-    return buf$spanSlice(buf, span.yes);
+    return buf$spanSlice(buf, span.v);
   }
 }
 /** Sets its length to 0 but does not deallocate.
@@ -90,14 +90,14 @@ export function drop$Order(_) {}
 export function clone$Order(_) {}
 /** @template $Yes @param {Opt<$Yes>} opt @param {{ dropYes: (_: $Yes) => void }} $ opt @returns {void} */
 export function drop$Opt(opt, $) {
-  if ("yes" in opt) {
-    $.dropYes(opt.yes);
+  if (opt.tag === "yes") {
+    $.dropYes(opt.v);
   }
 }
 /** @template $Yes @param {Opt<$Yes>} opt @param {{ cloneYes: (_: $Yes) => void }} $ opt @returns {void} */
 export function clone$Opt(opt, $) {
-  if ("yes" in opt) {
-    $.cloneYes(opt.yes);
+  if (opt.tag === "yes") {
+    $.cloneYes(opt.v);
   }
 }
 
@@ -112,10 +112,10 @@ export function p32_mul_clamp(p, u) {
 /** @param {P32} left @param{P32} right @returns {Order} */
 export function p32_order(left, right) {
   return left < right
-    ? { less: undefined }
+    ? { tag: "less" }
     : left > right
-      ? { greater: undefined }
-      : { equal: undefined };
+      ? { tag: "greater" }
+      : { tag: "equal" };
 }
 /** @param {P32} p @param{U32} u add @returns {P32} */
 export function p32_add_clamp(p, u) {
@@ -123,7 +123,7 @@ export function p32_add_clamp(p, u) {
 }
 /** @param {U32} i @returns {Opt<P32>} */
 export function u32_to_p32(i) {
-  return i === 0 ? { no: undefined } : { yes: i };
+  return i === 0 ? { tag: "no" } : { tag: "yes", v: i };
 }
 /** @param {U32} u @returns {F32} */
 export function u32_round_to_nearest_f32_else_even(u) {
@@ -158,10 +158,10 @@ export function u32_pow_clamp(base, exponent) {
 /** @param {U32} left @param {U32} right sides @returns {Order} */
 export function u32_order(left, right) {
   return left < right
-    ? { less: undefined }
+    ? { tag: "less" }
     : left > right
-      ? { greater: undefined }
-      : { equal: undefined };
+      ? { tag: "greater" }
+      : { tag: "equal" };
 }
 /** @param {U32} u @returns {P32} */
 export function u32_to_i32_clamp(u) {
@@ -170,7 +170,7 @@ export function u32_to_i32_clamp(u) {
 
 /** @param {I32} i @returns {Opt<U32>} */
 export function i32_to_u32(i) {
-  return i < 0 ? { no: undefined } : { yes: i };
+  return i < 0 ? { tag: "no" } : { tag: "yes", v: i };
 }
 /** @param {I32} i @returns {F32} */
 export function i32_round_to_nearest_f32_else_even(i) {
@@ -187,10 +187,10 @@ export function i32_negate_clamp(i) {
 /** @param {I32} left @param {I32} right @returns {Order} */
 export function i32_order(left, right) {
   return left < right
-    ? { less: undefined }
+    ? { tag: "less" }
     : left > right
-      ? { greater: undefined }
-      : { equal: undefined };
+      ? { tag: "greater" }
+      : { tag: "equal" };
 }
 /** @param {I32} a @param {I32} b add @returns {I32} */
 export function i32_add_clamp(a, b) {
@@ -222,7 +222,7 @@ export function f32_div_clamp(n, by) {
 }
 /** @param {F32} n @returns {Opt<F32>} */
 export function f32_square_root(n) {
-  return n < 0.0 ? { no: undefined } : { yes: Math.sqrt(n) };
+  return n < 0.0 ? { tag: "no" } : { tag: "yes", v: Math.sqrt(n) };
 }
 /** @param {F32} base @param {I32} exponent @returns {Opt<F32>} */
 export function f32_pow_i32(base, exponent) {
@@ -232,8 +232,8 @@ export function f32_pow_i32(base, exponent) {
 export function f32_pow(base, exponent) {
   const power = Math.pow(base, exponent);
   return Number.isFinite(power) && power >= F32$MIN && power <= F32$MAX
-    ? { yes: Math.fround(power) }
-    : { no: undefined };
+    ? { tag: "yes", v: Math.fround(power) }
+    : { tag: "no" };
 }
 /** @param {F32} n @returns {F32} */
 export function f32_exp(n) {
@@ -242,12 +242,12 @@ export function f32_exp(n) {
 /** @param {F32} n @returns {Opt<F32>} */
 export function f32_ln(n) {
   if (n <= 0) {
-    return { no: undefined };
+    return { tag: "no" };
   } else {
     const ln_result = Math.log(n);
     return Number.isFinite(ln_result)
-      ? { yes: Math.fround(ln_result) }
-      : { no: undefined };
+      ? { tag: "yes", v: Math.fround(ln_result) }
+      : { tag: "no" };
   }
 }
 /** @param {F32} n @returns {F32} */
@@ -334,10 +334,10 @@ export function f32_round_toward_0_to_i32_clamp(n) {
 /** @param {F32} left @param {F32} right sides @returns {Order} */
 export function f32_order(left, right) {
   return left < right
-    ? { less: undefined }
+    ? { tag: "less" }
     : left > right
-      ? { greater: undefined }
-      : { equal: undefined };
+      ? { tag: "greater" }
+      : { tag: "equal" };
 }
 
 /** @param {Char} char @returns {U32} */
@@ -364,7 +364,9 @@ export function str_start(str) {
   const first = str.charAt(0);
   return [
     first,
-    str.length === first.length ? { no: undefined } : { yes: str.slice(first.length) },
+    str.length === first.length
+      ? { tag: "no" }
+      : { tag: "yes", v: str.slice(first.length) },
   ];
 }
 /** @param {Str} str @returns {[Opt<Str>, Char]} */
@@ -372,9 +374,15 @@ export function str_end(str) {
   const lastOneOrTwo = str.slice(-2);
   return lastOneOrTwo.charAt(0).length === 2
     ? // last codepoint consists of 2 code units
-      [str.length === 2 ? { no: undefined } : { yes: str.slice(0, -2) }, lastOneOrTwo]
+      [
+        str.length === 2 ? { tag: "no" } : { tag: "yes", v: str.slice(0, -2) },
+        lastOneOrTwo,
+      ]
     : // last codepoint consists of 1 code unit
-      [str.length === 1 ? { no: undefined } : { yes: str.slice(0, -1) }, str.slice(-1)];
+      [
+        str.length === 1 ? { tag: "no" } : { tag: "yes", v: str.slice(0, -1) },
+        str.slice(-1),
+      ];
 }
 
 /** @template $Result @param {never} never @returns {$Result} */
@@ -411,23 +419,23 @@ export function span_length(span, $) {
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, dropItem?: (_: $Item) => void }} $
  * @param {Opt<Span<$Origin, $Item>>} span @returns {U32} */
 export function opt_span_length(span, $) {
-  return "no" in span ? 0 : span_length(span.yes, $);
+  return span.tag === "no" ? 0 : span_length(span.v, $);
 }
 /** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {[Slot<$Origin, $Item>, Opt<Span<$Origin, $Item>>]} */
 export function span_start(span) {
   return [
     span.start,
     span.length >= 2
-      ? { yes: { start: span.start + 1, length: span.length - 1 } }
-      : { no: undefined },
+      ? { tag: "yes", v: { start: span.start + 1, length: span.length - 1 } }
+      : { tag: "no" },
   ];
 }
 /** @template $Origin, $Item @param {Span<$Origin, $Item>} span @returns {[Opt<Span<$Origin, $Item>>, Slot<$Origin, $Item>]} */
 export function span_end(span) {
   return [
     span.length >= 2
-      ? { yes: { start: span.start, length: span.length - 1 } }
-      : { no: undefined },
+      ? { tag: "yes", v: { start: span.start, length: span.length - 1 } }
+      : { tag: "no" },
     span.start + span.length - 1,
   ];
 }
@@ -439,9 +447,10 @@ export function span_start_of_length_positive(span, length) {
   return [
     { start: span.start, length: Math.min(span.length, length) },
     span.length <= length
-      ? { no: undefined }
+      ? { tag: "no" }
       : {
-          yes: {
+          tag: "yes",
+          v: {
             start: span.start + length,
             length: span.length - length,
           },
@@ -455,9 +464,10 @@ export function span_start_of_length_positive(span, length) {
 export function span_end_of_length_positive(span, length) {
   return [
     span.length <= length
-      ? { no: undefined }
+      ? { tag: "no" }
       : {
-          yes: {
+          tag: "yes",
+          v: {
             start: span.start,
             length: span.length - length,
           },
@@ -470,13 +480,13 @@ export function span_end_of_length_positive(span, length) {
 }
 /** @template $Origin, $Item, $State, $Ctx
  * @param {Span<$Origin, $Item>} span
- * @param{{ up: void } | { down: void }} direction
+ * @param{{ tag: 'up' } | { tag: 'down' }} direction
  * @param{$State} state
  * @param{(state: $State, slot: Slot<$Origin, $Item>, $: $Ctx) => $State} step
  * @param {$Ctx} $
  * @returns {$State} */
 export function span_step(span, direction, state, step, $) {
-  if ("up" in direction) {
+  if (direction.tag === "up") {
     for (let i = span.start; i < span.start + span.length; i++) {
       state = step(state, i, $);
     }
@@ -489,67 +499,70 @@ export function span_step(span, direction, state, step, $) {
 }
 /** @template $Origin, $Item, $State, $Ctx
  * @param {Opt<Span<$Origin, $Item>>} span
- * @param{{ up: void } | { down: void }} direction
+ * @param{{ tag: 'up' } | { tag: 'down' }} direction
  * @param{$State} state
  * @param{(state: $State, slot: Slot<$Origin, $Item>, $: $Ctx) => $State} step
  * @param {$Ctx} $
  * @returns {$State} */
 export function opt_span_step(span, direction, state, step, $) {
-  return "no" in span ? state : span_step(span.yes, direction, state, step, $);
+  return span.tag === "no" ? state : span_step(span.v, direction, state, step, $);
 }
 /** @template $Done, $Going, $Origin, $Item, $Ctx
  * @param {Span<$Origin, $Item>} span
- * @param{{ up: void } | { down: void }} direction
+ * @param{{ tag: 'up' } | { tag: 'down' }} direction
  * @param {$Going} state
- * @param {(state: $Going, slot: Slot<$Origin, $Item>, $: $Ctx) => { going: $Going } | { done: $Done }} step
+ * @param {(state: $Going, slot: Slot<$Origin, $Item>, $: $Ctx) => { tag: 'going', v: $Going } | { tag: 'done', v: $Done }} step
  * @param {$Ctx} $
- * @returns {{ going: $Going } | { done: [$Done, Opt<Span<$Origin, $Item>>] }} */
+ * @returns {{ tag: 'going', v: $Going } | { tag: 'done', v0: $Done, v1: Opt<Span<$Origin, $Item>> }} */
 export function span_step_while(span, direction, state, step, $) {
-  if ("up" in direction) {
+  if (direction.tag === "up") {
     for (let i = span.start; i < span.start + span.length; i++) {
       const step_result = step(state, i, $);
-      if ("done" in step_result) {
+      if (step_result.tag === "done") {
         const rest_length = span.start + span.length - 1 - i;
         return {
-          done: [
-            step_result.done,
+          tag: "done",
+          v0: step_result.v,
+          v1:
             rest_length >= 1
-              ? { yes: { start: i + 1, length: rest_length } }
-              : { no: undefined },
-          ],
+              ? { tag: "yes", v: { start: i + 1, length: rest_length } }
+              : { tag: "no" },
         };
       }
-      state = step_result.going;
+      state = step_result.v;
     }
   } else {
     for (let i = span.start + span.length - 1; i >= span.start; i--) {
       const step_result = step(state, i, $);
-      if ("done" in step_result) {
+      if (step_result.tag === "done") {
         const rest_length = i - span.start;
         return {
-          done: [
-            step_result.done,
+          tag: "done",
+          v0: step_result.v,
+          v1:
             rest_length >= 1
-              ? { yes: { start: 0, length: rest_length } }
-              : { no: undefined },
-          ],
+              ? { tag: "yes", v: { start: 0, length: rest_length } }
+              : { tag: "no" },
         };
       }
-      state = step_result.going;
+      state = step_result.v;
     }
   }
-  return { going: state };
+  return { tag: "going", v: state };
 }
 /** @template $Done, $Going, $Origin, $Item, $Ctx
  * @param {Opt<Span<$Origin, $Item>>} span
- * @param{{ up: void } | { down: void }} direction
+ * @param{{ tag: 'up' } | { tag: 'down' }} direction
  * @param {$Going} state
- * @param {(state: $Going, slot: Slot<$Origin, $Item>, $: $Ctx) => { going: $Going } | { done: $Done }} step
+ * @param {(state: $Going, slot: Slot<$Origin, $Item>, $: $Ctx) => { tag: 'going', v: $Going } | { tag: 'done', v: $Done }} step
  * @param {$Ctx} $
- * @returns {{ going: $Going } | { done: [$Done, Opt<Span<$Origin, $Item>>] }} */
+ * @returns {{ tag: 'going', v: $Going } | { tag: 'done', v0: $Done, v1: Opt<Span<$Origin, $Item>> }} */
 export function opt_span_step_while(span, direction, state, step, $) {
-  if ("no" in span) return { going: state };
-  return span_step_while(span.yes, direction, state, step, $);
+  if (span.tag === "no") return { tag: "going", v: state };
+  // it seems tsc has trouble inferring generics from argument function result types only
+  return /** @type typeof span_step_while<$Done, $Going, $Origin, $Item, $Ctx> */ (
+    span_step_while
+  )(span.v, direction, state, step, $);
 }
 
 /** @template $Item, $Origin
@@ -642,8 +655,8 @@ export function span_alter(span, item_alter, $) {
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, cloneItem?: (_: $Item) => void }} $
  * @returns {void} */
 export function opt_span_alter(span, item_alter, $) {
-  if ("yes" in span) {
-    span_alter(span.yes, item_alter, $);
+  if (span.tag === "yes") {
+    span_alter(span.v, item_alter, $);
   }
 }
 /** @template $Item, $Origin
@@ -728,11 +741,11 @@ export function span_add(span, new_item, $) {
  * @param {$Item} new_item
  * @returns {Span<$Origin, $Item>} */
 export function opt_span_add(span, new_item, $) {
-  if ("no" in span) {
+  if (span.tag === "no") {
     const new_index = add(new_item, $);
     return slot_to_span(new_index);
   }
-  return span_add(span.yes, new_item, $);
+  return span_add(span.v, new_item, $);
 }
 /** @template $Item, $Origin
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, cloneItem?: (_: $Item) => void }} $
@@ -821,8 +834,8 @@ export function span_move_to_end(span, $) {
  * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_move_to_end(span, $) {
-  if ("no" in span) return { no: undefined };
-  return { yes: span_move_to_end(span.yes, $) };
+  if (span.tag === "no") return { tag: "no" };
+  return { tag: "yes", v: span_move_to_end(span.v, $) };
 }
 /** @template $Item, $Origin
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, cloneItem?: (_: $Item) => void }} $
@@ -865,8 +878,8 @@ export function span_move_to_unset(span, $) {
  * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_move_to_unset(span, $) {
-  if ("no" in span) return span;
-  return { yes: span_move_to_unset(span.yes, $) };
+  if (span.tag === "no") return span;
+  return { tag: "yes", v: span_move_to_unset(span.v, $) };
 }
 /** @template $Item, $Origin
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item> }} $
@@ -883,8 +896,8 @@ export function span_reverse(span, $) {
  * @param {Opt<Span<$Origin, $Item>>} span
  * @returns {void} */
 export function opt_span_reverse(span, $) {
-  if ("no" in span) return;
-  span_reverse(span.yes, $);
+  if (span.tag === "no") return;
+  span_reverse(span.v, $);
 }
 /** @template $Item, $Origin
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item> }} $
@@ -898,7 +911,7 @@ export function span_sort(span, item_order, $) {
       $["buf(Origin Item)"].items[left],
       $["buf(Origin Item)"].items[right],
     );
-    return "less" in order ? -1 : "greater" in order ? 1 : 0;
+    return order.tag === "less" ? -1 : order.tag === "greater" ? 1 : 0;
   });
   span_indexes.forEach((buf_index_sorted, old_offset_within_span) => {
     if (span.start + old_offset_within_span < buf_index_sorted) {
@@ -917,8 +930,8 @@ export function span_sort(span, item_order, $) {
  * @param{(left: $Item, right: $Item) => Order} item_order
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_sort(span, item_order, $) {
-  if ("yes" in span) {
-    span_sort(span.yes, item_order, $);
+  if (span.tag === "yes") {
+    span_sort(span.v, item_order, $);
   }
   return span;
 }
@@ -945,10 +958,10 @@ export function span_add_own_span(start, end, $) {
  * @param{Opt<Span<$Origin, $Item>>} end
  * @returns {Span<$Origin, $Item>} */
 export function span_add_own_opt_span(start, end, $) {
-  if ("no" in end) {
+  if (end.tag === "no") {
     return start;
   }
-  return span_add_own_span(start, end.yes, $);
+  return span_add_own_span(start, end.v, $);
 }
 /** @template $Item, $Origin
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, cloneItem?: (_: $Item) => void }} $
@@ -956,10 +969,10 @@ export function span_add_own_opt_span(start, end, $) {
  * @param{Span<$Origin, $Item>} end
  * @returns {Span<$Origin, $Item>} */
 export function opt_span_add_own_span(start, end, $) {
-  if ("no" in start) {
+  if (start.tag === "no") {
     return end;
   }
-  return span_add_own_span(start.yes, end, $);
+  return span_add_own_span(start.v, end, $);
 }
 /** @template $Item, $Origin
  * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, cloneItem?: (_: $Item) => void }} $
@@ -967,9 +980,9 @@ export function opt_span_add_own_span(start, end, $) {
  * @param{Opt<Span<$Origin, $Item>>} end
  * @returns {Opt<Span<$Origin, $Item>>} */
 export function opt_span_add_own_opt_span(start, end, $) {
-  if ("no" in start) return end;
-  if ("no" in end) return start;
-  return { yes: span_add_own_span(start.yes, end.yes, $) };
+  if (start.tag === "no") return end;
+  if (end.tag === "no") return start;
+  return { tag: "yes", v: span_add_own_span(start.v, end.v, $) };
 }
 /** @template $Origin
  * @param {{ "buf(Origin char)": Buf<$Origin, Char> }} $
@@ -1026,10 +1039,10 @@ export function span_add_str_chars(span, new_str, $) {
  * @param {Str} new_str
  * @returns {Span<$Origin, Char>} */
 export function opt_span_add_str_chars(span, new_str, $) {
-  if ("no" in span) {
+  if (span.tag === "no") {
     return add_str_chars(new_str, $);
   }
-  return span_add_str_chars(span.yes, new_str, $);
+  return span_add_str_chars(span.v, new_str, $);
 }
 /** @template $Origin
  * @param {{ "buf(Origin char)": Buf<$Origin, Char> }} $
