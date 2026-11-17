@@ -132,6 +132,7 @@ fn initial-state() state {
     projects-buf buf-empty<[File] file>()
 }
 ```
+[Additional examples, explanations, a repl and core library documentation](https://lue-bird.github.io/slug-lang/)
 
 ## syntax
 ```slug
