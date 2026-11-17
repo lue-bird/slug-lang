@@ -4567,9 +4567,9 @@ fn type_implicit_bufs(
                     &mut Vec::new(),
                     type_aliases,
                 );
-                let origin_fully_dealiased = origin.clone();
+                let mut origin_fully_dealiased = origin.clone();
                 type_fully_resolve_aliases(
-                    &mut item_fully_dealiased,
+                    &mut origin_fully_dealiased,
                     &mut Vec::new(),
                     type_aliases,
                 );
