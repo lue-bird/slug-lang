@@ -13487,7 +13487,7 @@ and the resulting formatted json chars in another buf.
 fn json-format<Formatted>(
     json opt(span(Original-source char))
 )
-    opt(span(char))
+    opt(span(Formatted char))
     ...
 ```
 which you can call like for example
@@ -13499,7 +13499,7 @@ fn example() *
     = _ buf-empty<[Formatted] char>()
     = formatted
         json-format<[Formatted]>(original-source)
-    # now formatted contains
+    # now formatted contains the prettified json
     = _ formatted
     *
 ```
