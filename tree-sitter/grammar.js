@@ -132,6 +132,7 @@ export default grammar({
         $.type_tuple,
         $.type_record,
         $.type_choice,
+        $.type_commented,
       ),
     type_fn: ($) => seq($.keyword_fn, "(", repeat($.type), ")", $.type),
     type_construct_with_arguments: ($) => seq($.type_name, "(", repeat($.type), ")"),
@@ -142,6 +143,12 @@ export default grammar({
     type_record: ($) => seq("{", repeat($.type_record_field), "}"),
     type_record_field: ($) => seq($.field_name, $.type),
     type_name: ($) => $.lower_name,
+    type_commented: ($) =>
+      seq(
+        // semantically repeat1($.comment) but for simplicity the syntactic equivalent
+        $.comment,
+        $.type,
+      ),
 
     string: ($) => $.string_quoted,
     string_quoted: ($) => seq('"', repeat(choice("\\\\", '\\"', /[^"]/)), '"'),

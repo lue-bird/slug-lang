@@ -299,9 +299,7 @@ cargo install --offline --debug --path . slug
 - more familiar syntax
 
 ## TODO
-- consider not modifying variant tag names in js output
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
-- allow comments in a few more places
 
 ## known design weaknesses
 - The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes operations like recursive traversals quadratic.
@@ -333,6 +331,7 @@ cargo install --offline --debug --path . slug
 - (will probably reject) what about slots and spans that are valid across multiple (!) bufs? This would make things like struct-of-arrays easier and require less duplicate info in memory.
 - automatically figure out optimizations for "consume-only" parameters not needing to be cloned
 - I would **LOVE** if there was a way to allow for "unspecialized function types". If e.g. rust gains support for this, we should add this (and maybe backport it to sloe)
+- allow comments before field names and choice type variant names
 - could this approach be used to compile existing, high-level languages (e.g. elm/gren)?
 - should FFI be more ergonomic? Maybe by providing `extern-fn` signatures (and maybe `extern-ty`?) that must get populated by the platform
 - add a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself

@@ -76,6 +76,10 @@ pub enum SyntaxType {
         variants: Vec<SyntaxTypeVariant>,
         closed_bracket_start: Option<lsp_types::Position>,
     },
+    Commented {
+        comments: SyntaxComments,
+        type_: Option<Box<SyntaxType>>,
+    },
 }
 #[derive(Debug)]
 pub struct SyntaxTypeVariant {
@@ -345,6 +349,7 @@ pub fn type_start(type_: &SyntaxType) -> lsp_types::Position {
         SyntaxType::Choice {
             open_bracket_start, ..
         } => *open_bracket_start,
+        SyntaxType::Commented { comments, type_: _ } => comments.line0.start,
     }
 }
 pub fn type_end(type_: &SyntaxType) -> lsp_types::Position {
@@ -403,6 +408,10 @@ pub fn type_end(type_: &SyntaxType) -> lsp_types::Position {
                 })
             })
             .unwrap_or_else(|| symbol_end(*open_curly_start, "{")),
+        SyntaxType::Commented { comments, type_ } => type_
+            .as_deref()
+            .map(|inner| type_end(inner))
+            .unwrap_or_else(|| comments_end(comments)),
     }
 }
 
@@ -1298,6 +1307,7 @@ pub fn parse_type(state: &mut ParseState) -> Option<SyntaxType> {
         .or_else(|| parse_type_tuple(state))
         .or_else(|| parse_type_record(state))
         .or_else(|| parse_type_choice(state))
+        .or_else(|| parse_type_commented(state))
 }
 fn parse_type_variable(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(name) = parse_syntax_uppercase_name_with_start(state) else {
@@ -1419,6 +1429,17 @@ fn parse_type_fn(state: &mut ParseState) -> Option<SyntaxType> {
         fn_keyword_start,
         parameters,
         result: result.map(Box::new),
+    })
+}
+fn parse_type_commented(state: &mut ParseState) -> Option<SyntaxType> {
+    let Some(comments) = parse_syntax_comments(state) else {
+        return None;
+    };
+    parse_syntax_whitespace(state);
+    let type_ = parse_type(state);
+    Some(SyntaxType::Commented {
+        comments,
+        type_: type_.map(Box::new),
     })
 }
 pub fn parse_expression(
@@ -1646,7 +1667,7 @@ fn parse_expression_commented(
     parse_syntax_whitespace(state);
     let expression = parse_expression(state, expressions);
     Some(SyntaxExpression::Commented {
-        comments: comments,
+        comments,
         expression: expression.map(|expression| expressions.insert(expression)),
     })
 }
@@ -2370,6 +2391,15 @@ fn syntax_type_connect_directly_referenced_type_names_in_graph_from(
                 }
             }
         }
+        SyntaxType::Commented { comments: _, type_ } => {
+            if let Some(type_) = type_ {
+                syntax_type_connect_directly_referenced_type_names_in_graph_from(
+                    type_graph_node_by_name,
+                    type_,
+                    type_graph,
+                );
+            }
+        }
     }
 }
 fn syntax_expression_connect_fns_in_graph_from<'a>(
@@ -2997,6 +3027,10 @@ pub fn syntax_type_to_type(type_: &SyntaxType) -> Type {
                 })
                 .collect(),
         ),
+        SyntaxType::Commented { comments: _, type_ } => type_
+            .as_deref()
+            .map(|type_| syntax_type_to_type(type_))
+            .unwrap_or_else(|| type_empty),
     }
 }
 pub fn syntax_type_check_not_in_type_alias(
@@ -3314,6 +3348,26 @@ Move nested parts of this data into the heap (using slot/span) to represent such
                 return None;
             }
             Some(Type::Choice(variant_types))
+        }
+        SyntaxType::Commented { comments, type_ } => {
+            let Some(type_) = type_ else {
+                errors.push(ErrorNode {
+                    range: symbol_range(comments.line0.start, "#"),
+                    message: Box::from(
+                        "missing expression after comments # your comment \\n ..here..",
+                    ),
+                });
+                return None;
+            };
+            syntax_type_check(
+                type_,
+                errors,
+                recursive_type_aliases,
+                using_recursive_type_alias_allowed,
+                type_aliases,
+                records_used,
+                choices_used,
+            )
         }
     }
 }
@@ -9607,17 +9661,17 @@ If there should only ever by one variant, using a record with a single field is 
         SyntaxExpression::Commented {
             comments,
             expression,
-        } => match expression {
-            None => {
+        } => {
+            let Some(expression) = expression else {
                 errors.push(ErrorNode {
                     range: symbol_range(comments.line0.start, "#"),
                     message: Box::from(
                         "missing expression after comments # your comment \\n ..here..",
                     ),
                 });
-                None
-            }
-            Some(expression) => syntax_expression_check(
+                return None;
+            };
+            syntax_expression_check(
                 errors,
                 type_aliases,
                 project_fns,
@@ -9629,8 +9683,8 @@ If there should only ever by one variant, using a record with a single field is 
                 checked_queries,
                 records_used,
                 choices_used,
-            ),
-        },
+            )
+        }
         SyntaxExpression::Destruct {
             equals_start,
             pattern,
@@ -10766,6 +10820,11 @@ pub fn syntax_type_variables_into<'a>(
                 for value in variant.values.iter().flat_map(|values| &values.values) {
                     syntax_type_variables_into(type_variables, value);
                 }
+            }
+        }
+        SyntaxType::Commented { comments: _, type_ } => {
+            if let Some(type_) = type_ {
+                syntax_type_variables_into(type_variables, type_);
             }
         }
     }
@@ -14639,6 +14698,12 @@ fn syntax_type_format(formatted: &mut String, indent: usize, type_: &SyntaxType)
                 syntax_type_variant_format,
             );
         }
+        SyntaxType::Commented { comments, type_ } => {
+            syntax_comments_format(formatted, indent, comments);
+            if let Some(type_) = type_ {
+                syntax_type_format(formatted, indent, type_);
+            }
+        }
     }
 }
 fn syntax_type_field_format(
@@ -15576,6 +15641,9 @@ fn type_symbol_at_position<'a>(
             .filter_map(|variant| variant.values.as_ref())
             .flat_map(|values| &values.values)
             .find_map(|value| type_symbol_at_position(value, position, scope)),
+        SyntaxType::Commented { comments: _, type_ } => type_
+            .as_ref()
+            .and_then(|type_| type_symbol_at_position(type_, position, scope)),
     }
 }
 
@@ -15906,6 +15974,11 @@ fn syntax_type_symbol_uses_into(
                 for argument in arguments {
                     syntax_type_symbol_uses_into(uses, argument, symbol);
                 }
+            }
+        }
+        SyntaxType::Commented { comments: _, type_ } => {
+            if let Some(type_) = type_ {
+                syntax_type_symbol_uses_into(uses, type_, symbol);
             }
         }
     }
@@ -16579,6 +16652,12 @@ pub fn syntax_type_highlight(state: &mut HighlightState, type_: &SyntaxType) {
                 for value in variant.values.iter().flat_map(|values| &values.values) {
                     syntax_type_highlight(state, value);
                 }
+            }
+        }
+        SyntaxType::Commented { comments, type_ } => {
+            syntax_comments_highlight(state, comments);
+            if let Some(type_) = type_ {
+                syntax_type_highlight(state, type_);
             }
         }
     }

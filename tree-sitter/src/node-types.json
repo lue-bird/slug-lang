@@ -713,6 +713,10 @@
           "named": true
         },
         {
+          "type": "type_commented",
+          "named": true
+        },
+        {
           "type": "type_construct_with_arguments",
           "named": true
         },
@@ -795,6 +799,25 @@
         },
         {
           "type": "variant_name",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "type_commented",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "comment",
+          "named": true
+        },
+        {
+          "type": "type",
           "named": true
         }
       ]

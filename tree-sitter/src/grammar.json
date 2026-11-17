@@ -870,6 +870,10 @@
         {
           "type": "SYMBOL",
           "name": "type_choice"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "type_commented"
         }
       ]
     },
@@ -1055,6 +1059,19 @@
     "type_name": {
       "type": "SYMBOL",
       "name": "lower_name"
+    },
+    "type_commented": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "comment"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "type"
+        }
+      ]
     },
     "string": {
       "type": "SYMBOL",

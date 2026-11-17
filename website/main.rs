@@ -870,9 +870,8 @@ Here, chained-call() first evaluates regular-call, then multiplies this result b
 ty string-alias str
 ty stringify(It)
     fn(It) str
-
-# * is tuple syntax, explained later in section "group"
 ty pair-alias(A B)
+    # * is tuple syntax, explained later in section "group"
     *(A B)
 
 fn using-the-alias(arguments pair-alias(i32 i32)) i32
