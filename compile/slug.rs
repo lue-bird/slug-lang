@@ -1375,8 +1375,32 @@ fn parse_type_construct(state: &mut ParseState) -> Option<SyntaxType> {
         return None;
     };
     parse_syntax_whitespace(state);
-    let arguments = parse_parenthesized_values(state, parse_type);
-    Some(SyntaxType::Construct { name, arguments })
+    // let arguments = parse_parenthesized_values(state, parse_type);
+    let Some(open_paren_start) =
+        parse_symbol_as_start(state, "(").or_else(|| parse_symbol_as_start(state, "<"))
+    else {
+        return Some(SyntaxType::Construct {
+            name,
+            arguments: None,
+        });
+    };
+    parse_syntax_whitespace(state);
+    let mut parameters = Vec::with_capacity(1);
+    while let Some(parameter) = parse_type(state) {
+        parameters.push(parameter);
+        parse_syntax_whitespace(state);
+    }
+    parse_syntax_whitespace(state);
+    let closed_paren_start =
+        parse_symbol_as_start(state, ")").or_else(|| parse_symbol_as_start(state, ">"));
+    Some(SyntaxType::Construct {
+        name,
+        arguments: Some(SyntaxParenthesizedValues {
+            open_paren_start,
+            values: parameters,
+            closed_paren_start,
+        }),
+    })
 }
 fn parse_type_fn(state: &mut ParseState) -> Option<SyntaxType> {
     let Some(fn_keyword_start) = parse_syntax_keyword_as_start(state, "fn") else {
