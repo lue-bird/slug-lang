@@ -1,0 +1,13 @@
+[package]
+name = "website"
+version = "0.0.1"
+edition = "2024"
+
+[[bin]]
+name = "slug_website"
+path = "main.rs"
+
+[dependencies]
+slug_compile = { path = "../compile/" }
+gen-lsp-types = "0.11.0"
+sauron = "0.70.0"

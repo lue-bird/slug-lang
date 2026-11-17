@@ -299,7 +299,6 @@ cargo install --offline --debug --path . slug
 - more familiar syntax
 
 ## TODO
-- try changing tree-sitter to allow fn signatures with types as parameters
 - consider not modifying variant tag names in js output
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
 - allow comments in a few more places
