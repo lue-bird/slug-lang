@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <title>slug</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        
+        <link rel="icon" type="image/svg" href="assets/favicon.svg" />
+        <style>
+            button {
+                font-size: inherit;
+                text-decoration: dotted underline;
+                border: none;
+                cursor: pointer;
+                background-color: transparent;
+                color: inherit;
+            }
+            body {
+                padding-left: 4%;
+                padding-right: 1em;
+                padding-top: 1em;
+                font-family: sans-serif;
+                max-width: 54rem;
+                background-color: rgb(0, 0, 0);
+                color: rgb(255, 235, 215);
+            }
+            textarea:focus {
+                border: none;
+                outline: none;
+            }
+            textarea::selection {
+                color: transparent;
+            }
+            *::selection {
+                /* hacky way to avoid automatic transparency added by webkit
+				https://github.com/w3c/csswg-drafts/issues/6853
+				*/
+                background-color: rgba(80, 0, 50, 0.99);
+            }
+            code {
+                /* An abhorrent, hacky, fragile, somewhat-good-enough working
+				fix to monospace fonts having a different default font size in different browsers.
+				Big fat thanks to https://meyerweb.com/eric/thoughts/2010/02/12/fixed-monospace-sizing/
+				If you know a better way to fix, open an issue, thanks!
+				*/
+                font-family: "Liga NovaMono", monospace, sans-serif;
+                font-size: medium;
+                line-height: inherit;
+            }
+            a {
+                color: rgb(230, 150, 0);
+                font-weight: bold;
+                text-decoration: underline;
+            }
+        </style>
+    <link rel="modulepreload" href="./website-c78c399af2cd736c.js" crossorigin="anonymous" integrity="sha384-4ZGBtdbAkl/pk8Bk1q1p9yJujgiRCp7n/aaU/JMIs+oTMXFnRpCRQ6ame8TZofIw"><link rel="preload" href="./website-c78c399af2cd736c_bg.wasm" crossorigin="anonymous" integrity="sha384-ZoksY9FIVZch4LXX49qn45w4Sj5U4IgCADjOJNtGd8ER06co8opVL5W1YzlVH4w/" as="fetch" type="application/wasm"></head>
+    <body>
+<script type="module">
+import init, * as bindings from './website-c78c399af2cd736c.js';
+const wasm = await init({ module_or_path: './website-c78c399af2cd736c_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script></body>
+</html>
