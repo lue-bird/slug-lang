@@ -7930,12 +7930,18 @@ fn syntax_expression_to_js<'a>(
                 output.push('\n');
             }
             js_scope_result_variable(output, scope_start);
-            output.push_str(" = [ ");
-            for part in parts.iter().flat_map(|p| &p.values) {
-                js_scope_result_variable(output, expression_start(part, expressions));
-                output.push_str(", ");
+            output.push_str(" = ");
+            if parts.as_ref().is_none_or(|p| p.values.is_empty()) {
+                output.push_str("undefined");
+            } else {
+                output.push_str("[ ");
+                for part in parts.iter().flat_map(|p| &p.values) {
+                    js_scope_result_variable(output, expression_start(part, expressions));
+                    output.push_str(", ");
+                }
+                output.push(']');
             }
-            output.push_str("];\n");
+            output.push_str(";\n");
         }
         SyntaxExpression::Record {
             open_curly_start: _,

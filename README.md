@@ -299,10 +299,8 @@ cargo install --offline --debug --path . slug
 - more familiar syntax
 
 ## TODO
+- do not modify variant tag names in js output
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
-- consider indenting dot-calls
-- add more examples
-- website with online repl
 - allow comments in a few more places
 
 ## known design weaknesses
@@ -338,6 +336,7 @@ cargo install --offline --debug --path . slug
 - could this approach be used to compile existing, high-level languages (e.g. elm/gren)?
 - should FFI be more ergonomic? Maybe by providing `extern-fn` signatures (and maybe `extern-ty`?) that must get populated by the platform
 - add a crash primitive which in zig "throws" an error in the same way as OutOfMemory, in js just throws a generic new Error(). This would enable building "memory safe but not validity-safe" abstractions in slug itself
+- add more examples
 
 ## rejected
 (some points may be outdated)
@@ -348,6 +347,7 @@ cargo install --offline --debug --path . slug
 - closures/ any/dyn-types
 - (soft reject) local type aliases
 - (soft reject) the option to declare nominal types
+- consider indenting dot-calls. Tried but somehow looks even more disorganized
 - should the underlying bufs be per-(size+align / bucket) instead of per-type? Per-type feels more reasonable but per-(size+align / bucket) could be more compact, avoid frequent smaller allocations and be leaner on the stack when passing the bufs.
   On the other hand it may (?) be worse for caches (semantically related objects are not necessarily grouped together), debugging, ffi, and memory usage (short-lived item bufs temporarily "pollute" a bigger buf and aren't freed as easily)
 - change tuple syntax from `*()` to `<>` (more consistent and easier to type)
