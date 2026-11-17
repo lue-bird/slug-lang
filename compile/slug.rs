@@ -1093,13 +1093,14 @@ pub fn parse_project_fn_signature(state: &mut ParseState) -> Option<ProjectFnSig
     parse_syntax_whitespace(state);
     let name = parse_syntax_lowercase_name_with_start(state);
     parse_syntax_whitespace(state);
-    let _ = parse_symbol(state, ":");
+    let _ = parse_symbol(state, "<");
     parse_syntax_whitespace(state);
     let mut type_parameters = Vec::new();
     while let Some(type_parameter_name) = parse_syntax_uppercase_name_with_start(state) {
         type_parameters.push(type_parameter_name);
         parse_syntax_whitespace(state);
     }
+    let _ = parse_symbol(state, ">");
     parse_syntax_whitespace(state);
     let open_paren_start = parse_symbol_as_start(state, "(");
     parse_syntax_whitespace(state);
@@ -1109,6 +1110,10 @@ pub fn parse_project_fn_signature(state: &mut ParseState) -> Option<ProjectFnSig
         parse_syntax_whitespace(state);
     }
     let closed_paren_start = parse_symbol_as_start(state, ")");
+    parse_syntax_whitespace(state);
+    let _ = parse_symbol(state, ":");
+    _ = parse_symbol(state, "-");
+    _ = parse_symbol(state, ">");
     parse_syntax_whitespace(state);
     let result_type = parse_type(state);
     Some(ProjectFnSignature {
@@ -3943,7 +3948,7 @@ fn syntax_query_pattern_check<'a>(
             let expected_type = type_alias_resolve_to_non_alias(expected_type, type_aliases);
             let Type::Choice(origin_choice_type_variants) = expected_type.as_ref() else {
                 let mut error_message: String = String::from(
-                    "A variant is part of a choice type (for example [a u32  b str]) but the expected type here is\n",
+                    "A variant is part of a choice type (for example [A(u32) B(str)]) but the expected type here is\n",
                 );
                 type_format(&mut error_message, 0, expected_type.as_ref());
                 error_message.push_str("\nYou might have intended this pattern to belong to a different if. Use parens for the if case results of ifs with multiple cases");
@@ -12020,14 +12025,14 @@ pub static core_fns: std::sync::LazyLock<std::collections::HashMap<Name, Checked
             },
             CoreFnInfo {
                 name: "p32-add-clamp",
-                documentation: "Saturating a + b",
+                documentation: "Saturating +",
                 type_parameters: vec![],
                 parameters: vec![type_p32, type_u32],
                 result: type_p32,
             },
             CoreFnInfo {
                 name: "p32-mul-clamp",
-                documentation: "Saturating a * b",
+                documentation: "Saturating *",
                 type_parameters: vec![],
                 parameters: vec![type_p32, type_u32],
                 result: type_p32,
@@ -12070,28 +12075,28 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
             },
             CoreFnInfo {
                 name: "u32-add-clamp",
-                documentation: "Saturating a + b",
+                documentation: "Saturating +",
                 type_parameters: vec![],
                 parameters: vec![type_u32, type_u32],
                 result: type_u32,
             },
             CoreFnInfo {
                 name: "u32-add-i32-clamp",
-                documentation: "Saturating u + i",
+                documentation: "Saturating +",
                 type_parameters: vec![],
                 parameters: vec![type_u32, type_i32],
                 result: type_u32,
             },
             CoreFnInfo {
                 name: "u32-mul-clamp",
-                documentation: "Saturating a * b",
+                documentation: "Saturating *",
                 type_parameters: vec![],
                 parameters: vec![type_u32, type_u32],
                 result: type_u32,
             },
             CoreFnInfo {
                 name: "u32-mul-wrap",
-                documentation: "a * b, wrapping around from 0 on overflow (like the remainder of (a * b) / 2^32).
+                documentation: "*, wrapping around from 0 on overflow (like the remainder of (a * b) / 2^32).
 Prefer over U32-mul-clamp if you explicitly want this overflow behavior
 or performance is critical.",
                 type_parameters: vec![],
@@ -12143,14 +12148,14 @@ Chooses the closest f32 representation, breaking exact ties towards the even sig
             },
             CoreFnInfo {
                 name: "i32-add-clamp",
-                documentation: "Saturating a + b",
+                documentation: "Saturating +",
                 type_parameters: vec![],
                 parameters: vec![type_i32, type_i32],
                 result: type_i32,
             },
             CoreFnInfo {
                 name: "i32-mul-clamp",
-                documentation: "Saturating a * b",
+                documentation: "Saturating *",
                 type_parameters: vec![],
                 parameters: vec![type_i32, type_i32],
                 result: type_i32,
@@ -12247,14 +12252,14 @@ Warning: Precision is unspecified and as such this function should never be used
             },
             CoreFnInfo {
                 name: "f32-add-clamp",
-                documentation: "Saturating a + b",
+                documentation: "Saturating +",
                 type_parameters: vec![],
                 parameters: vec![type_f32, type_f32],
                 result: type_f32,
             },
             CoreFnInfo {
                 name: "f32-mul-clamp",
-                documentation: "Saturating a * b",
+                documentation: "Saturating *",
                 type_parameters: vec![],
                 parameters: vec![type_f32, type_f32],
                 result: type_f32,
@@ -12271,7 +12276,7 @@ Try not to divide by 0.0, as 0.0 will be returned which is not mathematically co
                 name: "f32-square-root",
                 documentation: "n ^ 0.5, returning No when n < 0.0",
                 type_parameters: vec![],
-                parameters:  vec![type_i32],
+                parameters:  vec![type_f32],
                 result: type_opt(type_f32),
             },
             CoreFnInfo {
@@ -13314,7 +13319,7 @@ fn answer() i32
                     r"A signed decimal number (floating-point) with 32 bit precision.
 Does not allow infinities or NaN. If you need these error states, explicitly model them with a choice type.
 ```slug
-fn answer() f32 =
+fn answer() f32
     f32-add-clamp(-8.5f32 50.5f32)
 ```",
                 )),
@@ -16343,6 +16348,9 @@ pub fn project_highlight(state: &mut HighlightState, project: &SyntaxProject) {
                 documentation,
                 type_,
             } => {
+                if let Some(documentation) = documentation {
+                    syntax_comments_highlight(state, documentation);
+                }
                 keyword_highlight(state, "ty", *ty_keyword_start);
                 if let Some(name) = name {
                     syntax_name_highlight(
@@ -16363,9 +16371,6 @@ pub fn project_highlight(state: &mut HighlightState, project: &SyntaxProject) {
                         );
                     }
                 }
-                if let Some(documentation) = documentation {
-                    syntax_comments_highlight(state, documentation);
-                }
                 if let Some(type_) = type_ {
                     syntax_type_highlight(state, type_);
                 }
@@ -16379,14 +16384,12 @@ pub fn project_highlight(state: &mut HighlightState, project: &SyntaxProject) {
                 documentation,
                 result,
             } => {
+                if let Some(documentation) = documentation {
+                    syntax_comments_highlight(state, documentation);
+                }
                 keyword_highlight(state, "fn", *fn_keyword_start);
                 if let Some(name) = name {
-                    highlight_state_add_token_with_start_and_length(
-                        state,
-                        lsp_types::SemanticTokenTypes::Function,
-                        name.start,
-                        name.value.len(),
-                    );
+                    syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Function);
                 }
                 for type_parameter_name in type_parameters {
                     syntax_name_highlight(
@@ -16400,9 +16403,6 @@ pub fn project_highlight(state: &mut HighlightState, project: &SyntaxProject) {
                 }
                 if let Some(result_type) = result_type {
                     syntax_type_highlight(state, result_type);
-                }
-                if let Some(documentation) = documentation {
-                    syntax_comments_highlight(state, documentation);
                 }
                 if let Some(result) = result {
                     syntax_expression_highlight(state, &project.expressions, result);
@@ -16426,12 +16426,7 @@ pub fn project_fn_signature_highlight(
 ) {
     keyword_highlight(state, "fn", *fn_keyword_start);
     if let Some(name) = name {
-        highlight_state_add_token_with_start_and_length(
-            state,
-            lsp_types::SemanticTokenTypes::Variable,
-            name.start,
-            name.value.len(),
-        );
+        syntax_name_highlight(state, name, lsp_types::SemanticTokenTypes::Variable);
     }
     for type_parameter_name in type_parameters {
         syntax_name_highlight(
