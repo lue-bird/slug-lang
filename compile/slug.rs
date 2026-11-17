@@ -13229,7 +13229,7 @@ There rarely is a need to use this except when a function expects an `Unset-slic
 This only works when the new item type has the same "size" (byte count including padding bits)
 and equal "alignment" (byte count of the biggest field).
 For example, `u32` consists of 4 bytes, just like `i32`, so they can be reinterpreted.
-Similarly `.x f32 .y f32` can be reinterpreted as `.width i32 .height i32` and so forth.
+Similarly `{x f32 y f32}` can be reinterpreted as `{width i32 height i32}` and so forth.
 If the types are incompatible, this function calls `Unset-slice-rid` on the old slice
 and allocates a new one with the same length as the scrapped one.
 
