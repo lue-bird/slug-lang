@@ -12862,7 +12862,7 @@ To modify it, use `buf-pre-allocate-at-least`, `add`, `insert` etc.",
             },
             CoreFnInfo {
                 name: "buf-reuse",
-                documentation: "Initialize a `buf` with 0 items and spare allocated memory from an `Unset-slice`.
+                documentation: "Initialize a `buf` with 0 items and spare allocated memory from an `unset-slice`.
 This can be used to recycle `buf` memory from one `buf` with one origin into another `buf` with a different origin.
 ```slug
 fn buf-recycle<New-origin>(old buf(Old-origin Item))
@@ -12902,7 +12902,7 @@ A version which only checks for errors behind the scenes is `buf-pre-allocate-at
                 documentation: "Shrinks down spare capacity as much as possible.
 Some allocators may scrap and re-allocate the whole `buf` as a result.
 It's rarely useful but can reuce idle memory usage for `buf`s that are very unlikely to be added to in the future.
-You may also use it to adjust memory usage after `buf-reuse` when the given `Unset-slice` was large",
+You may also use it to adjust memory usage after `buf-reuse` when the given `unset-slice` was large",
                 type_parameters: vec![],
                 parameters: vec![type_buf(type_variable("Origin"), type_variable("Item"))],
                 result: type_empty,
@@ -13268,7 +13268,7 @@ If start and end spans are not already connected, both are appended at the end a
                 documentation: "Extract the underlying slice that has been used to store items in including spare capacity.
 Note that this will return an empty unset-slice if there are still other instances of the same buf around.
 
-The resulting `Unset-slice` can if necessary be casted to a new item type with `unset-slice-cast-or-rid-and-allocate`.
+The resulting `unset-slice` can if necessary be casted to a new item type with `unset-slice-cast-or-rid-and-allocate`.
 Finally, the allocation can be the base of a new `buf` with `buf-reuse`",
                 type_parameters: vec![],
                 parameters: vec![type_buf(type_variable("Origin"), type_variable("Item"))],
@@ -13276,8 +13276,8 @@ Finally, the allocation can be the base of a new `buf` with `buf-reuse`",
             },
             CoreFnInfo {
                 name: "unset-slice-allocate-length",
-                documentation: "Create a new `Unset-slice` with a given length.
-There rarely is a need to use this except when a function expects an `Unset-slice` as an argument",
+                documentation: "Create a new `unset-slice` with a given length.
+There rarely is a need to use this except when a function expects an `unset-slice` as an argument",
                 type_parameters: vec![Name::from_static("Item")],
                 parameters: vec![type_u32],
                 result: type_unset_slice(type_variable("Item")),
@@ -13289,7 +13289,7 @@ This only works when the new item type has the same "size" (byte count including
 and equal "alignment" (byte count of the biggest field).
 For example, `u32` consists of 4 bytes, just like `i32`, so they can be reinterpreted.
 Similarly `{x f32 y f32}` can be reinterpreted as `{width i32 height i32}` and so forth.
-If the types are incompatible, this function calls `Unset-slice-rid` on the old slice
+If the types are incompatible, this function drops the old slice
 and allocates a new one with the same length as the scrapped one.
 
 Note: This difference in behavior does not get reported at compile-time
@@ -13544,7 +13544,7 @@ For potentially 0-length spans, use `opt(span(...))`"
 Can be constructed manually or as an intermediate type when recycling the allocated space of a collection,
 see `buf-to-unset`.
 Since you can't read from it, you can also safely attempt to reuse this allocation for a different item type,
-see `Unset-slice-cast-or-rid-and-allocate`."
+see `unset-slice-cast-or-rid-and-allocate`."
                 )),
                 parameters: vec![Name::from_static("Origin")],
                 type_: None,
