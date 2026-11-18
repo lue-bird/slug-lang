@@ -2691,7 +2691,7 @@ fn project_type_alias_check(
                             parameters.values.iter().map(with_start_position_as_ref)
                         }),
                         actually_used_type_variables,
-                        "Type parameter variables follow after the name and are separated by commas, so for example ty buf(Origin _item)",
+                        "Type parameter variables follow after the name and are separated by commas, so for example ty buf(Origin Item)",
                     );
                     CheckedTypeAlias {
                         name_range: Some(name_range(with_start_position_as_ref(project_type.name))),
