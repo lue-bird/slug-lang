@@ -303,6 +303,7 @@ cargo install --offline --debug --path . slug
 - implement span_sort in zig (and don't forget to clone the items to order)
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
 - rename unset-slice-cast-or-rid-and-allocate to unset-slice-cast-or-drop-and-allocate
+- rename buf-pre-allocation-rid to buf-pre-allocation-drop
 
 ## known design weaknesses
 - The most important: implicitly cloning and dropping spans is O(span-length). This is quite the performance footgun and easily makes operations like recursive traversals quadratic.

@@ -12901,7 +12901,7 @@ A version which only checks for errors behind the scenes is `buf-pre-allocate-at
                 name: "buf-pre-allocation-rid",
                 documentation: "Shrinks down spare capacity as much as possible.
 Some allocators may scrap and re-allocate the whole `buf` as a result.
-It's rarely useful but can reuce idle memory usage for `buf`s that are very unlikely to be added to in the future.
+It's rarely useful but can reduce idle memory usage for `buf`s that are very unlikely to be added to in the future.
 You may also use it to adjust memory usage after `buf-reuse` when the given `unset-slice` was large",
                 type_parameters: vec![],
                 parameters: vec![type_buf(type_variable("Origin"), type_variable("Item"))],
