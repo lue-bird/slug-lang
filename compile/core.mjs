@@ -963,17 +963,18 @@ export function opt_span_reverse(span, $) {
   span_reverse(span.v, $);
 }
 /** @template $Item, $Origin
- * @param {{ "buf(Origin Item)": Buf<$Origin, $Item> }} $
+ * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, cloneItem?: (_: $Item) => void }} $
  * @param{Span<$Origin, $Item>} span
  * @param{(left: $Item, right: $Item) => Order} item_order
  * @returns {Span<$Origin, $Item>} */
 export function span_sort(span, item_order, $) {
   const span_indexes = Array.from(span, (_, i) => span.start + i);
   span_indexes.sort((left, right) => {
-    const order = item_order(
-      $["buf(Origin Item)"].items[left],
-      $["buf(Origin Item)"].items[right],
-    );
+    const left_item = $["buf(Origin Item)"].items[left];
+    $.cloneItem?.(left_item);
+    const right_item = $["buf(Origin Item)"].items[right];
+    $.cloneItem?.(right_item);
+    const order = item_order(left_item, right_item);
     return order.tag === "less" ? -1 : order.tag === "greater" ? 1 : 0;
   });
   span_indexes.forEach((buf_index_sorted, old_offset_within_span) => {
@@ -988,7 +989,7 @@ export function span_sort(span, item_order, $) {
   return span;
 }
 /** @template $Item, $Origin
- * @param {{ "buf(Origin Item)": Buf<$Origin, $Item> }} $
+ * @param {{ "buf(Origin Item)": Buf<$Origin, $Item>, cloneItem?: (_: $Item) => void }} $
  * @param{Opt<Span<$Origin, $Item>>} span
  * @param{(left: $Item, right: $Item) => Order} item_order
  * @returns {Opt<Span<$Origin, $Item>>} */

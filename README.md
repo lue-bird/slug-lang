@@ -300,6 +300,7 @@ cargo install --offline --debug --path . slug
 - more familiar syntax
 
 ## TODO
+- implement span_sort in zig (and don't forget to clone the items to order)
 - allow piping into Variant constructor. Then remove fn opt-yes in examples
 
 ## known design weaknesses
