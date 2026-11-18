@@ -10158,7 +10158,8 @@ fn error_introduced_pattern_variable_is_unused(
             start: origin_start,
         }),
         message: Box::from(
-            "this patern variable is not used in the resulting expression. Use it or use any of the -rid functions to scrap it, like ? U32-rid your-variable [.] ..your existing case result..",
+            "this patern variable is not used in the resulting expression.
+Use it or replace this variable name with _ to ignore the incloming value.",
         ),
     }
 }
